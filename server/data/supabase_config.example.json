@@ -1,0 +1,6 @@
+{
+  "supabaseUrl": "https://YOUR_PROJECT_REF.supabase.co",
+  "supabaseServiceRoleKey": "YOUR_SERVICE_ROLE_KEY_HERE",
+  "schema": "public",
+  "_comment": "schema: use public (easiest on a new project) OR dro (then expose dro under Project Settings → API → Exposed schemas). Prefer service_role on the server. Never commit this file."
+}

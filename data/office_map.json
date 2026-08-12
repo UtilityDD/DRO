@@ -1,0 +1,51 @@
+{
+  "zone": { "code": "34", "name": "Siliguri Zone" },
+  "region": { "code": "341", "name": "Darjeeling Region" },
+  "divisions": [
+    {
+      "code": "3412",
+      "name": "Siliguri Town",
+      "cccs": [
+        { "code": "3412400", "name": "Milanpally", "consumers": 37416 },
+        { "code": "3412401", "name": "NJP Gate Bazar", "consumers": 30591 },
+        { "code": "3412501", "name": "Subhaspally", "consumers": 41523 },
+        { "code": "3412502", "name": "Hakimpara", "consumers": 28199 },
+        { "code": "3412503", "name": "Power House", "consumers": 45862 },
+        { "code": "3412504", "name": "Pradhan Nagar", "consumers": 44846 },
+        { "code": "3412505", "name": "Siliguri Town", "consumers": 11187 }
+      ]
+    },
+    {
+      "code": "3413",
+      "name": "Kurseong",
+      "cccs": [
+        { "code": "3413101", "name": "Sonada", "consumers": 10265 },
+        { "code": "3413201", "name": "Mirik", "consumers": 13143 },
+        { "code": "3413202", "name": "Kurseong", "consumers": 24901 }
+      ]
+    },
+    {
+      "code": "3414",
+      "name": "Darjeeling",
+      "cccs": [
+        { "code": "3414101", "name": "Sukhiapokhri", "consumers": 12779 },
+        { "code": "3414102", "name": "Takdah", "consumers": 14394 },
+        { "code": "3414201", "name": "Bijanbari", "consumers": 14549 },
+        { "code": "3414300", "name": "Darjeeling", "consumers": 32377 }
+      ]
+    },
+    {
+      "code": "3415",
+      "name": "Siliguri Sub Urban",
+      "cccs": [
+        { "code": "3415101", "name": "Naxalbari", "consumers": 34854 },
+        { "code": "3415102", "name": "Phansidewa", "consumers": 28282 },
+        { "code": "3415103", "name": "Kharibari", "consumers": 32646 },
+        { "code": "3415200", "name": "Bagdogra", "consumers": 22711 },
+        { "code": "3415201", "name": "Bidhannagar", "consumers": 20150 },
+        { "code": "3415400", "name": "Matigara", "consumers": 44517 },
+        { "code": "3415600", "name": "Shivmandir", "consumers": 32818 }
+      ]
+    }
+  ]
+}

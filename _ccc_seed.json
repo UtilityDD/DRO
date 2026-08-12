@@ -1,0 +1,120 @@
+{
+  "SILIGURI  TOWN": [
+    {
+      "ccc": "HAKIMPARA",
+      "code": 3412502,
+      "consumers": 28199
+    },
+    {
+      "ccc": "POWER HOUSE",
+      "code": 3412503,
+      "consumers": 45862
+    },
+    {
+      "ccc": "PRADHAN NAGAR",
+      "code": 3412504,
+      "consumers": 44846
+    },
+    {
+      "ccc": "SUBHASPALLI",
+      "code": 3412501,
+      "consumers": 41523
+    },
+    {
+      "ccc": "NJP GATE BAZAR",
+      "code": 3412401,
+      "consumers": 30591
+    },
+    {
+      "ccc": "MILANPALLI",
+      "code": 3412400,
+      "consumers": 37416
+    },
+    {
+      "ccc": "SILIGURI TOWN",
+      "code": 3412505,
+      "consumers": 11187
+    }
+  ],
+  "SILIGURI SUBARBAN": [
+    {
+      "ccc": "BAGDOGRA",
+      "code": 3415200,
+      "consumers": 22711
+    },
+    {
+      "ccc": "MATIGARA",
+      "code": 3415400,
+      "consumers": 44517
+    },
+    {
+      "ccc": "SHIBMANDIR",
+      "code": 3415600,
+      "consumers": 32818
+    },
+    {
+      "ccc": "NAXALBARI",
+      "code": 3415101,
+      "consumers": 34854
+    },
+    {
+      "ccc": "PHANSIDEWA",
+      "code": 3415102,
+      "consumers": 28282
+    },
+    {
+      "ccc": "KHARIBARI",
+      "code": 3415103,
+      "consumers": 32646
+    },
+    {
+      "ccc": "BIDHANNAGAR",
+      "code": 3415201,
+      "consumers": 20150
+    }
+  ],
+  "KURSEONG": [
+    {
+      "ccc": "KURSEONG",
+      "code": 3413202,
+      "consumers": 24901
+    },
+    {
+      "ccc": "SONADA",
+      "code": 3413101,
+      "consumers": 10265
+    },
+    {
+      "ccc": "MIRIK",
+      "code": 3413201,
+      "consumers": 13143
+    }
+  ],
+  "DARJEELING": [
+    {
+      "ccc": "DARJEELING",
+      "code": 3414300,
+      "consumers": 32377
+    },
+    {
+      "ccc": "BIJONBARI",
+      "code": 3414201,
+      "consumers": 14549
+    },
+    {
+      "ccc": "LODHAMA",
+      "code": 3414204,
+      "consumers": 4911
+    },
+    {
+      "ccc": "TAKDA",
+      "code": 3414102,
+      "consumers": 14394
+    },
+    {
+      "ccc": "SUKHIAPOKRI",
+      "code": 3414101,
+      "consumers": 12779
+    }
+  ]
+}

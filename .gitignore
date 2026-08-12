@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+server/data/*.json
+!server/data/.gitkeep
+!server/data/supabase_config.example.json
+apps/web/dev-dist/
+.vscode/

@@ -1,0 +1,19 @@
+{
+  "name": "dro-ops",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Darjeeling Region (DRO) Ops PWA — WBSEDCL day-to-day monitoring",
+  "scripts": {
+    "dev": "concurrently -n server,web -c teal,cyan \"npm run dev --prefix server\" \"npm run dev --prefix apps/web\"",
+    "dev:server": "npm run dev --prefix server",
+    "dev:web": "npm run dev --prefix apps/web",
+    "build": "npm run build --prefix apps/web",
+    "start": "npm start --prefix server",
+    "seed": "node scripts/seed_offices.js",
+    "supabase:status": "npm run supabase:status --prefix server",
+    "supabase:push": "npm run supabase:push --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

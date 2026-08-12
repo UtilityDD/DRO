@@ -1,0 +1,23 @@
+{
+  "name": "dro-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "seed": "node src/seed.js",
+    "import:atc": "node ../scripts/import_atc_xlsx.js",
+    "supabase:status": "node src/supabase_status.js",
+    "supabase:push": "node src/supabase_push.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dro-ops": "file:..",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "multer": "^2.0.2",
+    "xlsx": "^0.18.5"
+  }
+}
