@@ -58,6 +58,49 @@ function periodMonthAbbr(period: string): string {
   return m[1].charAt(0).toUpperCase() + m[1].slice(1, 3).toLowerCase();
 }
 
+/** Compact chip text: May'26 → May26 */
+function shortPeriodLabel(period: string): string {
+  return String(period || '').replace("'", '');
+}
+
+const MONTH_FY_ORDER: Record<string, number> = {
+  Apr: 1,
+  May: 2,
+  Jun: 3,
+  Jul: 4,
+  Aug: 5,
+  Sep: 6,
+  Oct: 7,
+  Nov: 8,
+  Dec: 9,
+  Jan: 10,
+  Feb: 11,
+  Mar: 12,
+};
+
+/** Indian FY Apr–Mar label for a period like May'26 → FY26 */
+function fiscalYearKey(period: string): string {
+  const m = String(period || '').match(/^([A-Za-z]{3})'(\d{2})$/);
+  if (!m) return 'Other';
+  const mon = m[1].charAt(0).toUpperCase() + m[1].slice(1, 3).toLowerCase();
+  const yy = Number(m[2]);
+  if (!Number.isFinite(yy)) return 'Other';
+  // Jan–Mar belong to FY ending that year; Apr–Dec to FY ending next year
+  const endYy = MONTH_FY_ORDER[mon] >= 10 ? yy : yy + 1;
+  const startYy = endYy - 1;
+  return `FY${String(startYy).padStart(2, '0')}-${String(endYy).padStart(2, '0')}`;
+}
+
+function groupPeriodsByFy(periods: string[]): Array<{ fy: string; months: string[] }> {
+  const map = new Map<string, string[]>();
+  for (const p of periods) {
+    const fy = fiscalYearKey(p);
+    if (!map.has(fy)) map.set(fy, []);
+    map.get(fy)!.push(p);
+  }
+  return [...map.entries()].map(([fy, months]) => ({ fy, months }));
+}
+
 /** March FY points + latest month + same calendar month in prior years */
 function buildMilestonePeriods(periods: string[]): Set<string> {
   const set = new Set<string>();
@@ -1203,6 +1246,8 @@ export function AtcPage() {
       });
   }, [mode, rows, asOf, sortedPeriods, level, activeCodes]);
 
+  const periodFyGroups = useMemo(() => groupPeriodsByFy(sortedPeriods), [sortedPeriods]);
+
   const focusPeriod = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
   const focusPrevPeriod = useMemo(() => {
     const idx = sortedPeriods.indexOf(focusPeriod);
@@ -1495,18 +1540,32 @@ export function AtcPage() {
 
           {mode === 'compare' && (
             <section className="atc-block">
-              <div className="atc-label">Month</div>
-              <div className="atc-month-row">
-                {sortedPeriods.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={`atc-month ${asOf === p ? 'on' : ''}`}
-                    onClick={() => setAsOf(p)}
-                  >
-                    {p}
-                  </button>
+              <div className="atc-label">
+                Month
+                {asOf ? <span className="atc-label-current">{asOf}</span> : null}
+              </div>
+              <div className="atc-month-panel">
+                {periodFyGroups.map(({ fy, months }) => (
+                  <div key={fy} className="atc-month-fy">
+                    <div className="atc-month-fy-label">{fy}</div>
+                    <div className="atc-month-grid">
+                      {months.map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          className={`atc-month ${asOf === p ? 'on' : ''}`}
+                          onClick={() => setAsOf(p)}
+                          title={p}
+                          aria-label={p}
+                          aria-pressed={asOf === p}
+                        >
+                          {shortPeriodLabel(p)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
+                {!periodFyGroups.length && <p className="muted tight">No months</p>}
               </div>
             </section>
           )}

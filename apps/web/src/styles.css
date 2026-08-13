@@ -1845,6 +1845,18 @@ th {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.atc-label-current {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 0.72rem;
 }
 
 .atc-hint {
@@ -1929,21 +1941,47 @@ th {
   color: var(--accent);
 }
 
-.atc-month-row {
+.atc-month-panel {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 9.5rem;
+  overflow: auto;
+  padding-right: 0.1rem;
+}
+
+.atc-month-fy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.atc-month-fy-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+.atc-month-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.18rem;
 }
 
 .atc-month {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--muted);
-  border-radius: 999px;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.7rem;
-  font-weight: 600;
+  border-radius: 6px;
+  padding: 0.22rem 0.1rem;
+  font-size: 0.62rem;
+  font-weight: 650;
   cursor: pointer;
+  text-align: center;
+  line-height: 1.1;
+  min-height: 26px;
 }
 
 .atc-month.on {
