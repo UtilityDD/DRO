@@ -15,6 +15,18 @@ import {
   YAxis,
 } from 'recharts';
 import { api, canEdit } from '../api';
+import {
+  ANALYTIC_TOPICS,
+  buildFocusRows,
+  explainReason,
+  formatMetric,
+  formatMu,
+  formatPct,
+  metricForLens,
+  rankFocus,
+  rowTone,
+  type FocusLens,
+} from '../lib/atcFocus';
 import { useAuth } from '../auth';
 
 /** Shared plot area height inside the equal workspace panels */
@@ -627,7 +639,8 @@ export function AtcPage() {
   const [showTarget, setShowTarget] = useState(true);
   const [unitQuery, setUnitQuery] = useState('');
   const [unitsOpen, setUnitsOpen] = useState(true);
-  const [panelTab, setPanelTab] = useState<'chart' | 'table'>('chart');
+  const [panelTab, setPanelTab] = useState<'chart' | 'table' | 'analytic'>('chart');
+  const [analyticTopic, setAnalyticTopic] = useState<FocusLens | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
@@ -1190,6 +1203,33 @@ export function AtcPage() {
       });
   }, [mode, rows, asOf, sortedPeriods, level, activeCodes]);
 
+  const focusPeriod = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
+  const focusPrevPeriod = useMemo(() => {
+    const idx = sortedPeriods.indexOf(focusPeriod);
+    return idx > 0 ? sortedPeriods[idx - 1] : '';
+  }, [sortedPeriods, focusPeriod]);
+
+  const focusRows = useMemo(() => {
+    const allowed = new Set(officeOptions.map((o) => o.code));
+    return buildFocusRows(rows, {
+      period: focusPeriod,
+      prevPeriod: focusPrevPeriod || undefined,
+      level,
+      format,
+    }).filter((r) => allowed.has(r.office_code));
+  }, [rows, focusPeriod, focusPrevPeriod, level, format, officeOptions]);
+
+  const rankedFocus = useMemo(
+    () => (analyticTopic ? rankFocus(focusRows, analyticTopic, 20) : []),
+    [focusRows, analyticTopic]
+  );
+  const analyticMeta = ANALYTIC_TOPICS.find((t) => t.id === analyticTopic) || null;
+
+  const selectFocusOffice = (code: string) => {
+    setSelectedCodes([code]);
+    setPanelTab('chart');
+  };
+
   const toggleCode = (code: string) => {
     if (isMetricCompare) {
       setSelectedCodes([code]);
@@ -1581,6 +1621,15 @@ export function AtcPage() {
                   >
                     Table
                     <span className="atc-tab-count">{tableRows.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'analytic'}
+                    className={`atc-tab ${panelTab === 'analytic' ? 'on' : ''}`}
+                    onClick={() => setPanelTab('analytic')}
+                  >
+                    Analytic
                   </button>
                 </div>
               </div>
@@ -2063,6 +2112,186 @@ export function AtcPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {panelTab === 'analytic' && (
+              <div className="atc-tab-panel atc-tab-panel-analytic" role="tabpanel">
+                <div className="atc-analytic-head">
+                  <div>
+                    <h3 className="atc-analytic-title">Weakness analytic</h3>
+                    <p className="atc-analytic-sub muted">
+                      {focusPeriod}
+                      {focusPrevPeriod ? ` vs ${focusPrevPeriod}` : ''} · {level} ·{' '}
+                      {format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk'} · offices with Input MU:{' '}
+                      {focusRows.length}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="atc-analytic-primer">
+                  <div className="atc-analytic-chain">
+                    <div className="atc-chain-step">
+                      <span className="atc-chain-label">Input</span>
+                      <span className="atc-chain-desc">Energy supplied (YTD MU)</span>
+                    </div>
+                    <span className="atc-chain-arrow" aria-hidden>
+                      →
+                    </span>
+                    <div className="atc-chain-step">
+                      <span className="atc-chain-label">Demand</span>
+                      <span className="atc-chain-desc">Billed</span>
+                    </div>
+                    <span className="atc-chain-arrow" aria-hidden>
+                      →
+                    </span>
+                    <div className="atc-chain-step">
+                      <span className="atc-chain-label">Collection</span>
+                      <span className="atc-chain-desc">Realized</span>
+                    </div>
+                  </div>
+                  <ul className="atc-analytic-rules">
+                    <li>
+                      <span className="atc-tone-dot critical" />
+                      <strong>Unbilled</strong> = Input − Demand — not billed (most serious volume)
+                    </li>
+                    <li>
+                      <span className="atc-tone-dot warn" />
+                      <strong>Outstanding</strong> = Demand − Collection — billed, not paid
+                    </li>
+                    <li>
+                      <span className="atc-tone-dot watch" />
+                      <strong>ATC% / T&amp;D%</strong> = intensity only — small Input can look worse than large MU gaps
+                    </li>
+                  </ul>
+                </div>
+
+                <p className="atc-analytic-prompt">Choose a topic to rank offices:</p>
+                <div className="atc-analytic-topics" role="group" aria-label="Analytic topics">
+                  {ANALYTIC_TOPICS.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`atc-topic-btn tone-${t.tone}${analyticTopic === t.id ? ' on' : ''}`}
+                      aria-pressed={analyticTopic === t.id}
+                      onClick={() => setAnalyticTopic((prev) => (prev === t.id ? null : t.id))}
+                    >
+                      <span className="atc-topic-short">{t.short}</span>
+                      <span className="atc-topic-label">{t.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {loading && <p className="muted">Loading…</p>}
+
+                {!loading && !analyticTopic && (
+                  <p className="atc-analytic-idle muted">
+                    Click a topic button above to see ranked offices, colour-coded reasons, and the action to take.
+                  </p>
+                )}
+
+                {!loading && analyticMeta && (
+                  <div className={`atc-analytic-result tone-${analyticMeta.tone}`}>
+                    <div className="atc-analytic-result-head">
+                      <div>
+                        <h4>{analyticMeta.label}</h4>
+                        <p className="atc-analytic-formula">
+                          <code>{analyticMeta.formula}</code>
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => setAnalyticTopic(null)}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="atc-analytic-explain">
+                      <p>
+                        <strong>Logic.</strong> {analyticMeta.logic}
+                      </p>
+                      <p>
+                        <strong>Action.</strong> {analyticMeta.action}
+                      </p>
+                    </div>
+
+                    {!rankedFocus.length ? (
+                      <p className="atc-empty">
+                        No offices match this topic for the selected month/level. Pick an as-of month
+                        that has Input / Demand / Collection MU.
+                      </p>
+                    ) : (
+                      <div className="atc-analytic-list">
+                        {rankedFocus.map((r, i) => {
+                          const rank = i + 1;
+                          const tone = rowTone(rank, analyticMeta.id, r);
+                          const metric = metricForLens(r, analyticMeta.id);
+                          return (
+                            <article
+                              key={r.office_code}
+                              className={`atc-analytic-card tone-${tone}`}
+                            >
+                              <div className="atc-analytic-card-top">
+                                <span className={`atc-rank tone-${tone}`}>#{rank}</span>
+                                <div className="atc-analytic-card-id">
+                                  <strong>{r.office_name}</strong>
+                                  <span className="muted">{r.office_code}</span>
+                                </div>
+                                <div className={`atc-metric tone-${tone}`}>
+                                  {formatMetric(analyticMeta.id, metric)}
+                                </div>
+                                <button
+                                  type="button"
+                                  className="btn ghost atc-analytic-chart-btn"
+                                  onClick={() => selectFocusOffice(r.office_code)}
+                                >
+                                  Chart
+                                </button>
+                              </div>
+                              <p className="atc-analytic-reason">{explainReason(analyticMeta.id, r, rank)}</p>
+                              <div className="atc-analytic-stats">
+                                <span>
+                                  Input <b>{formatMu(r.input)}</b>
+                                </span>
+                                <span>
+                                  Unbilled <b>{formatMu(r.unbilled)}</b>
+                                </span>
+                                <span>
+                                  Outstanding <b>{formatMu(r.outstanding)}</b>
+                                </span>
+                                <span>
+                                  ATC <b>{formatPct(r.atcPct)}</b>
+                                </span>
+                                <span>
+                                  T&amp;D <b>{formatPct(r.tdPct)}</b>
+                                </span>
+                                <span>
+                                  Coll.eff <b>{formatPct(r.collEff)}</b>
+                                </span>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="atc-analytic-legend" aria-label="Colour legend">
+                      <span>
+                        <i className="atc-tone-dot critical" /> Critical — top priority
+                      </span>
+                      <span>
+                        <i className="atc-tone-dot warn" /> Warn — act this cycle
+                      </span>
+                      <span>
+                        <i className="atc-tone-dot watch" /> Watch — intensity / early signal
+                      </span>
+                      <span>
+                        <i className="atc-tone-dot info" /> Info — lower rank
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
