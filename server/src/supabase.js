@@ -106,9 +106,32 @@ async function upsertRows(table, rows, onConflict) {
   const path = onConflict ? `${table}?on_conflict=${encodeURIComponent(onConflict)}` : table;
   return querySupabase(path, {
     method: 'POST',
-    body: rows,
+    body: alignObjectKeys(rows),
     prefer: onConflict ? 'resolution=merge-duplicates,return=representation' : 'return=representation',
     headers,
+  });
+}
+
+/** PostgREST PGRST102: every object in a JSON array must have the same keys. */
+function alignObjectKeys(rows) {
+  if (!Array.isArray(rows) || rows.length <= 1) return rows;
+  const keys = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    for (const k of Object.keys(row)) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        keys.push(k);
+      }
+    }
+  }
+  return rows.map((row) => {
+    const out = {};
+    for (const k of keys) {
+      out[k] = row && Object.prototype.hasOwnProperty.call(row, k) ? row[k] : null;
+    }
+    return out;
   });
 }
 
@@ -116,14 +139,12 @@ async function replaceTable(table, rows) {
   // Delete all then insert — used for full collection sync from local seed
   await querySupabase(`${table}?id=gte.0`, { method: 'DELETE', prefer: 'return=minimal' });
   if (!rows.length) return [];
-  // insert in chunks
+  // Align keys across the full set first (chunks inherit the same shape).
+  const aligned = alignObjectKeys(rows);
   const chunk = 200;
   const out = [];
-  for (let i = 0; i < rows.length; i += chunk) {
-    const part = rows.slice(i, i + chunk).map((r) => {
-      const copy = { ...r };
-      return copy;
-    });
+  for (let i = 0; i < aligned.length; i += chunk) {
+    const part = aligned.slice(i, i + chunk);
     const inserted = await querySupabase(table, {
       method: 'POST',
       body: part,

@@ -20,6 +20,9 @@ const TABLES = {
   activity_logs: 'activity_logs',
 };
 
+/** Never fall back to local JSON for these when Supabase is configured. */
+const CLOUD_ONLY = new Set(['atc_snapshots']);
+
 /** In-memory cache when Supabase is active */
 const cache = Object.create(null);
 let initialized = false;
@@ -85,6 +88,12 @@ async function initStore() {
       const rows = await sb.selectAll(table);
       const remote = Array.isArray(rows) ? rows : [];
       const local = readLocal(name, []);
+      if (CLOUD_ONLY.has(name)) {
+        cache[name] = remote;
+        writeLocal(name, cache[name]);
+        console.log(`[store] loaded ${table} (cloud-only): ${cache[name].length} rows`);
+        continue;
+      }
       // Never wipe a populated local mirror with an empty remote (schema lag / failed push).
       if (remote.length === 0 && local.length > 0) {
         cache[name] = local;
@@ -97,17 +106,42 @@ async function initStore() {
         console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
       }
     } catch (e) {
-      console.warn(`[store] ${table} load failed, using local mirror:`, e.message);
-      cache[name] = readLocal(name, []);
+      if (CLOUD_ONLY.has(name)) {
+        cache[name] = [];
+        console.error(`[store] ${table} cloud load failed (no local fallback):`, e.message);
+      } else {
+        console.warn(`[store] ${table} load failed, using local mirror:`, e.message);
+        cache[name] = readLocal(name, []);
+      }
     }
   }
   initialized = true;
   return { mode: 'supabase', host: sb.status().host };
 }
 
+/**
+ * Re-fetch a collection from Supabase into cache.
+ * For cloud-only tables this is the source of truth for reads.
+ */
+async function refreshFromSupabase(name) {
+  if (!useSupabase()) {
+    throw new Error('Supabase not configured');
+  }
+  const table = TABLES[name];
+  if (!table) throw new Error(`Unknown collection ${name}`);
+  const rows = await sb.selectAll(table);
+  const remote = Array.isArray(rows) ? rows : [];
+  cache[name] = remote;
+  writeLocal(name, remote);
+  return structuredClone(remote);
+}
+
 function readCollection(name, fallback = []) {
   if (useSupabase() && cache[name]) {
     return structuredClone(cache[name]);
+  }
+  if (useSupabase() && CLOUD_ONLY.has(name)) {
+    return structuredClone(fallback);
   }
   return readLocal(name, fallback);
 }
@@ -122,17 +156,56 @@ function writeCollection(name, data) {
   if (!table) return;
 
   // Fire-and-persist to your Supabase account
-  const persist = async () => {
-    if (name === 'consumer_master' && copy.length > 2000) {
-      const chunk = 400;
-      for (let i = 0; i < copy.length; i += chunk) {
-        await sb.upsertRows(table, copy.slice(i, i + chunk).map(sanitizeRow), 'consumer_id');
-      }
-      return;
+  persistCollection(name, copy).catch((e) =>
+    console.error(`[store] supabase persist ${table}:`, e.message)
+  );
+}
+
+async function writeCollectionAndPersist(name, data) {
+  const copy = structuredClone(data);
+  if (useSupabase()) cache[name] = copy;
+  writeLocal(name, copy);
+
+  if (!useSupabase()) {
+    return { store: 'local', persisted: true, rows: copy.length };
+  }
+  const table = TABLES[name];
+  if (!table) {
+    return { store: 'supabase', persisted: false, error: `Unknown table ${name}`, rows: copy.length };
+  }
+  try {
+    await persistCollection(name, copy);
+    return {
+      store: 'supabase',
+      persisted: true,
+      host: sb.status().host,
+      table,
+      rows: copy.length,
+    };
+  } catch (e) {
+    console.error(`[store] supabase persist ${table}:`, e.message);
+    return {
+      store: 'supabase',
+      persisted: false,
+      host: sb.status().host,
+      table,
+      rows: copy.length,
+      error: e.message,
+    };
+  }
+}
+
+async function persistCollection(name, copy) {
+  const table = TABLES[name];
+  if (!table) throw new Error(`Unknown collection ${name}`);
+  if (name === 'consumer_master' && copy.length > 2000) {
+    const chunk = 400;
+    for (let i = 0; i < copy.length; i += chunk) {
+      await sb.upsertRows(table, copy.slice(i, i + chunk).map(sanitizeRow), 'consumer_id');
     }
-    await sb.replaceTable(table, copy.map(sanitizeRow));
-  };
-  persist().catch((e) => console.error(`[store] supabase persist ${table}:`, e.message));
+    return;
+  }
+  await sb.replaceTable(table, copy.map(sanitizeRow));
 }
 
 const readCollectionSync = readCollection;
@@ -198,8 +271,10 @@ module.exports = {
   useSupabase,
   storeMode,
   initStore,
+  refreshFromSupabase,
   readCollection,
   writeCollection,
+  writeCollectionAndPersist,
   readCollectionSync,
   writeCollectionSync,
   nextId,
@@ -208,4 +283,5 @@ module.exports = {
   saveUserRecord,
   pushAllLocalToSupabase,
   isReady: () => initialized,
+  isCloudOnly: (name) => CLOUD_ONLY.has(name),
 };

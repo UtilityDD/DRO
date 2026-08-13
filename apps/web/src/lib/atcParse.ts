@@ -30,6 +30,24 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Excel % cells arrive as fractions (0.0628); whole numbers are already percent points. */
+function asPercent(v: unknown): number | null {
+  const n = num(v);
+  if (n == null) return null;
+  if (Math.abs(n) <= 1) return n * 100;
+  return n;
+}
+
+/** Prior FY closing March for a given achievement month (WBSEDCL FY = Apr–Mar). */
+function priorFyMarch(period: string): string {
+  const m = String(period || '').match(/^([A-Za-z]+)'(\d{2})$/);
+  if (!m) return '';
+  const mon = m[1].slice(0, 3).toLowerCase();
+  let y = Number(m[2]);
+  if (['jan', 'feb', 'mar'].includes(mon)) y -= 1;
+  return `Mar'${String(y).padStart(2, '0')}`;
+}
+
 export function normalizePeriod(text: unknown): string {
   const s = cellStr(text);
   const m = s.match(
@@ -79,6 +97,12 @@ function looksLikeHeaderIB(row: unknown[]) {
 function isNumericOfficeCode(code: string) {
   // Zone=34, Region=341, Division=3412, CCC=3412502
   return /^\d{2,}$/.test(String(code || '').trim());
+}
+
+/** DRO app scope: Siliguri Zone (34) + Darjeeling Region (341…). */
+export function isDroScopedOffice(code: unknown) {
+  const c = String(code || '').trim();
+  return c === '34' || c.startsWith('341');
 }
 
 function isHeaderLabelName(name: string) {
@@ -169,6 +193,92 @@ function expandMonthPoints(
   return out;
 }
 
+/**
+ * Format-IA column map — March sheets omit YoY loss cols (Input starts earlier).
+ */
+function mapFormatIAColumns(header: unknown[]) {
+  const cells = (header || []).map((h, i) => ({
+    i,
+    t: cellStr(h).toUpperCase(),
+    period: normalizePeriod(h),
+  }));
+
+  let consumers = 4;
+  let targetAtc = 5;
+  let targetDist = 6;
+  let input = -1;
+  let demand = -1;
+  let collection = -1;
+  let collEff = -1;
+  const atcUpto: { i: number; period: string }[] = [];
+  const distUpto: { i: number; period: string }[] = [];
+
+  for (const c of cells) {
+    const t = c.t;
+    if (/CONSUMER/.test(t)) consumers = c.i;
+    if (/INPUT/.test(t) && !/LOSS/.test(t)) input = c.i;
+    if (/DEMAND/.test(t) && !/LOSS/.test(t)) demand = c.i;
+    if (/COLLEC/.test(t) && !/EFF/.test(t)) collection = c.i;
+    if (/COLL/.test(t) && /EFF/.test(t)) collEff = c.i;
+    if (/AT&C/.test(t) && /LOSS/.test(t) && !/UPTO|CUM/.test(t)) targetAtc = c.i;
+    if (/DIST/.test(t) && /LOSS/.test(t) && !/UPTO|CUM/.test(t)) targetDist = c.i;
+    if (/AT&C/.test(t) && /LOSS/.test(t) && /UPTO|CUM/.test(t) && c.period) {
+      atcUpto.push({ i: c.i, period: c.period });
+    }
+    if (/DIST/.test(t) && /LOSS/.test(t) && /UPTO|CUM/.test(t) && c.period) {
+      distUpto.push({ i: c.i, period: c.period });
+    }
+  }
+
+  atcUpto.sort((a, b) => periodSortKey(a.period).localeCompare(periodSortKey(b.period)));
+  const curAtc = atcUpto.length ? atcUpto[atcUpto.length - 1] : null;
+  const curPeriod = curAtc ? curAtc.period : '';
+  const fyMar = priorFyMarch(curPeriod);
+  const priorAtc =
+    atcUpto.find((x) => x.period === fyMar) || (atcUpto.length > 1 ? atcUpto[0] : null);
+  const curMon = headerMonthAbbr(curPeriod);
+  const yoyAtc = atcUpto.find(
+    (x) =>
+      x.period !== curPeriod &&
+      x.period !== (priorAtc && priorAtc.period) &&
+      headerMonthAbbr(x.period) === curMon
+  );
+
+  const distFor = (period: string) => {
+    const hit = distUpto.find((d) => d.period === period);
+    return hit ? hit.i : -1;
+  };
+
+  return {
+    consumers,
+    targetAtc,
+    targetDist,
+    input,
+    demand,
+    collection,
+    collEff,
+    curAtc: curAtc ? curAtc.i : -1,
+    curDist: distFor(curPeriod),
+    curPeriod,
+    priorAtc: priorAtc ? priorAtc.i : -1,
+    priorDist: priorAtc ? distFor(priorAtc.period) : -1,
+    priorPeriod: priorAtc ? priorAtc.period : '',
+    yoyAtc: yoyAtc ? yoyAtc.i : -1,
+    yoyDist: yoyAtc ? distFor(yoyAtc.period) : -1,
+    yoyPeriod: yoyAtc ? yoyAtc.period : '',
+  };
+}
+
+function headerMonthAbbr(period: string) {
+  const m = String(period || '').match(/^([A-Za-z]{3})'/);
+  return m ? m[1] : '';
+}
+
+function cellAt(row: unknown[], idx: number) {
+  if (idx == null || idx < 0) return null;
+  return row[idx];
+}
+
 function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_fy?: string } = {}) {
   const period_label = opts.period_label || findPeriodInSheet(aoa) || '';
   const target_fy = opts.target_fy || findTargetFyInSheet(aoa);
@@ -182,9 +292,10 @@ function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_f
   if (headerIdx < 0) return { period_label, target_fy, rows: [] as AtcRow[], source_format: 'IA' };
 
   const header = (aoa[headerIdx] || []) as unknown[];
-  const periodMar = normalizePeriod(header[7]) || "Mar'26";
-  const periodYoy = normalizePeriod(header[9]) || '';
-  const periodCur = normalizePeriod(header[14]) || period_label;
+  const col = mapFormatIAColumns(header);
+  const periodCur = col.curPeriod || normalizePeriod(header[14]) || period_label;
+  const periodMar = col.priorPeriod || priorFyMarch(periodCur) || '';
+  const periodYoy = col.yoyPeriod || '';
 
   const out: AtcRow[] = [];
   let currentDiv = '';
@@ -232,19 +343,19 @@ function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_f
       division_name: currentDiv || '',
       region_code: '341',
       ccc_code: office_type === 'ccc' ? code : '',
-      consumer_count: num(r[4]),
-      target_atc: num(r[5]),
-      target_dist: num(r[6]),
-      atc_mar: num(r[7]),
-      dist_mar: num(r[8]),
-      atc_yoy: num(r[9]),
-      dist_yoy: num(r[10]),
-      input_mu: num(r[11]),
-      demand_mu: num(r[12]),
-      collection_mu: num(r[13]),
-      atc_loss: num(r[14]),
-      dist_loss: num(r[15]),
-      coll_eff: num(r[16]),
+      consumer_count: num(cellAt(r, col.consumers)),
+      target_atc: asPercent(cellAt(r, col.targetAtc)),
+      target_dist: asPercent(cellAt(r, col.targetDist)),
+      atc_mar: asPercent(cellAt(r, col.priorAtc)),
+      dist_mar: asPercent(cellAt(r, col.priorDist)),
+      atc_yoy: asPercent(cellAt(r, col.yoyAtc)),
+      dist_yoy: asPercent(cellAt(r, col.yoyDist)),
+      input_mu: num(cellAt(r, col.input)),
+      demand_mu: num(cellAt(r, col.demand)),
+      collection_mu: num(cellAt(r, col.collection)),
+      atc_loss: asPercent(cellAt(r, col.curAtc)),
+      dist_loss: asPercent(cellAt(r, col.curDist)),
+      coll_eff: asPercent(cellAt(r, col.collEff)),
       coll_eff_mar: null,
       coll_eff_yoy: null,
     };
@@ -285,9 +396,9 @@ function parseFormatIB(aoa: unknown[][], opts: { period_label?: string; target_f
   if (sub.includes('AT&C') || sub.includes('DISTRIBUTION') || sub.includes('UPTO')) start += 1;
   else subRow = [];
 
-  const periodMar = normalizePeriod(subRow[8]) || "Mar'26";
-  const periodYoy = normalizePeriod(subRow[9]) || '';
   const periodCur = normalizePeriod(subRow[10]) || period_label;
+  const periodMar = normalizePeriod(subRow[8]) || priorFyMarch(periodCur) || '';
+  const periodYoy = normalizePeriod(subRow[9]) || '';
 
   const out: AtcRow[] = [];
   for (let i = start; i < aoa.length; i++) {
@@ -327,20 +438,20 @@ function parseFormatIB(aoa: unknown[][], opts: { period_label?: string; target_f
       region_code: '341',
       ccc_code: '',
       consumer_count: null,
-      target_atc: num(r[3]),
-      target_dist: num(r[4]),
+      target_atc: asPercent(r[3]),
+      target_dist: asPercent(r[4]),
       input_mu: num(r[5]),
       demand_mu: num(r[6]),
       collection_mu: num(r[7]),
-      atc_mar: num(r[8]),
-      atc_yoy: num(r[9]),
-      atc_loss: num(r[10]),
-      dist_mar: num(r[11]),
-      dist_yoy: num(r[12]),
-      dist_loss: num(r[13]),
-      coll_eff_mar: num(r[14]),
-      coll_eff_yoy: num(r[15]),
-      coll_eff: num(r[16]),
+      atc_mar: asPercent(r[8]),
+      atc_yoy: asPercent(r[9]),
+      atc_loss: asPercent(r[10]),
+      dist_mar: asPercent(r[11]),
+      dist_yoy: asPercent(r[12]),
+      dist_loss: asPercent(r[13]),
+      coll_eff_mar: asPercent(r[14]),
+      coll_eff_yoy: asPercent(r[15]),
+      coll_eff: asPercent(r[16]),
     };
 
     out.push(
@@ -434,13 +545,17 @@ export function parseAtcWorkbookFromAoa(
     if (!period_label) period_label = opts.period_label;
   }
 
+  const scoped = all.filter((r) => isDroScopedOffice(r.office_code));
+  const filtered_out = all.length - scoped.length;
+
   return {
     period_label,
     target_fy,
-    rows: all,
+    rows: scoped,
+    filtered_out,
     counts: {
-      IA: all.filter((r) => r.source_format === 'IA').length,
-      IB: all.filter((r) => r.source_format === 'IB').length,
+      IA: scoped.filter((r) => r.source_format === 'IA').length,
+      IB: scoped.filter((r) => r.source_format === 'IB').length,
     },
   };
 }

@@ -92,6 +92,8 @@ export const api = {
       periods?: string[];
       formats?: string[];
       can_upload?: boolean;
+      source?: string;
+      host?: string;
     }>(`/api/atc${period ? `?period=${encodeURIComponent(period)}` : ''}`),
   atcQuery: (qs = '') =>
     request<{
@@ -99,6 +101,8 @@ export const api = {
       periods?: string[];
       formats?: string[];
       can_upload?: boolean;
+      source?: string;
+      host?: string;
     }>(`/api/atc${qs ? `?${qs}` : ''}`),
   batches: () => request<{ rows: Record<string, unknown>[] }>('/api/batches'),
   activity: () => request<{ rows: Record<string, unknown>[] }>('/api/activity'),
@@ -110,10 +114,22 @@ export const api = {
   deleteUser: (username: string) =>
     request<{ ok: boolean }>(`/api/users/${username}`, { method: 'DELETE' }),
   upload: (module: string, body: { rows: Record<string, unknown>[]; filename?: string; period_label?: string; notes?: string }) =>
-    request<{ ok: boolean; upserted: number; batch: Record<string, unknown> }>(`/api/upload/${module}`, {
+    request<{
+      ok: boolean;
+      upserted: number;
+      batch: Record<string, unknown>;
+      store?: string;
+      cloud?: { store?: string; persisted?: boolean; host?: string; error?: string; rows?: number };
+    }>(`/api/upload/${module}`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  health: () =>
+    request<{
+      ok?: boolean;
+      store?: string;
+      supabase?: { configured?: boolean; host?: string | null };
+    }>('/api/health'),
   patchNsc: (applicationNo: string, body: Record<string, unknown>) =>
     request(`/api/nsc/${encodeURIComponent(applicationNo)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   patchDisco: (id: number | string, body: Record<string, unknown>) =>

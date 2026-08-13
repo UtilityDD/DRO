@@ -7,10 +7,12 @@ const cors = require('cors');
 const {
   readCollection,
   writeCollection,
+  writeCollectionAndPersist,
   nextId,
   scopeFilter,
   readUsers,
   initStore,
+  refreshFromSupabase,
   storeMode,
   useSupabase,
 } = require('./store');
@@ -327,8 +329,30 @@ app.get('/api/consumers', requireAuth, requirePerm('consumers', 'view'), (req, r
   });
 });
 
-app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), (req, res) => {
-  const rows = readCollection('atc_snapshots', []);
+app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) => {
+  if (!useSupabase()) {
+    return res.status(503).json({
+      error: 'AT&C requires Supabase. Configure server/data/supabase_config.json.',
+      rows: [],
+      periods: [],
+      formats: ['IA', 'IB'],
+      source: 'none',
+    });
+  }
+
+  let rows;
+  try {
+    rows = await refreshFromSupabase('atc_snapshots');
+  } catch (e) {
+    return res.status(502).json({
+      error: `Failed to load AT&C from Supabase: ${e.message}`,
+      rows: [],
+      periods: [],
+      formats: ['IA', 'IB'],
+      source: 'supabase',
+    });
+  }
+
   const period = req.query.period ? String(req.query.period) : '';
   const format = req.query.format ? String(req.query.format).toUpperCase() : '';
   const officeType = req.query.office_type ? String(req.query.office_type) : '';
@@ -378,6 +402,8 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), (req, res) => {
     rows: out,
     periods,
     formats: ['IA', 'IB'],
+    source: 'supabase',
+    host: sb.status().host,
     can_edit: canEdit(req.user, 'atc'),
     can_upload: canUpload(req.user, 'atc'),
   });
@@ -449,6 +475,28 @@ function upsertByKey(collection, rows, keyFn, mapFn) {
   return upserted;
 }
 
+async function upsertByKeyPersisted(collection, rows, keyFn, mapFn) {
+  const existing = readCollection(collection, []);
+  const index = new Map(existing.map((r) => [keyFn(r), r]));
+  let upserted = 0;
+  for (const raw of rows) {
+    const mapped = mapFn(raw);
+    if (!mapped) continue;
+    const key = keyFn(mapped);
+    const prev = index.get(key);
+    if (prev) {
+      Object.assign(prev, mapped, { id: prev.id });
+    } else {
+      mapped.id = nextId(existing);
+      existing.push(mapped);
+      index.set(key, mapped);
+    }
+    upserted += 1;
+  }
+  const cloud = await writeCollectionAndPersist(collection, existing);
+  return { upserted, cloud };
+}
+
 function resolveDivision(cccCode) {
   const offices = readCollection('offices', []);
   const ccc = offices.find((o) => o.office_type === 'ccc' && String(o.code) === String(cccCode));
@@ -473,7 +521,25 @@ function createBatch(module, req, rowCount, period) {
   return batch;
 }
 
-app.post('/api/upload/:module', requireAuth, (req, res) => {
+async function createBatchPersisted(module, req, rowCount, period) {
+  const batches = readCollection('upload_batches', []);
+  const batch = {
+    id: nextId(batches),
+    module,
+    filename: req.body.filename || '',
+    uploaded_by: req.user.username,
+    row_count: rowCount,
+    error_count: 0,
+    period_label: period || '',
+    notes: req.body.notes || '',
+    created_at: new Date().toISOString(),
+  };
+  batches.unshift(batch);
+  const cloud = await writeCollectionAndPersist('upload_batches', batches);
+  return { batch, cloud };
+}
+
+app.post('/api/upload/:module', requireAuth, async (req, res) => {
   const module = req.params.module;
   const moduleId = uploadRouteToModule(module);
   if (!moduleId) return res.status(400).json({ error: 'Unknown module' });
@@ -484,13 +550,19 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
   if (!rows.length) return res.status(400).json({ error: 'No rows' });
 
-  const batch = createBatch(module, req, rows.length, req.body.period_label);
+  const { batch } = await createBatchPersisted(module, req, rows.length, req.body.period_label);
   let upserted = 0;
+  let cloud = { store: storeMode(), persisted: !useSupabase() };
+
+  const run = async (collection, keyFn, mapFn) => {
+    const result = await upsertByKeyPersisted(collection, rows, keyFn, mapFn);
+    upserted = result.upserted;
+    cloud = result.cloud;
+  };
 
   if (module === 'nsc') {
-    upserted = upsertByKey(
+    await run(
       'nsc_cases',
-      rows,
       (r) => r.application_no,
       (raw) => {
         const application_no = String(raw.application_no || raw.ApplicationNo || raw['Application No'] || '').trim();
@@ -515,9 +587,8 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'disco') {
-    upserted = upsertByKey(
+    await run(
       'disconnections',
-      rows,
       (r) => `${r.consumer_id}|${r.disco_date || ''}`,
       (raw) => {
         const consumer_id = String(raw.consumer_id || raw.ConsumerID || raw['Consumer ID'] || '').trim();
@@ -540,9 +611,8 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'grievance') {
-    upserted = upsertByKey(
+    await run(
       'grievances',
-      rows,
       (r) => r.docket_no,
       (raw) => {
         const docket_no = String(raw.docket_no || raw.Docket || raw['Docket No'] || '').trim();
@@ -567,9 +637,8 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'tech-works') {
-    upserted = upsertByKey(
+    await run(
       'tech_works',
-      rows,
       (r) => r.work_id,
       (raw) => {
         const work_id = String(raw.work_id || raw.WorkID || raw['Work ID'] || '').trim();
@@ -594,9 +663,8 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'spot-billing') {
-    upserted = upsertByKey(
+    await run(
       'spot_billing',
-      rows,
       (r) => `${r.period_label}|${r.ccc_code}|${r.consumer_class}`,
       (raw) => {
         const ccc_code = String(raw.ccc_code || raw.CCC || raw['CCC Code'] || '').trim();
@@ -619,9 +687,8 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'consumers') {
-    upserted = upsertByKey(
+    await run(
       'consumer_master',
-      rows,
       (r) => r.consumer_id,
       (raw) => {
         const consumer_id = String(raw.consumer_id || raw.ConsumerID || raw['Consumer ID'] || '').trim();
@@ -642,9 +709,8 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'bulk') {
-    upserted = upsertByKey(
+    await run(
       'bulk_consumers',
-      rows,
       (r) => r.consumer_id,
       (raw) => {
         const consumer_id = String(raw.consumer_id || raw.ConsumerID || '').trim();
@@ -664,15 +730,15 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
       }
     );
   } else if (module === 'atc') {
-    const { periodSortKey } = require('./atc_parse');
-    upserted = upsertByKey(
+    const { periodSortKey, isDroScopedOffice } = require('./atc_parse');
+    await run(
       'atc_snapshots',
-      rows,
       (r) => `${r.period_label}|${r.source_format || 'IA'}|${r.office_code}`,
       (raw) => {
         const office_code = String(raw.office_code || raw.Code || raw['CCC Code'] || '').trim();
         const period_label = String(raw.period_label || req.body.period_label || '').trim();
         if (!office_code || !period_label) return null;
+        if (!isDroScopedOffice(office_code)) return null;
         const source_format = String(raw.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
         const office_type = raw.office_type || raw.Type || 'ccc';
         const now = new Date().toISOString();
@@ -715,6 +781,7 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
           coll_eff: n(raw.coll_eff ?? raw.CollEff),
           coll_eff_mar: n(raw.coll_eff_mar),
           coll_eff_yoy: n(raw.coll_eff_yoy),
+          point_source: raw.point_source || null,
           batch_id: batch.id,
           updated_at: now,
           created_at: now,
@@ -724,7 +791,13 @@ app.post('/api/upload/:module', requireAuth, (req, res) => {
   }
 
   logActivity(req.user.username, 'upload', `${module}: ${upserted} rows (${req.body.filename || 'file'})`);
-  res.json({ ok: true, upserted, batch });
+  res.json({
+    ok: true,
+    upserted,
+    batch,
+    store: cloud.store || storeMode(),
+    cloud,
+  });
 });
 
 // ——— Admin users ———

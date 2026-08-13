@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Bar,
+  BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
@@ -8,17 +9,18 @@ import {
   Legend,
   Line,
   LineChart,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import { api } from '../api';
+import { useAuth } from '../auth';
 
-/** Fixed chart canvas — keeps Trend / Compare / label modes visually consistent */
-const CHART_HEIGHT = 320;
-/** Max series with on-chart endpoint pills before we switch to a latest-value strip */
+/** Shared plot area height inside the equal workspace panels */
+const CHART_HEIGHT = '100%';
+
+/** Max series with on-chart pills before also showing a latest-value strip */
 const LABEL_SERIES_CAP = 5;
 /** Max compare bars that get value labels on top */
 const LABEL_BAR_CAP = 8;
@@ -33,28 +35,55 @@ type LabelProps = {
 function formatLabel(v: unknown, kind: 'pct' | 'mu' | 'count') {
   const n = toNum(v);
   if (n == null) return '';
-  if (kind === 'pct') return `${n.toFixed(1)}%`;
-  if (kind === 'mu') return n >= 100 ? n.toFixed(1) : n.toFixed(2);
+  if (kind === 'pct') return `${n.toFixed(2)}%`;
+  if (kind === 'mu') return n.toFixed(2);
   return String(Math.round(n));
 }
 
-/** Pill label only on the series endpoint — keeps multi-month trends readable */
-function EndPointLabel({
+function periodMonthAbbr(period: string): string {
+  const m = String(period || '').match(/^([A-Za-z]{3})'/);
+  if (!m) return '';
+  return m[1].charAt(0).toUpperCase() + m[1].slice(1, 3).toLowerCase();
+}
+
+/** March FY points + latest month + same calendar month in prior years */
+function buildMilestonePeriods(periods: string[]): Set<string> {
+  const set = new Set<string>();
+  if (!periods.length) return set;
+  const latest = periods[periods.length - 1];
+  const latestMon = periodMonthAbbr(latest);
+  for (const p of periods) {
+    const mon = periodMonthAbbr(p);
+    if (mon === 'Mar') set.add(p);
+    if (latestMon && mon === latestMon) set.add(p);
+  }
+  set.add(latest);
+  return set;
+}
+
+/** Pill labels on milestone months (Mar, latest, YoY same month) and series endpoint */
+function MilestoneLabel({
   x,
   y,
   value,
   index,
+  periods,
+  milestones,
   lastIndex,
   color,
   kind,
   stagger = 0,
 }: LabelProps & {
+  periods: string[];
+  milestones: Set<string>;
   lastIndex: number;
   color: string;
   kind: 'pct' | 'mu' | 'count';
   stagger?: number;
 }) {
-  if (index !== lastIndex || value == null || value === '') return null;
+  const period = periods[index ?? -1] || '';
+  const isMilestone = Boolean(period && milestones.has(period)) || index === lastIndex;
+  if (!isMilestone || value == null || value === '') return null;
   const cx = Number(x);
   const cy = Number(y);
   if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
@@ -63,7 +92,7 @@ function EndPointLabel({
   const w = Math.max(36, text.length * 7 + 14);
   const h = 18;
   const ox = cx - w / 2;
-  const oy = cy - 28 - stagger * 16;
+  const oy = cy - 28 - stagger * 14;
   return (
     <g className="atc-datalabel">
       <rect x={ox} y={oy} width={w} height={h} rx={9} fill="#0f2426" stroke={color} strokeWidth={1.25} />
@@ -82,30 +111,188 @@ function EndPointLabel({
   );
 }
 
+/** Target stroke — distinct from teal/blue/violet series colors */
+const TARGET_COLOR = '#ff8fab';
+
+function useDesktopChart() {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const mq = window.matchMedia('(min-width: 961px)');
+      mq.addEventListener('change', onStoreChange);
+      return () => mq.removeEventListener('change', onStoreChange);
+    },
+    () => window.matchMedia('(min-width: 961px)').matches,
+    () => true
+  );
+}
+
+function formatDelta(delta: number, kind: 'pct' | 'mu' | 'count') {
+  const sign = delta > 0 ? '+' : '';
+  if (kind === 'pct') return `${sign}${delta.toFixed(2)} pp`;
+  if (kind === 'mu') return `${sign}${delta.toFixed(2)}`;
+  return `${sign}${Math.round(delta)}`;
+}
+
 function BarValueLabel(props: {
   x?: number | string;
   y?: number | string;
   width?: number | string;
+  height?: number | string;
+  value?: number | string | null;
+  index?: number;
+  kind: 'pct' | 'mu' | 'count';
+  show: boolean;
+  inside: boolean;
+  deltas?: Array<number | null | undefined>;
+  showDelta: boolean;
+}) {
+  const { x, y, width, height, value, index, kind, show, inside, deltas, showDelta } = props;
+  if (!show || value == null || value === '') return null;
+  const text = formatLabel(value, kind);
+  if (!text) return null;
+  const w = Number(width || 0);
+  const h = Number(height || 0);
+  const cx = Number(x) + w / 2;
+  const top = Number(y);
+  if (!Number.isFinite(cx) || !Number.isFinite(top)) return null;
+
+  const deltaRaw = showDelta && index != null && deltas ? deltas[index] : null;
+  const deltaText =
+    deltaRaw != null && Number.isFinite(deltaRaw) ? formatDelta(deltaRaw, kind) : '';
+
+  const canFitInside = inside && h >= (deltaText ? 44 : 28) && w >= 28;
+  const fontSize = canFitInside ? (w < 48 ? 12 : 15) : 10;
+  const deltaSize = canFitInside ? (w < 48 ? 10 : 12) : 9;
+  const fill = canFitInside ? '#042f2e' : '#c5ddd9';
+  const deltaFill =
+    deltaRaw == null
+      ? fill
+      : canFitInside
+        ? deltaRaw > 0
+          ? '#7f1d1d'
+          : deltaRaw < 0
+            ? '#14532d'
+            : fill
+        : deltaRaw > 0
+          ? '#fca5a5'
+          : deltaRaw < 0
+            ? '#86efac'
+            : fill;
+
+  const cy = canFitInside
+    ? top + h / 2 - (deltaText ? 7 : 0)
+    : top - (deltaText ? 18 : 8);
+  const dy = canFitInside ? cy + 14 : top - 4;
+
+  return (
+    <g className="atc-bar-label">
+      <text
+        x={cx}
+        y={cy}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill={fill}
+        fontSize={fontSize}
+        fontWeight={750}
+      >
+        {text}
+      </text>
+      {deltaText ? (
+        <text
+          x={cx}
+          y={dy}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={deltaFill}
+          fontSize={deltaSize}
+          fontWeight={650}
+        >
+          {deltaText}
+        </text>
+      ) : null}
+    </g>
+  );
+}
+
+/** Target value pill on compare bar charts */
+function TargetPointLabel(props: {
+  x?: number | string;
+  y?: number | string;
   value?: number | string | null;
   kind: 'pct' | 'mu' | 'count';
   show: boolean;
 }) {
-  const { x, y, width, value, kind, show } = props;
+  const { x, y, value, kind, show } = props;
   if (!show || value == null || value === '') return null;
   const text = formatLabel(value, kind);
   if (!text) return null;
-  const cx = Number(x) + Number(width || 0) / 2;
-  const cy = Number(y) - 8;
+  const cx = Number(x);
+  const cy = Number(y);
   if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  const w = Math.max(34, text.length * 6.6 + 12);
+  const h = 17;
+  const ox = cx - w / 2;
+  const oy = cy - 22;
+  return (
+    <g className="atc-target-label">
+      <rect
+        x={ox}
+        y={oy}
+        width={w}
+        height={h}
+        rx={8}
+        fill="#0f2426"
+        stroke={TARGET_COLOR}
+        strokeWidth={1.25}
+      />
+      <text
+        x={cx}
+        y={oy + h / 2 + 0.5}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill={TARGET_COLOR}
+        fontSize={10}
+        fontWeight={750}
+      >
+        {text}
+      </text>
+    </g>
+  );
+}
+
+const MU_BAR_COLORS = {
+  input: '#2dd4bf',
+  demand: '#38bdf8',
+  collection: '#a78bfa',
+};
+
+/** Value labels on I·D·C grouped bars */
+function MuGroupBarLabel(props: {
+  x?: number | string;
+  y?: number | string;
+  width?: number | string;
+  value?: number | string | null;
+  show: boolean;
+  inside?: boolean;
+}) {
+  const { x, y, width, value, show, inside } = props;
+  if (!show || value == null || value === '') return null;
+  const text = formatLabel(value, 'mu');
+  if (!text) return null;
+  const w = Number(width || 0);
+  const cx = Number(x) + w / 2;
+  const top = Number(y);
+  if (!Number.isFinite(cx) || !Number.isFinite(top)) return null;
+  const canInside = Boolean(inside) && w >= 22;
   return (
     <text
-      className="atc-datalabel"
       x={cx}
-      y={cy}
+      y={canInside ? top + 14 : top - 6}
       textAnchor="middle"
-      fill="#c5ddd9"
-      fontSize={10}
-      fontWeight={650}
+      dominantBaseline="middle"
+      fill={canInside ? '#042f2e' : '#d7ebe8'}
+      fontSize={canInside && w >= 36 ? 12 : 10}
+      fontWeight={750}
     >
       {text}
     </text>
@@ -115,9 +302,19 @@ function BarValueLabel(props: {
 type AtcRow = Record<string, unknown>;
 type Level = 'ccc' | 'division' | 'region';
 
-const PARAMS: { id: string; label: string; short: string; field: string; kind: 'pct' | 'mu' | 'count'; targetField?: string }[] = [
+type ParamDef = {
+  id: string;
+  label: string;
+  short: string;
+  field: string;
+  kind: 'pct' | 'mu' | 'count';
+  targetField?: string;
+  color?: string;
+};
+
+const PARAMS: ParamDef[] = [
   { id: 'atc', label: 'AT&C loss', short: 'AT&C', field: 'atc_loss', kind: 'pct', targetField: 'target_atc' },
-  { id: 'dist', label: 'Distribution loss', short: 'Dist', field: 'dist_loss', kind: 'pct', targetField: 'target_dist' },
+  { id: 'td', label: 'T&D / Distribution loss', short: 'T&D', field: 'dist_loss', kind: 'pct', targetField: 'target_dist' },
   { id: 'ce', label: 'Collection efficiency', short: 'Coll.eff', field: 'coll_eff', kind: 'pct' },
   // MU fields exist only on the workbook "achievement" month (not May'25 / Mar'26 header cols)
   { id: 'input', label: 'Input (MU)', short: 'Input', field: 'input_mu', kind: 'mu' },
@@ -125,17 +322,25 @@ const PARAMS: { id: string; label: string; short: string; field: string; kind: '
   { id: 'coll', label: 'Collection (MU)', short: 'Coll.', field: 'collection_mu', kind: 'mu' },
 ];
 
+/** One-office compare: AT&C vs T&D */
+const LOSS_METRICS: ParamDef[] = [
+  { id: 'atc', label: 'AT&C loss', short: 'AT&C', field: 'atc_loss', kind: 'pct', targetField: 'target_atc', color: '#2dd4bf' },
+  { id: 'td', label: 'T&D loss', short: 'T&D', field: 'dist_loss', kind: 'pct', targetField: 'target_dist', color: '#60a5fa' },
+];
+
+type CompareBy = 'units' | 'losses' | 'energy';
+
 const LINE_COLORS = [
   '#2dd4bf',
   '#60a5fa',
-  '#f5b942',
+  '#c084fc',
   '#f07178',
-  '#a78bfa',
-  '#7bd88f',
+  '#34d399',
   '#fb923c',
   '#e879f9',
   '#38bdf8',
   '#f472b6',
+  '#7dd3fc',
 ];
 
 const CHART_TOOLTIP = {
@@ -150,6 +355,88 @@ const CHART_TOOLTIP = {
   itemStyle: { color: '#e8f3f1', padding: '2px 0' },
   wrapperStyle: { outline: 'none' },
 };
+
+const TIP_WORSE = '#fca5a5';
+const TIP_BETTER = '#86efac';
+const TIP_FLAT = '#c5ddd9';
+
+/** Loss tooltip: value vs target with coloured above/below + delta */
+function LossTargetTooltip(props: {
+  active?: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload?: any[];
+  label?: string | number;
+  kind: 'pct' | 'mu' | 'count';
+}) {
+  const { active, payload, label, kind } = props;
+  if (!active || !payload?.length) return null;
+  const row = (payload.find((p) => p?.dataKey === 'value') || payload[0])?.payload as
+    | {
+        name?: string;
+        value?: number | null;
+        target?: number | null;
+        delta?: number | null;
+      }
+    | undefined;
+  if (!row) return null;
+
+  const value = row.value != null ? Number(row.value) : null;
+  const target = row.target != null ? Number(row.target) : null;
+  const delta =
+    row.delta != null && Number.isFinite(row.delta)
+      ? Number(row.delta)
+      : value != null && target != null
+        ? value - target
+        : null;
+
+  const title = String(label || row.name || '');
+  const valueText = value != null ? formatLabel(value, kind) : '—';
+  const targetText = target != null ? formatLabel(target, kind) : '—';
+
+  let status = '';
+  let statusColor = TIP_FLAT;
+  let deltaColor = TIP_FLAT;
+  if (delta != null) {
+    if (delta > 0.0005) {
+      status = 'Higher than target';
+      statusColor = TIP_WORSE;
+      deltaColor = TIP_WORSE;
+    } else if (delta < -0.0005) {
+      status = 'Lower than target';
+      statusColor = TIP_BETTER;
+      deltaColor = TIP_BETTER;
+    } else {
+      status = 'On target';
+      statusColor = TIP_FLAT;
+      deltaColor = TIP_FLAT;
+    }
+  }
+
+  return (
+    <div className="atc-tip">
+      <div className="atc-tip-title">{title}</div>
+      <div className="atc-tip-row">
+        <span>Actual</span>
+        <strong>{valueText}</strong>
+      </div>
+      <div className="atc-tip-row">
+        <span>FY target</span>
+        <strong style={{ color: TARGET_COLOR }}>{targetText}</strong>
+      </div>
+      {delta != null && (
+        <>
+          <div className="atc-tip-row">
+            <span>Delta</span>
+            <strong style={{ color: deltaColor }}>{formatDelta(delta, kind)}</strong>
+          </div>
+          <div className="atc-tip-status" style={{ color: statusColor, borderColor: statusColor }}>
+            {status}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 /** Avoid Number(null) === 0 — missing sheet cells must stay blank. */
 function toNum(v: unknown): number | null {
@@ -171,7 +458,7 @@ function formatValue(v: unknown, kind: 'pct' | 'mu' | 'count') {
     const p = asPct(n);
     return p == null ? '—' : `${p.toFixed(2)}%`;
   }
-  if (kind === 'mu') return n.toFixed(3);
+  if (kind === 'mu') return n.toFixed(2);
   return Math.round(n).toLocaleString();
 }
 
@@ -182,9 +469,119 @@ function chartValue(v: unknown, kind: 'pct' | 'mu' | 'count') {
   return n;
 }
 
-function shortLabel(name: string) {
+/**
+ * Zoom Y so small up/down moves are visible — do not pin the floor at 0.
+ * Ticks snap to clean steps (0.25 / 0.50 / 1 … for %).
+ */
+function niceStep(span: number, kind: 'pct' | 'mu' | 'count'): number {
+  const s = Math.max(Math.abs(span), kind === 'pct' ? 0.5 : 1);
+  if (kind === 'pct') {
+    if (s <= 2) return 0.25;
+    if (s <= 5) return 0.5;
+    if (s <= 10) return 1;
+    if (s <= 20) return 2;
+    if (s <= 50) return 5;
+    return 10;
+  }
+  if (kind === 'count') return Math.max(1, Math.round(s / 5));
+  const rough = s / 5;
+  const pow = Math.pow(10, Math.floor(Math.log10(Math.max(rough, 1e-6))));
+  const n = rough / pow;
+  const f = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return f * pow;
+}
+
+function niceYAxis(
+  values: Array<number | null | undefined>,
+  kind: 'pct' | 'mu' | 'count' = 'pct'
+): { domain: [number, number]; ticks: number[] } | undefined {
+  const nums = values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  if (!nums.length) return undefined;
+  const dataLo = Math.min(...nums);
+  const dataHi = Math.max(...nums);
+  let lo = dataLo;
+  let hi = dataHi;
+  if (lo === hi) {
+    const pad = Math.max(Math.abs(lo) * 0.08, kind === 'pct' ? 0.5 : 1);
+    lo -= pad;
+    hi += pad;
+  } else {
+    const pad = (hi - lo) * 0.12;
+    lo -= pad;
+    hi += pad;
+  }
+  if (dataLo >= 0) lo = Math.max(0, lo);
+
+  const step = niceStep(hi - lo, kind);
+  lo = Math.floor(lo / step) * step;
+  hi = Math.ceil(hi / step) * step;
+  if (dataLo >= 0) lo = Math.max(0, lo);
+  if (hi <= lo) hi = lo + step;
+
+  const ticks: number[] = [];
+  for (let v = lo; v <= hi + step * 1e-6; v += step) {
+    ticks.push(Number(v.toFixed(2)));
+  }
+  return {
+    domain: [Number(lo.toFixed(2)), Number(hi.toFixed(2))],
+    ticks,
+  };
+}
+
+/** Y-axis tick labels always show exactly two decimal places. */
+function yTick2(v: number | string) {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '';
+}
+
+function YAxisTick2({
+  x,
+  y,
+  payload,
+  unit = '',
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value?: number | string };
+  unit?: string;
+}) {
+  const n = Number(payload?.value);
+  if (!Number.isFinite(n) || x == null || y == null) return null;
+  return (
+    <text x={x} y={y} dy={4} textAnchor="end" fill="#8faba8" fontSize={12}>
+      {n.toFixed(2)}
+      {unit}
+    </text>
+  );
+}
+
+function shortLabel(name: string, max = 16) {
   const n = name.trim();
-  return n.length <= 16 ? n : `${n.slice(0, 14)}…`;
+  return n.length <= max ? n : `${n.slice(0, Math.max(0, max - 1))}…`;
+}
+
+const MONTH_ORDER = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Next calendar month label after e.g. May'26 → Jun'26 */
+function nextPeriodLabel(period: string): string {
+  const m = String(period || '').match(/^([A-Za-z]+)'(\d{2})$/);
+  if (!m) return '';
+  const mon = m[1].charAt(0).toUpperCase() + m[1].slice(1, 3).toLowerCase();
+  let y = Number(m[2]);
+  const idx = MONTH_ORDER.findIndex((x) => x.toLowerCase() === mon.toLowerCase());
+  if (idx < 0) return '';
+  if (idx === 11) {
+    y += 1;
+    return `Jan'${String(y).padStart(2, '0')}`;
+  }
+  return `${MONTH_ORDER[idx + 1]}'${String(y).padStart(2, '0')}`;
+}
+
+/** Prefer full office names when few bars — especially 4 divisions on desktop */
+function compareAxisLabel(name: string, barCount: number, desktop: boolean) {
+  if (desktop && barCount > 0 && barCount <= 4) return name.trim();
+  if (desktop && barCount <= 6) return shortLabel(name, 22);
+  return shortLabel(name, 16);
 }
 
 function Seg<T extends string>({
@@ -214,11 +611,15 @@ function Seg<T extends string>({
 }
 
 export function AtcPage() {
+  const { user } = useAuth();
+  const desktopChart = useDesktopChart();
+  const adminDefaultsApplied = useRef(false);
   const [rows, setRows] = useState<AtcRow[]>([]);
   const [periods, setPeriods] = useState<string[]>([]);
   const [format, setFormat] = useState<'IA' | 'IB'>('IA');
-  const [mode, setMode] = useState<'trend' | 'compare'>('trend');
-  const [level, setLevel] = useState<Level>('ccc');
+  const [mode, setMode] = useState<'trend' | 'compare'>('compare');
+  const [compareBy, setCompareBy] = useState<CompareBy>('units');
+  const [level, setLevel] = useState<Level>('division');
   const [division, setDivision] = useState('');
   const [asOf, setAsOf] = useState('');
   const [paramId, setParamId] = useState('atc');
@@ -230,7 +631,35 @@ export function AtcPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Admin landing view: Division · Compare · AT&C (all divisions selected via office effect)
+  useEffect(() => {
+    if (!user || adminDefaultsApplied.current) return;
+    adminDefaultsApplied.current = true;
+    if (user.role === 'admin') {
+      setMode('compare');
+      setCompareBy('units');
+      setLevel('division');
+      setDivision('');
+      setParamId('atc');
+      setShowTarget(true);
+      setPanelTab('chart');
+    } else if (user.role === 'ccc') {
+      setMode('trend');
+      setLevel('ccc');
+    } else if (user.role === 'division') {
+      setMode('compare');
+      setLevel('ccc');
+    } else {
+      setMode('compare');
+      setLevel('division');
+    }
+  }, [user]);
+
   const param = PARAMS.find((p) => p.id === paramId) || PARAMS[0];
+  const isMetricCompare = mode === 'compare' && compareBy === 'losses';
+  const isIdcCompare = mode === 'compare' && compareBy === 'energy';
+  const metricGroup = compareBy === 'losses' ? LOSS_METRICS : null;
+  const compareKind: 'pct' | 'mu' | 'count' = isMetricCompare ? 'pct' : isIdcCompare ? 'mu' : param.kind;
 
   useEffect(() => {
     setLoading(true);
@@ -260,7 +689,11 @@ export function AtcPage() {
           return ps.length ? ps[ps.length - 1] : '';
         });
       })
-      .catch((e) => setError(e.message || 'Failed to load AT&C'))
+      .catch((e) => {
+        setRows([]);
+        setPeriods([]);
+        setError(e.message || 'Failed to load AT&C from Supabase');
+      })
       .finally(() => setLoading(false));
   }, [format]);
 
@@ -278,13 +711,19 @@ export function AtcPage() {
 
   // MU metrics only exist on achievement months — jump Compare as-of to a month that has values
   useEffect(() => {
-    if (param.kind !== 'mu' || mode !== 'compare' || !rows.length) return;
+    if (mode !== 'compare' || !rows.length) return;
+    const fields = isIdcCompare
+      ? ['input_mu', 'demand_mu', 'collection_mu']
+      : param.kind === 'mu'
+        ? [param.field]
+        : null;
+    if (!fields) return;
     const hasMu = (p: string) =>
-      rows.some((r) => r.period_label === p && toNum(r[param.field]) != null);
+      rows.some((r) => r.period_label === p && fields.some((f) => toNum(r[f]) != null));
     if (asOf && hasMu(asOf)) return;
     const withData = [...sortedPeriods].reverse().find(hasMu);
     if (withData) setAsOf(withData);
-  }, [paramId, param.kind, param.field, mode, rows, asOf, sortedPeriods]);
+  }, [paramId, param.kind, param.field, mode, isIdcCompare, rows, asOf, sortedPeriods]);
 
   const divisions = useMemo(() => {
     const map = new Map<string, string>();
@@ -328,14 +767,29 @@ export function AtcPage() {
       setSelectedCodes([]);
       return;
     }
-    if (level === 'region' || level === 'division') {
+    if (isMetricCompare) {
+      setSelectedCodes((prev) => {
+        const keep = prev.find((c) => officeOptions.some((o) => o.code === c));
+        return [keep || officeOptions[0].code];
+      });
+    } else if (isIdcCompare || level === 'region' || level === 'division') {
       setSelectedCodes(officeOptions.map((o) => o.code));
     } else {
       setSelectedCodes(officeOptions.slice(0, Math.min(4, officeOptions.length)).map((o) => o.code));
     }
     setUnitQuery('');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- officeKey captures option codes
-  }, [officeKey]);
+  }, [officeKey, isMetricCompare, isIdcCompare]);
+
+  // Clamp to one office when switching into metric compare
+  useEffect(() => {
+    if (!isMetricCompare || !officeOptions.length) return;
+    setSelectedCodes((prev) => {
+      if (prev.length === 1 && officeOptions.some((o) => o.code === prev[0])) return prev;
+      const keep = prev.find((c) => officeOptions.some((o) => o.code === c));
+      return [keep || officeOptions[0].code];
+    });
+  }, [isMetricCompare]);
 
   const filteredOffices = useMemo(() => {
     const q = unitQuery.trim().toLowerCase();
@@ -359,50 +813,250 @@ export function AtcPage() {
   }, [activeCodes]);
 
   const trendData = useMemo(() => {
-    return sortedPeriods.map((p) => {
+    if (!activeCodes.length) return [];
+
+    const valueAt = (period: string, code: string) => {
+      const row = rows.find(
+        (r) =>
+          String(r.office_code) === code &&
+          r.period_label === period &&
+          r.office_type === level
+      );
+      return row ? chartValue(row[param.field], param.kind) : null;
+    };
+
+    const periodHasPlot = (period: string) =>
+      activeCodes.some((code) => {
+        const v = valueAt(period, code);
+        return typeof v === 'number' && Number.isFinite(v);
+      });
+
+    // Only months that actually have a plotted value — no leading/gap blanks
+    const dataPeriods = sortedPeriods.filter(periodHasPlot);
+    if (!dataPeriods.length) return [];
+
+    const points = dataPeriods.map((p) => {
       const point: Record<string, string | number | null> = { period: p };
       for (const code of activeCodes) {
-        const row = rows.find(
-          (r) => String(r.office_code) === code && r.period_label === p && r.office_type === level
-        );
-        point[`u_${code}`] = row ? chartValue(row[param.field], param.kind) : null;
+        point[`u_${code}`] = valueAt(p, code);
+        if (showTarget && param.targetField) {
+          const row = rows.find(
+            (r) =>
+              String(r.office_code) === code &&
+              r.period_label === p &&
+              r.office_type === level
+          );
+          point[`t_${code}`] = row ? chartValue(row[param.targetField], param.kind) : null;
+        }
       }
       return point;
     });
-  }, [rows, sortedPeriods, activeCodes, param, level]);
+
+    // Exactly one blank month after the last data month
+    const next = nextPeriodLabel(String(points[points.length - 1].period || ''));
+    if (next && next !== points[points.length - 1].period) {
+      const blank: Record<string, string | number | null> = { period: next };
+      for (const code of activeCodes) {
+        blank[`u_${code}`] = null;
+        if (showTarget && param.targetField) blank[`t_${code}`] = null;
+      }
+      points.push(blank);
+    }
+    return points;
+  }, [rows, sortedPeriods, activeCodes, param, level, showTarget]);
 
   const compareData = useMemo(() => {
+    const period = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
+    if (isMetricCompare && metricGroup) {
+      const code = activeCodes[0];
+      if (!code) return [];
+      const row = rows.find(
+        (r) => String(r.office_code) === code && r.period_label === period && r.office_type === level
+      );
+      return metricGroup.map((m) => {
+        const value = row ? chartValue(row[m.field], m.kind) : null;
+        const target =
+          showTarget && m.targetField && row ? chartValue(row[m.targetField], m.kind) : null;
+        let delta: number | null = null;
+        if (value != null && target != null) delta = value - target;
+        return {
+          name: m.short,
+          code: m.id,
+          value,
+          target,
+          delta,
+          fill: m.color || '#2dd4bf',
+        };
+      });
+    }
+    return activeCodes.map((code) => {
+      const row = rows.find(
+        (r) => String(r.office_code) === code && r.period_label === period && r.office_type === level
+      );
+      const value = row ? chartValue(row[param.field], param.kind) : null;
+      const target =
+        showTarget && param.targetField && row
+          ? chartValue(row[param.targetField], param.kind)
+          : null;
+      return {
+        name: compareAxisLabel(nameByCode.get(code) || code, activeCodes.length, desktopChart),
+        code,
+        value,
+        target,
+        delta: value != null && target != null ? value - target : null,
+        fill: colorByCode.get(code) || '#2dd4bf',
+      };
+    });
+  }, [
+    rows,
+    asOf,
+    sortedPeriods,
+    activeCodes,
+    param,
+    level,
+    nameByCode,
+    showTarget,
+    isMetricCompare,
+    metricGroup,
+    colorByCode,
+    desktopChart,
+  ]);
+
+  const muGroupedData = useMemo(() => {
+    if (!isIdcCompare) return [];
     const period = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
     return activeCodes.map((code) => {
       const row = rows.find(
         (r) => String(r.office_code) === code && r.period_label === period && r.office_type === level
       );
       return {
-        name: shortLabel(nameByCode.get(code) || code),
+        name: compareAxisLabel(nameByCode.get(code) || code, activeCodes.length, desktopChart),
         code,
-        value: row ? chartValue(row[param.field], param.kind) : null,
-        target:
-          showTarget && param.targetField && row
-            ? chartValue(row[param.targetField], param.kind)
-            : null,
+        input: row ? chartValue(row.input_mu, 'mu') : null,
+        demand: row ? chartValue(row.demand_mu, 'mu') : null,
+        collection: row ? chartValue(row.collection_mu, 'mu') : null,
       };
     });
-  }, [rows, asOf, sortedPeriods, activeCodes, param, level, nameByCode, showTarget]);
+  }, [
+    isIdcCompare,
+    asOf,
+    sortedPeriods,
+    activeCodes,
+    rows,
+    level,
+    nameByCode,
+    desktopChart,
+  ]);
 
-  const targetRef = useMemo(() => {
-    if (!showTarget || !param.targetField || !activeCodes.length) return null;
-    const period = mode === 'compare' ? asOf || sortedPeriods[sortedPeriods.length - 1] : sortedPeriods[sortedPeriods.length - 1];
-    const vals = activeCodes
-      .map((code) => {
-        const row = rows.find(
-          (r) => String(r.office_code) === code && r.period_label === period && r.office_type === level
-        );
-        return row ? chartValue(row[param.targetField!], param.kind) : null;
-      })
-      .filter((v): v is number => v != null);
-    if (!vals.length) return null;
-    return vals.reduce((a, b) => a + b, 0) / vals.length;
-  }, [showTarget, param, asOf, sortedPeriods, activeCodes, rows, level, mode]);
+  const trendYAxis = useMemo(() => {
+    const vals: Array<number | null> = [];
+    for (const row of trendData) {
+      for (const code of activeCodes) {
+        vals.push(toNum(row[`u_${code}`]));
+        if (showTarget) vals.push(toNum(row[`t_${code}`]));
+      }
+    }
+    return niceYAxis(vals, param.kind);
+  }, [trendData, activeCodes, showTarget, param.kind]);
+
+  const compareYAxis = useMemo(() => {
+    const vals: Array<number | null> = [];
+    for (const d of compareData) {
+      vals.push(toNum(d.value));
+      vals.push(toNum(d.target));
+    }
+    return niceYAxis(vals, compareKind);
+  }, [compareData, compareKind]);
+
+  const muYAxis = useMemo(() => {
+    const vals: Array<number | null> = [];
+    for (const d of muGroupedData) {
+      vals.push(toNum(d.input), toNum(d.demand), toNum(d.collection));
+    }
+    return niceYAxis(vals, 'mu');
+  }, [muGroupedData]);
+
+  const compareBarDeltas = useMemo(
+    () => compareData.map((d) => d.delta),
+    [compareData]
+  );
+
+  const compareDeltaStrip = useMemo(() => {
+    if (mode !== 'compare') return [] as { label: string; text: string; tone: 'up' | 'down' | 'flat' }[];
+    const period = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
+
+    if (compareBy === 'losses' && activeCodes[0]) {
+      const row = rows.find(
+        (r) =>
+          String(r.office_code) === activeCodes[0] &&
+          r.period_label === period &&
+          r.office_type === level
+      );
+      if (!row) return [];
+      const atc = chartValue(row.atc_loss, 'pct');
+      const td = chartValue(row.dist_loss, 'pct');
+      const items: { label: string; text: string; tone: 'up' | 'down' | 'flat' }[] = [];
+      if (atc != null && td != null) {
+        const d = atc - td;
+        items.push({
+          label: 'AT&C − T&D',
+          text: formatDelta(d, 'pct'),
+          tone: d > 0 ? 'up' : d < 0 ? 'down' : 'flat',
+        });
+      }
+      if (showTarget) {
+        const atcT = chartValue(row.target_atc, 'pct');
+        const tdT = chartValue(row.target_dist, 'pct');
+        if (atc != null && atcT != null) {
+          const d = atc - atcT;
+          items.push({
+            label: 'AT&C vs tgt',
+            text: formatDelta(d, 'pct'),
+            tone: d > 0 ? 'up' : d < 0 ? 'down' : 'flat',
+          });
+        }
+        if (td != null && tdT != null) {
+          const d = td - tdT;
+          items.push({
+            label: 'T&D vs tgt',
+            text: formatDelta(d, 'pct'),
+            tone: d > 0 ? 'up' : d < 0 ? 'down' : 'flat',
+          });
+        }
+      }
+      return items;
+    }
+
+    if (compareBy === 'units' && showTarget && param.targetField) {
+      const withDelta = compareData.filter((d) => d.delta != null) as Array<{
+        name: string;
+        delta: number;
+      }>;
+      if (!withDelta.length) return [];
+      const worse = withDelta.filter((d) => d.delta > 0).length;
+      const better = withDelta.filter((d) => d.delta < 0).length;
+      return [
+        {
+          label: 'vs own tgt',
+          text: `${better} below · ${worse} above`,
+          tone: worse > better ? 'up' : better > worse ? 'down' : 'flat',
+        },
+      ];
+    }
+
+    return [];
+  }, [
+    mode,
+    compareBy,
+    activeCodes,
+    rows,
+    asOf,
+    sortedPeriods,
+    level,
+    showTarget,
+    param.targetField,
+    compareData,
+  ]);
 
   const tableRows = useMemo(() => {
     if (mode === 'compare') {
@@ -426,6 +1080,10 @@ export function AtcPage() {
   }, [mode, rows, asOf, sortedPeriods, level, activeCodes]);
 
   const toggleCode = (code: string) => {
+    if (isMetricCompare) {
+      setSelectedCodes([code]);
+      return;
+    }
     setSelectedCodes((prev) =>
       prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
     );
@@ -435,11 +1093,71 @@ export function AtcPage() {
   const selectNone = () => setSelectedCodes([]);
 
   const fmtTip = (v: number) =>
-    param.kind === 'pct' ? `${Number(v).toFixed(2)}%` : Number(v).toFixed(param.kind === 'mu' ? 3 : 0);
+    compareKind === 'pct' ? `${Number(v).toFixed(2)}%` : Number(v).toFixed(2);
 
-  const showLineEndLabels = mode === 'trend' && activeCodes.length > 0 && activeCodes.length <= LABEL_SERIES_CAP;
-  const showBarLabels = mode === 'compare' && activeCodes.length > 0 && activeCodes.length <= LABEL_BAR_CAP;
+  const showLineLabels = mode === 'trend' && activeCodes.length > 0;
+  const showBarLabels =
+    mode === 'compare' &&
+    !isIdcCompare &&
+    (isMetricCompare || (activeCodes.length > 0 && activeCodes.length <= LABEL_BAR_CAP));
+  const showBarDeltas =
+    mode === 'compare' &&
+    !isIdcCompare &&
+    (compareBy === 'losses' ||
+      (compareBy === 'units' && showTarget && Boolean(param.targetField)));
 
+  const compareTitle = isIdcCompare
+    ? 'Input · Demand · Collection'
+    : isMetricCompare
+      ? `AT&C vs T&D · ${nameByCode.get(activeCodes[0] || '') || 'Office'}`
+      : param.label;
+
+  const chartHeadline =
+    mode === 'trend' ? `${param.label} · Trend` : `Compare · ${compareTitle}`;
+
+  const chartSubline = [
+    format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk',
+    level === 'region' ? 'Region' : level === 'division' ? 'Division' : 'CCC',
+    mode === 'compare' && asOf ? asOf : null,
+    activeCodes.length
+      ? `${activeCodes.length} ${activeCodes.length === 1 ? 'unit' : 'units'}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  const wideCompareAxis =
+    mode === 'compare' &&
+    desktopChart &&
+    activeCodes.length > 0 &&
+    activeCodes.length <= 4;
+
+  const lossTooltipActive =
+    mode === 'compare' &&
+    showTarget &&
+    (compareBy === 'losses' ||
+      (compareBy === 'units' && (param.id === 'atc' || param.id === 'td')));
+
+  const showTargetControl =
+    !isIdcCompare &&
+    ((!isMetricCompare && Boolean(param.targetField)) ||
+      (isMetricCompare && compareBy === 'losses'));
+
+  const trendPeriods = useMemo(
+    () => trendData.map((row) => String(row.period || '')),
+    [trendData]
+  );
+
+  const milestonePeriods = useMemo(() => {
+    // Ignore trailing blank pad month when choosing "latest" milestones
+    const withData = trendData
+      .filter((row) => activeCodes.some((code) => toNum(row[`u_${code}`]) != null))
+      .map((row) => String(row.period || ''))
+      .filter(Boolean);
+    return buildMilestonePeriods(withData.length ? withData : trendPeriods.filter(Boolean));
+  }, [trendData, activeCodes, trendPeriods]);
+
+  /** Per-series last point with a value — always labeled even if before global latest */
   const lastIndexByCode = useMemo(() => {
     const map = new Map<string, number>();
     for (const code of activeCodes) {
@@ -453,7 +1171,7 @@ export function AtcPage() {
   }, [activeCodes, trendData]);
 
   const latestStrip = useMemo(() => {
-    if (mode !== 'trend' || !activeCodes.length || showLineEndLabels) return [];
+    if (mode !== 'trend' || !activeCodes.length || activeCodes.length <= LABEL_SERIES_CAP) return [];
     const lastPeriod = sortedPeriods[sortedPeriods.length - 1];
     return activeCodes.map((code) => {
       let value: number | null = null;
@@ -474,39 +1192,16 @@ export function AtcPage() {
         text: formatLabel(value, param.kind),
       };
     });
-  }, [mode, activeCodes, showLineEndLabels, sortedPeriods, trendData, nameByCode, colorByCode, param.kind]);
-
-  const breadcrumb = [
-    'Darjeeling Region',
-    level !== 'region' && (division ? divisions.find(([c]) => c === division)?.[1] || 'Division' : 'All divisions'),
-    level === 'ccc' && 'CCC',
-  ]
-    .filter(Boolean)
-    .join(' › ');
+  }, [mode, activeCodes, sortedPeriods, trendData, nameByCode, colorByCode, param.kind]);
 
   const hasChart =
     (mode === 'trend' && trendData.length > 0 && activeCodes.length > 0) ||
-    (mode === 'compare' && compareData.length > 0 && activeCodes.length > 0);
+    (mode === 'compare' &&
+      activeCodes.length > 0 &&
+      (isIdcCompare ? muGroupedData.length > 0 : compareData.length > 0));
 
   return (
     <div className="atc-page">
-      <header className="atc-hero">
-        <div className="atc-hero-title">
-          <h2>AT&amp;C / T&amp;D</h2>
-          <span className="muted">{breadcrumb}</span>
-        </div>
-        <div className="atc-hero-meta">
-          <span className="atc-pill">{sortedPeriods.length} mo</span>
-          <span className="atc-pill">{activeCodes.length} units</span>
-          <span
-            className="atc-pill"
-            title={format === 'IA' ? 'Format-IA · including bulk path' : 'Format-IB · excluding bulk path'}
-          >
-            {format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk'}
-          </span>
-        </div>
-      </header>
-
       {error && <p className="error">{error}</p>}
 
       <div className="atc-layout">
@@ -567,22 +1262,39 @@ export function AtcPage() {
             )}
           </section>
 
-          <section className="atc-block">
-            <div className="atc-label">Parameter</div>
-            <div className="atc-param-grid">
-              {PARAMS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={`atc-param ${paramId === p.id ? 'on' : ''}`}
-                  onClick={() => setParamId(p.id)}
-                  title={p.label}
-                >
-                  {p.short}
-                </button>
-              ))}
-            </div>
-          </section>
+          {mode === 'compare' && (
+            <section className="atc-block">
+              <div className="atc-label">Compare</div>
+              <Seg
+                value={compareBy}
+                onChange={setCompareBy}
+                options={[
+                  { value: 'units', label: 'Offices' },
+                  { value: 'losses', label: 'AT&C·T&D' },
+                  { value: 'energy', label: 'I·D·C' },
+                ]}
+              />
+            </section>
+          )}
+
+          {(mode === 'trend' || compareBy === 'units') && (
+            <section className="atc-block">
+              <div className="atc-label">Parameter</div>
+              <div className="atc-param-grid">
+                {PARAMS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`atc-param ${paramId === p.id ? 'on' : ''}`}
+                    onClick={() => setParamId(p.id)}
+                    title={p.label}
+                  >
+                    {p.short}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {mode === 'compare' && (
             <section className="atc-block">
@@ -602,7 +1314,7 @@ export function AtcPage() {
             </section>
           )}
 
-          {param.targetField && (
+          {showTargetControl && (
             <section className="atc-block">
               <button
                 type="button"
@@ -619,7 +1331,12 @@ export function AtcPage() {
           <section className="atc-block atc-units">
             <div className="atc-units-head">
               <div className="atc-label" style={{ margin: 0 }}>
-                Units <span className="atc-count">{selectedCodes.length}/{officeOptions.length}</span>
+                {isMetricCompare ? 'Office' : 'Units'}{' '}
+                <span className="atc-count">
+                  {isMetricCompare
+                    ? selectedCodes[0] || '—'
+                    : `${selectedCodes.length}/${officeOptions.length}`}
+                </span>
               </div>
               <button type="button" className="linkish" onClick={() => setUnitsOpen((v) => !v)}>
                 {unitsOpen ? 'Hide' : 'Show'}
@@ -627,7 +1344,7 @@ export function AtcPage() {
             </div>
 
             {unitsOpen && (
-              <>
+              <div className="atc-units-body">
                 <div className="atc-units-tools">
                   <input
                     type="search"
@@ -636,23 +1353,34 @@ export function AtcPage() {
                     onChange={(e) => setUnitQuery(e.target.value)}
                     aria-label="Search units"
                   />
-                  <div className="atc-units-links">
-                    <button type="button" className="linkish" onClick={selectAll}>
-                      All
-                    </button>
-                    <button type="button" className="linkish" onClick={selectNone}>
-                      None
-                    </button>
-                  </div>
+                  {!isMetricCompare && (
+                    <div className="atc-units-links">
+                      <button type="button" className="linkish" onClick={selectAll}>
+                        All
+                      </button>
+                      <button type="button" className="linkish" onClick={selectNone}>
+                        None
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div className="atc-unit-list" role="listbox" aria-multiselectable>
+                <div
+                  className="atc-unit-list"
+                  role="listbox"
+                  aria-multiselectable={!isMetricCompare}
+                >
                   {filteredOffices.map((o) => {
                     const on = selectedCodes.includes(o.code);
-                    const color = colorByCode.get(o.code);
+                    const color = isMetricCompare
+                      ? on
+                        ? '#2dd4bf'
+                        : undefined
+                      : colorByCode.get(o.code);
                     return (
                       <label key={o.code} className={`atc-unit ${on ? 'on' : ''}`}>
                         <input
-                          type="checkbox"
+                          type={isMetricCompare ? 'radio' : 'checkbox'}
+                          name={isMetricCompare ? 'atc-focus-office' : undefined}
                           checked={on}
                           onChange={() => toggleCode(o.code)}
                         />
@@ -671,7 +1399,7 @@ export function AtcPage() {
                     </p>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </section>
         </aside>
@@ -680,10 +1408,8 @@ export function AtcPage() {
           <div className="panel atc-result-panel">
             <div className="atc-result-head">
               <div className="atc-result-title">
-                <h3>
-                  {mode === 'trend' ? 'Trend' : 'Compare'} · {param.short}
-                  {mode === 'compare' && asOf ? ` · ${asOf}` : ''}
-                </h3>
+                <h2>{chartHeadline}</h2>
+                <p className="atc-result-sub">{chartSubline}</p>
               </div>
               <div className="atc-tabs" role="tablist" aria-label="Chart or table">
                 <button
@@ -709,41 +1435,54 @@ export function AtcPage() {
             </div>
 
             {panelTab === 'chart' && (
-              <div className="atc-tab-panel" role="tabpanel">
+              <div className="atc-tab-panel atc-tab-panel-chart" role="tabpanel">
                 {loading && <p className="muted">Loading…</p>}
 
                 {!loading && !activeCodes.length && (
-                  <p className="atc-empty">Select at least one unit on the left.</p>
+                  <p className="atc-empty">
+                    {isMetricCompare
+                      ? 'Select one office on the left.'
+                      : 'Select at least one unit on the left.'}
+                  </p>
                 )}
 
                 {!loading && hasChart && mode === 'trend' && (
                   <div className="atc-chart-wrap">
-                    <div className="atc-chart" style={{ height: CHART_HEIGHT }}>
-                      <ResponsiveContainer width="100%" height="100%">
+                    <div className="atc-chart">
+                      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
                         <LineChart
                           data={trendData}
                           margin={{ top: 28, right: 16, left: 4, bottom: 8 }}
                         >
                           <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
-                          <XAxis dataKey="period" tick={{ fill: '#8faba8', fontSize: 12 }} />
-                          <YAxis
+                          <XAxis
+                            dataKey="period"
+                            type="category"
+                            allowDuplicatedCategory={false}
+                            padding={{ left: 0, right: 8 }}
+                            interval={0}
                             tick={{ fill: '#8faba8', fontSize: 12 }}
-                            unit={param.kind === 'pct' ? '%' : ''}
-                            width={48}
+                            minTickGap={0}
+                          />
+                          <YAxis
+                            tick={(props) => (
+                              <YAxisTick2
+                                {...props}
+                                unit={param.kind === 'pct' ? '%' : ''}
+                              />
+                            )}
+                            ticks={trendYAxis?.ticks}
+                            tickFormatter={yTick2}
+                            width={56}
+                            domain={trendYAxis?.domain || ['auto', 'auto']}
+                            allowDataOverflow={false}
+                            allowDecimals
                           />
                           <Tooltip
                             {...CHART_TOOLTIP}
                             formatter={(v: number, name: string) => [fmtTip(v), name]}
                           />
                           <Legend wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }} />
-                          {showTarget && targetRef != null && (
-                            <ReferenceLine
-                              y={targetRef}
-                              stroke="#f5b942"
-                              strokeDasharray="5 5"
-                              strokeWidth={1.5}
-                            />
-                          )}
                           {activeCodes.map((code, si) => (
                             <Line
                               key={code}
@@ -756,26 +1495,45 @@ export function AtcPage() {
                               activeDot={{ r: 6, strokeWidth: 2, stroke: '#0f2426' }}
                               connectNulls
                               label={
-                                showLineEndLabels
+                                showLineLabels
                                   ? (props: LabelProps) => (
-                                      <EndPointLabel
+                                      <MilestoneLabel
                                         {...props}
+                                        periods={trendPeriods}
+                                        milestones={milestonePeriods}
                                         lastIndex={lastIndexByCode.get(code) ?? -1}
                                         color={colorByCode.get(code) || '#2dd4bf'}
                                         kind={param.kind}
-                                        stagger={si % 3}
+                                        stagger={si % 4}
                                       />
                                     )
                                   : false
                               }
                             />
                           ))}
+                          {showTarget &&
+                            param.targetField &&
+                            activeCodes.map((code) => (
+                              <Line
+                                key={`t_${code}`}
+                                type="monotone"
+                                dataKey={`t_${code}`}
+                                name={`${shortLabel(nameByCode.get(code) || code)} tgt`}
+                                stroke={colorByCode.get(code) || TARGET_COLOR}
+                                strokeWidth={1.8}
+                                strokeDasharray="7 4"
+                                strokeOpacity={0.95}
+                                dot={false}
+                                activeDot={{ r: 4, fill: TARGET_COLOR, stroke: '#0f2426' }}
+                                connectNulls
+                                legendType={activeCodes.length <= 4 ? 'line' : 'none'}
+                              />
+                            ))}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
-                    {latestStrip.length > 0 ? (
+                    {latestStrip.length > 0 && (
                       <div className="atc-latest-strip" aria-label="Latest values">
-                        <span className="atc-latest-caption">Latest</span>
                         {latestStrip.map((item) => (
                           <span key={item.code} className="atc-latest-chip" style={{ borderColor: item.color }}>
                             <i style={{ background: item.color }} />
@@ -784,72 +1542,260 @@ export function AtcPage() {
                           </span>
                         ))}
                       </div>
-                    ) : (
-                      <div className="atc-latest-strip atc-latest-strip-spacer" aria-hidden />
                     )}
                   </div>
                 )}
 
                 {!loading && hasChart && mode === 'compare' && (
                   <div className="atc-chart-wrap">
-                    <div className="atc-chart" style={{ height: CHART_HEIGHT }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart
-                          data={compareData}
-                          margin={{ top: 28, right: 16, left: 4, bottom: 48 }}
-                        >
-                          <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
-                          <XAxis
-                            dataKey="name"
-                            tick={{ fill: '#8faba8', fontSize: 11 }}
-                            interval={0}
-                            angle={-30}
-                            textAnchor="end"
-                            height={72}
-                          />
-                          <YAxis
-                            tick={{ fill: '#8faba8', fontSize: 12 }}
-                            unit={param.kind === 'pct' ? '%' : ''}
-                            width={48}
-                          />
-                          <Tooltip
-                            {...CHART_TOOLTIP}
-                            formatter={(v: number, name: string) => [fmtTip(v), name]}
-                          />
-                          <Legend wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }} />
-                          <Bar dataKey="value" name={param.label} radius={[8, 8, 0, 0]}>
-                            {compareData.map((d) => (
-                              <Cell key={d.code} fill={colorByCode.get(d.code) || '#2dd4bf'} />
-                            ))}
-                            <LabelList
-                              dataKey="value"
-                              content={(props) => (
-                                <BarValueLabel {...props} kind={param.kind} show={showBarLabels} />
+                    <div className="atc-chart">
+                      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+                        {isIdcCompare ? (
+                          <BarChart
+                            data={muGroupedData}
+                            margin={{
+                              top: 28,
+                              right: 12,
+                              left: 4,
+                              bottom: wideCompareAxis ? 28 : 48,
+                            }}
+                            barCategoryGap={wideCompareAxis ? '18%' : '12%'}
+                            barGap={4}
+                          >
+                            <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
+                            <XAxis
+                              dataKey="name"
+                              tick={{
+                                fill: '#c5ddd9',
+                                fontSize: wideCompareAxis ? 13 : 11,
+                                fontWeight: wideCompareAxis ? 650 : 500,
+                              }}
+                              interval={0}
+                              angle={wideCompareAxis ? 0 : -30}
+                              textAnchor={wideCompareAxis ? 'middle' : 'end'}
+                              height={wideCompareAxis ? 40 : 72}
+                            />
+                            <YAxis
+                              tick={(props) => <YAxisTick2 {...props} />}
+                              ticks={muYAxis?.ticks}
+                              tickFormatter={yTick2}
+                              width={56}
+                              domain={muYAxis?.domain || ['auto', 'auto']}
+                              allowDataOverflow={false}
+                              allowDecimals
+                            />
+                            <Tooltip
+                              {...CHART_TOOLTIP}
+                              cursor={{ fill: 'rgba(180, 220, 210, 0.06)' }}
+                              formatter={(v, name) => {
+                                const num = typeof v === 'number' ? v : Number(v);
+                                return [
+                                  Number.isFinite(num) ? formatLabel(num, 'mu') : '—',
+                                  String(name),
+                                ];
+                              }}
+                            />
+                            <Legend
+                              wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }}
+                            />
+                            <Bar
+                              dataKey="input"
+                              name="Input"
+                              fill={MU_BAR_COLORS.input}
+                              radius={[7, 7, 0, 0]}
+                              activeBar={{ fill: MU_BAR_COLORS.input, stroke: '#e8f3f1', strokeWidth: 1 }}
+                            >
+                              <LabelList
+                                dataKey="input"
+                                content={(props) => (
+                                  <MuGroupBarLabel
+                                    {...props}
+                                    show
+                                    inside={desktopChart && activeCodes.length <= 4}
+                                  />
+                                )}
+                              />
+                            </Bar>
+                            <Bar
+                              dataKey="demand"
+                              name="Demand"
+                              fill={MU_BAR_COLORS.demand}
+                              radius={[7, 7, 0, 0]}
+                              activeBar={{ fill: MU_BAR_COLORS.demand, stroke: '#e8f3f1', strokeWidth: 1 }}
+                            >
+                              <LabelList
+                                dataKey="demand"
+                                content={(props) => (
+                                  <MuGroupBarLabel
+                                    {...props}
+                                    show
+                                    inside={desktopChart && activeCodes.length <= 4}
+                                  />
+                                )}
+                              />
+                            </Bar>
+                            <Bar
+                              dataKey="collection"
+                              name="Collection"
+                              fill={MU_BAR_COLORS.collection}
+                              radius={[7, 7, 0, 0]}
+                              activeBar={{ fill: MU_BAR_COLORS.collection, stroke: '#e8f3f1', strokeWidth: 1 }}
+                            >
+                              <LabelList
+                                dataKey="collection"
+                                content={(props) => (
+                                  <MuGroupBarLabel
+                                    {...props}
+                                    show
+                                    inside={desktopChart && activeCodes.length <= 4}
+                                  />
+                                )}
+                              />
+                            </Bar>
+                          </BarChart>
+                        ) : (
+                          <ComposedChart
+                            data={compareData}
+                            margin={{
+                              top: showTarget ? 36 : 28,
+                              right: 16,
+                              left: 4,
+                              bottom: isMetricCompare ? 16 : wideCompareAxis ? 28 : 48,
+                            }}
+                          >
+                            <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
+                            <XAxis
+                              dataKey="name"
+                              tick={{
+                                fill: '#c5ddd9',
+                                fontSize: wideCompareAxis ? 13 : isMetricCompare ? 12 : 11,
+                                fontWeight: wideCompareAxis ? 650 : 500,
+                              }}
+                              interval={0}
+                              angle={wideCompareAxis || isMetricCompare ? 0 : -30}
+                              textAnchor={wideCompareAxis || isMetricCompare ? 'middle' : 'end'}
+                              height={wideCompareAxis ? 40 : isMetricCompare ? 36 : 72}
+                            />
+                            <YAxis
+                              tick={(props) => (
+                                <YAxisTick2
+                                  {...props}
+                                  unit={compareKind === 'pct' ? '%' : ''}
+                                />
                               )}
+                              ticks={compareYAxis?.ticks}
+                              tickFormatter={yTick2}
+                              width={56}
+                              domain={compareYAxis?.domain || ['auto', 'auto']}
+                              allowDataOverflow={false}
+                              allowDecimals
                             />
-                          </Bar>
-                          {showTarget && param.targetField && (
-                            <Line
-                              type="monotone"
-                              dataKey="target"
-                              name="FY target"
-                              stroke="#f5b942"
-                              strokeWidth={2}
-                              dot={{ r: 3, fill: '#f5b942' }}
+                            {lossTooltipActive ? (
+                              <Tooltip
+                                {...CHART_TOOLTIP}
+                                cursor={{ fill: 'rgba(180, 220, 210, 0.06)' }}
+                                content={<LossTargetTooltip kind={compareKind} />}
+                              />
+                            ) : (
+                              <Tooltip
+                                {...CHART_TOOLTIP}
+                                cursor={{ fill: 'rgba(180, 220, 210, 0.06)' }}
+                                formatter={(v, name, item) => {
+                                  const num = typeof v === 'number' ? v : Number(v);
+                                  const delta = (
+                                    item?.payload as { delta?: number | null } | undefined
+                                  )?.delta;
+                                  const base = Number.isFinite(num) ? fmtTip(num) : String(v ?? '');
+                                  if (String(name).includes('FY target') || delta == null) {
+                                    return [base, String(name)];
+                                  }
+                                  return [
+                                    base + ' (' + formatDelta(delta, compareKind) + ')',
+                                    String(name),
+                                  ];
+                                }}
+                              />
+                            )}
+                            <Legend
+                              wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }}
                             />
-                          )}
-                        </ComposedChart>
+                            <Bar
+                              dataKey="value"
+                              name={isMetricCompare ? 'Loss %' : param.label}
+                              radius={[8, 8, 0, 0]}
+                            >
+                              {compareData.map((d) => (
+                                <Cell key={d.code} fill={d.fill || '#2dd4bf'} />
+                              ))}
+                              <LabelList
+                                dataKey="value"
+                                content={(props) => (
+                                  <BarValueLabel
+                                    {...props}
+                                    kind={compareKind}
+                                    show={showBarLabels}
+                                    inside={desktopChart}
+                                    deltas={compareBarDeltas}
+                                    showDelta={showBarDeltas}
+                                  />
+                                )}
+                              />
+                            </Bar>
+                            {showTarget &&
+                              (isMetricCompare || Boolean(param.targetField)) && (
+                                <Line
+                                  type="linear"
+                                  dataKey="target"
+                                  name="FY target"
+                                  stroke={TARGET_COLOR}
+                                  strokeWidth={2}
+                                  strokeDasharray="6 4"
+                                  dot={{
+                                    r: 5,
+                                    fill: TARGET_COLOR,
+                                    stroke: '#0f2426',
+                                    strokeWidth: 1.5,
+                                  }}
+                                  activeDot={{ r: 6 }}
+                                  connectNulls={false}
+                                >
+                                  <LabelList
+                                    dataKey="target"
+                                    content={(props) => (
+                                      <TargetPointLabel
+                                        {...props}
+                                        kind={compareKind}
+                                        show={showTarget}
+                                      />
+                                    )}
+                                  />
+                                </Line>
+                              )}
+                          </ComposedChart>
+                        )}
                       </ResponsiveContainer>
                     </div>
-                    <div className="atc-latest-strip atc-latest-strip-spacer" aria-hidden />
+                    {!isIdcCompare && compareDeltaStrip.length > 0 && (
+                      <div className="atc-delta-strip" aria-label="Comparison deltas">
+                        {compareDeltaStrip.map((item) => (
+                          <span
+                            key={item.label}
+                            className={'atc-delta-chip atc-delta-' + item.tone}
+                          >
+                            <span className="atc-latest-name">{item.label}</span>
+                            <strong>{item.text}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             )}
 
             {panelTab === 'table' && (
-              <div className="atc-tab-panel atc-table-panel" role="tabpanel">
-                <div className="table-wrap">
+              <div className="atc-tab-panel atc-tab-panel-table" role="tabpanel">
+                <div className="table-wrap atc-table-wrap">
                   <table>
                     <thead>
                       <tr>
@@ -857,7 +1803,7 @@ export function AtcPage() {
                         <th>Office</th>
                         <th>AT&amp;C</th>
                         <th>Target</th>
-                        <th>Dist</th>
+                        <th>T&amp;D</th>
                         <th>Coll.eff</th>
                         <th>Input</th>
                         <th>Demand</th>
