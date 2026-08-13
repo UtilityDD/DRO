@@ -459,7 +459,23 @@ app.patch('/api/atc', requireAuth, requirePerm('atc', 'edit'), async (req, res) 
     if (idx < 0) {
       return res.status(404).json({ error: 'ATC row not found for that office / month / format' });
     }
-    const next = { ...rows[idx], ...patch };
+    const existing = rows[idx];
+    const inScope = scopeFilter(req.user, {
+      ...existing,
+      ccc_code: existing.ccc_code || (existing.office_type === 'ccc' ? existing.office_code : ''),
+      division_code:
+        existing.division_code ||
+        (existing.office_type === 'division'
+          ? existing.office_code
+          : existing.office_type === 'ccc'
+            ? String(existing.office_code || '').slice(0, 4)
+            : ''),
+      region_code: existing.region_code || '341',
+    });
+    if (!inScope) {
+      return res.status(403).json({ error: 'Outside your office scope' });
+    }
+    const next = { ...existing, ...patch };
     rows[idx] = next;
 
     if (useSupabase()) {

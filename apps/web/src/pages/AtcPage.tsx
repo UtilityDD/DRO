@@ -709,14 +709,28 @@ export function AtcPage() {
     } else if (user.role === 'ccc') {
       setMode('trend');
       setLevel('ccc');
+      if (user.division_code) setDivision(String(user.division_code));
     } else if (user.role === 'division') {
       setMode('compare');
       setLevel('ccc');
+      if (user.division_code) setDivision(String(user.division_code));
     } else {
       setMode('compare');
       setLevel('division');
     }
   }, [user]);
+
+  // Keep division / CCC users locked to their office scope in the explorer
+  const scopedDivision = user?.role === 'division' || user?.role === 'ccc' ? String(user.division_code || '') : '';
+  const isDivisionScoped = Boolean(scopedDivision);
+  const canPickRegion = user?.role === 'admin' || user?.role === 'region';
+  const canPickAllDivisions = user?.role === 'admin' || user?.role === 'region';
+
+  useEffect(() => {
+    if (!isDivisionScoped) return;
+    if (division !== scopedDivision) setDivision(scopedDivision);
+    if (level === 'region') setLevel('ccc');
+  }, [isDivisionScoped, scopedDivision, division, level]);
 
   const param = PARAMS.find((p) => p.id === paramId) || PARAMS[0];
   const isMetricCompare = mode === 'compare' && compareBy === 'losses';
@@ -891,8 +905,12 @@ export function AtcPage() {
         map.set(String(r.division_code), String(r.division_name || r.division_code));
       }
     }
-    return [...map.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
-  }, [rows]);
+    let list = [...map.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    if (isDivisionScoped) {
+      list = list.filter(([code]) => code === scopedDivision);
+    }
+    return list;
+  }, [rows, isDivisionScoped, scopedDivision]);
 
   const officeOptions = useMemo(() => {
     let list = rows.filter((r) => r.office_type === level);
@@ -906,16 +924,20 @@ export function AtcPage() {
     } else if (level === 'zone') {
       list = list.filter((r) => String(r.office_code) === '34');
     }
-    if (division) {
+    const divFilter = isDivisionScoped ? scopedDivision : division;
+    if (divFilter) {
       if (level === 'ccc') {
         list = list.filter(
           (r) =>
-            String(r.division_code || '') === division ||
-            String(r.office_code || '').startsWith(division)
+            String(r.division_code || '') === divFilter ||
+            String(r.office_code || '').startsWith(divFilter)
         );
       } else if (level === 'division') {
-        list = list.filter((r) => String(r.office_code) === division);
+        list = list.filter((r) => String(r.office_code) === divFilter);
       }
+    }
+    if (user?.role === 'ccc' && user.ccc_code && level === 'ccc') {
+      list = list.filter((r) => String(r.office_code) === String(user.ccc_code));
     }
     if (level === 'region') {
       list = list.filter((r) => String(r.office_code) === '341' || /region/i.test(String(r.office_name)));
@@ -925,7 +947,7 @@ export function AtcPage() {
     return [...map.entries()]
       .map(([code, name]) => ({ code, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [rows, level, division]);
+  }, [rows, level, division, isDivisionScoped, scopedDivision, user]);
 
   // Reset unit selection when hierarchy / basis changes (not on every officeOptions identity change)
   const officeKey = `${format}|${level}|${division}|${officeOptions.map((o) => o.code).join(',')}`;
@@ -1481,7 +1503,7 @@ export function AtcPage() {
                 if (v === 'region') setDivision('');
               }}
               options={[
-                { value: 'region', label: 'Region' },
+                { value: 'region', label: 'Region', disabled: !canPickRegion },
                 { value: 'division', label: 'Div' },
                 { value: 'ccc', label: 'CCC', disabled: format === 'IB' },
               ]}
@@ -1489,11 +1511,15 @@ export function AtcPage() {
             {level !== 'region' && (
               <label className="atc-field">
                 <select
-                  value={division}
-                  onChange={(e) => setDivision(e.target.value)}
+                  value={isDivisionScoped ? scopedDivision : division}
+                  onChange={(e) => {
+                    if (isDivisionScoped) return;
+                    setDivision(e.target.value);
+                  }}
+                  disabled={isDivisionScoped || !canPickAllDivisions}
                   aria-label="Division filter"
                 >
-                  <option value="">All divisions</option>
+                  {canPickAllDivisions && <option value="">All divisions</option>}
                   {divisions.map(([code, name]) => (
                     <option key={code} value={code}>
                       {name}

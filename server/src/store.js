@@ -220,17 +220,43 @@ function scopeFilter(user, row) {
   if (!user) return false;
   const role = String(user.role || '').toLowerCase();
   if (role === 'admin' || role === 'region') return true;
+
+  const userDiv = String(user.division_code || '').trim();
+  const userCcc = String(user.ccc_code || '').trim();
+  const rowDiv = String(row.division_code || '').trim();
+  const rowCcc = String(row.ccc_code || '').trim();
+  const office = String(row.office_code || '').trim();
+  const officeType = String(row.office_type || '').toLowerCase();
+
+  // Infer division from office code when snapshot omitted division_code
+  const inferredDiv =
+    rowDiv ||
+    (officeType === 'division' ? office : officeType === 'ccc' && office.length >= 4 ? office.slice(0, 4) : '');
+
   if (role === 'division') {
-    return String(row.division_code || '') === String(user.division_code || '');
-  }
-  if (role === 'ccc') {
-    if (!row.ccc_code && row.division_code) {
-      return String(row.division_code || '') === String(user.division_code || '');
+    if (!userDiv) return false;
+    // Division users see their division rollup + their CCCs only — not region/zone/other divisions
+    if (officeType === 'region' || officeType === 'zone' || officeType === 'utility') return false;
+    if (officeType === 'division') return office === userDiv || inferredDiv === userDiv;
+    if (officeType === 'ccc') {
+      return inferredDiv === userDiv || office.startsWith(userDiv);
     }
-    return String(row.ccc_code || '') === String(user.ccc_code || '');
+    return inferredDiv === userDiv;
   }
-  if (user.ccc_code) return String(row.ccc_code || '') === String(user.ccc_code);
-  if (user.division_code) return String(row.division_code || '') === String(user.division_code);
+
+  if (role === 'ccc') {
+    if (!userCcc && !userDiv) return false;
+    if (userCcc) {
+      // Own CCC row, or parent division rollup for context
+      if (officeType === 'ccc') return office === userCcc || rowCcc === userCcc;
+      if (officeType === 'division' && userDiv) return office === userDiv || inferredDiv === userDiv;
+      return false;
+    }
+    return inferredDiv === userDiv;
+  }
+
+  if (userCcc) return office === userCcc || rowCcc === userCcc;
+  if (userDiv) return inferredDiv === userDiv || office.startsWith(userDiv);
   return String(row.region_code || '341') === String(user.region_code || '341');
 }
 
