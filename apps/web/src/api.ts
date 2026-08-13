@@ -101,9 +101,30 @@ export const api = {
       periods?: string[];
       formats?: string[];
       can_upload?: boolean;
+      can_edit?: boolean;
       source?: string;
       host?: string;
     }>(`/api/atc${qs ? `?${qs}` : ''}`),
+  atcParse: (body: { base64: string; period_label?: string; filename?: string }) =>
+    request<{
+      ok: boolean;
+      period_label?: string;
+      target_fy?: string;
+      rows: Record<string, unknown>[];
+      filtered_out?: number;
+      counts: { IA: number; IB: number };
+      error?: string;
+    }>('/api/atc/parse', { method: 'POST', body: JSON.stringify(body) }),
+  patchAtc: (body: {
+    period_label: string;
+    source_format: 'IA' | 'IB';
+    office_code: string;
+    patch: Record<string, number | null>;
+  }) =>
+    request<{ ok: boolean; row: Record<string, unknown> }>('/api/atc', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   batches: () => request<{ rows: Record<string, unknown>[] }>('/api/batches'),
   activity: () => request<{ rows: Record<string, unknown>[] }>('/api/activity'),
   users: () => request<{ users: User[]; modules: AuthModule[] }>('/api/users'),
@@ -173,33 +194,37 @@ const MODULE_ROUTE: Record<string, string> = {
   '/upload': '__upload__',
 };
 
+function isAdminRole(user: User | null): boolean {
+  return String(user?.role || '').toLowerCase() === 'admin';
+}
+
 export function canView(user: User | null, moduleId: string): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user)) return true;
   const p = user.permissions?.[moduleId];
   return Boolean(p?.view || p?.upload || p?.edit);
 }
 
 export function canUploadModule(user: User | null, moduleId: string): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user)) return true;
   return Boolean(user.permissions?.[moduleId]?.upload);
 }
 
 export function canEdit(user: User | null, moduleId: string): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user)) return true;
   return Boolean(user.permissions?.[moduleId]?.edit);
 }
 
 export function canAccessPath(user: User | null, path: string): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user)) return true;
   if (path === '/' || path === '/hierarchy' || path === '/login') return true;
   if (path === '/upload') {
     return Object.values(user.permissions || {}).some((p) => p.upload);
   }
-  if (path === '/admin') return user.role === 'admin';
+  if (path === '/admin') return isAdminRole(user);
   const mod = MODULE_ROUTE[path];
   if (!mod) return true;
   return canView(user, mod);
@@ -208,14 +233,14 @@ export function canAccessPath(user: User | null, path: string): boolean {
 /** @deprecated use canView / canUploadModule */
 export function hasMod(user: User | null, mod: keyof User): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user)) return true;
   return Boolean(user[mod]);
 }
 
 /** @deprecated */
 export function canUpload(user: User | null, key: keyof User): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdminRole(user)) return true;
   return Boolean(user[key]);
 }
 

@@ -99,10 +99,94 @@ function isNumericOfficeCode(code: string) {
   return /^\d{2,}$/.test(String(code || '').trim());
 }
 
-/** DRO app scope: Siliguri Zone (34) + Darjeeling Region (341…). */
+/** Real office codes are 2/3/4/7 digits — not consumer counts. */
+function isLikelyOfficeCode(code: string) {
+  const c = String(code || '')
+    .trim()
+    .replace(/\.0$/, '');
+  if (!/^\d+$/.test(c)) return false;
+  const len = c.length;
+  return len === 2 || len === 3 || len === 4 || len === 7;
+}
+
+/** DRO app scope: zone 34, region 341, divisions 3412–3415, their CCCs. */
 export function isDroScopedOffice(code: unknown) {
   const c = String(code || '').trim();
-  return c === '34' || c.startsWith('341');
+  if (c === '34' || c === '341') return true;
+  if (/^341[2-5]$/.test(c)) return true;
+  if (/^341[2-5]\d{3}$/.test(c)) return true;
+  return false;
+}
+
+function normalizeOfficeKey(name: unknown) {
+  return cellStr(name)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const DRO_DIV_CODES: Record<string, string> = {
+  'SILIGURI TOWN': '3412',
+  'SILIGURI SUBARBAN': '3415',
+  'SILIGURI SUB URBAN': '3415',
+  'SILIGURI SUBURBAN': '3415',
+  KURSEONG: '3413',
+  DARJEELING: '3414',
+};
+
+const DRO_CCC_CODES: Record<string, string> = {
+  HAKIMPARA: '3412502',
+  'POWER HOUSE': '3412503',
+  'PRADHAN NAGAR': '3412504',
+  SUBHASPALLI: '3412501',
+  SUBHASPALLY: '3412501',
+  'NJP GATE BAZAR': '3412401',
+  MILANPALLI: '3412400',
+  MILANPALLY: '3412400',
+  'SILIGURI TOWN': '3412505',
+  BAGDOGRA: '3415200',
+  MATIGARA: '3415400',
+  SHIBMANDIR: '3415600',
+  SHIVMANDIR: '3415600',
+  NAXALBARI: '3415101',
+  PHANSIDEWA: '3415102',
+  KHARIBARI: '3415103',
+  BIDHANNAGAR: '3415201',
+  SONADA: '3413101',
+  MIRIK: '3413201',
+  KURSEONG: '3413202',
+  BIJONBARI: '3414201',
+  BIJANBARI: '3414201',
+  LODHAMA: '3414204',
+  TAKDA: '3414102',
+  TAKDAH: '3414102',
+  SUKHIAPOKRI: '3414101',
+  SUKHIAPOKHRI: '3414101',
+  DARJEELING: '3414300',
+};
+
+const DRO_ROLLUP_CODES: Record<string, string> = {
+  'SILIGURI ZONE': '34',
+  'DARJEELING REGION': '341',
+};
+
+function codeFromMap(map: Record<string, string>, ...names: unknown[]) {
+  for (const name of names) {
+    const key = normalizeOfficeKey(name);
+    if (!key || key === 'TOTAL') continue;
+    if (map[key]) return map[key];
+  }
+  return '';
+}
+
+function findCccCodeColumn(header: unknown[]) {
+  const cells = header || [];
+  for (let i = 0; i < cells.length; i++) {
+    const t = cellStr(cells[i]).toUpperCase();
+    if (/CCC\s*CODE/.test(t) || t === 'CODE' || t === 'OFFICE CODE') return i;
+  }
+  return -1;
 }
 
 function isHeaderLabelName(name: string) {
@@ -144,13 +228,44 @@ function findTargetFyInSheet(rows: unknown[][]) {
 function inferOfficeType(code: string, name: string, cccLabel: string) {
   const c = String(code || '');
   const n = cellStr(name || cccLabel).toUpperCase();
-  if (n.includes('ALL ZONE') || n === 'WBSEDCL') return 'utility';
+  if (/GRAND\s*TOTAL/i.test(n) || n.includes('ALL ZONE') || n === 'WBSEDCL') return 'utility';
   if (n.includes('ZONE') || c === '34') return 'zone';
   if (n.includes('REGION') || c === '341') return 'region';
   if (c.length === 4) return 'division';
   if (c.length >= 7) return 'ccc';
   if (/TOTAL/i.test(cccLabel || '')) return 'division';
   return 'ccc';
+}
+
+/** Older Format-IA months leave CCC Code blank on TOTAL / REGION / ZONE rows. */
+function inferMissingOfficeCode(
+  code: string,
+  opts: {
+    isTotal: boolean;
+    rollupLabel: string;
+    currentDivCode: string;
+    cccName: string;
+    divName: string;
+  }
+) {
+  const raw = String(code || '')
+    .trim()
+    .replace(/\.0$/, '');
+  if (isLikelyOfficeCode(raw)) return raw;
+  if (opts.isTotal) {
+    const named = codeFromMap(DRO_DIV_CODES, opts.divName, opts.rollupLabel);
+    if (named) return named;
+    if (opts.currentDivCode && codeFromMap(DRO_DIV_CODES, opts.divName)) return opts.currentDivCode;
+    return '';
+  }
+  const rollup = codeFromMap(DRO_ROLLUP_CODES, opts.rollupLabel, opts.divName, opts.cccName);
+  if (rollup) return rollup;
+  // CCC rows: name map only — never inherit division code (avoids foreign CCCs → 3414)
+  const fromCcc = codeFromMap(DRO_CCC_CODES, opts.cccName);
+  if (fromCcc) return fromCcc;
+  const label = cellStr(opts.rollupLabel).toUpperCase();
+  if (/GRAND\s*TOTAL/i.test(label)) return '1';
+  return '';
 }
 
 function cleanName(name: unknown) {
@@ -210,6 +325,7 @@ function mapFormatIAColumns(header: unknown[]) {
   let demand = -1;
   let collection = -1;
   let collEff = -1;
+  const codeCol = findCccCodeColumn(header);
   const atcUpto: { i: number; period: string }[] = [];
   const distUpto: { i: number; period: string }[] = [];
 
@@ -250,6 +366,7 @@ function mapFormatIAColumns(header: unknown[]) {
   };
 
   return {
+    codeCol,
     consumers,
     targetAtc,
     targetDist,
@@ -304,30 +421,48 @@ function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_f
   for (let i = headerIdx + 1; i < aoa.length; i++) {
     const r = (aoa[i] || []) as unknown[];
     if (looksLikeHeaderIA(r)) continue;
+    const slCell = cellStr(r[0]);
     const divCell = cellStr(r[1]);
     const cccCell = cellStr(r[2]);
-    const code = r[3] != null && r[3] !== '' ? String(r[3]).replace(/\.0$/, '') : '';
-    if (!isNumericOfficeCode(code)) continue;
+    const rawFromCol =
+      col.codeCol >= 0 && r[col.codeCol] != null && r[col.codeCol] !== ''
+        ? String(r[col.codeCol]).replace(/\.0$/, '')
+        : '';
+    if (!rawFromCol && !cccCell && !divCell && !slCell) continue;
     if (cccCell && isHeaderLabelName(cccCell) && !/^TOTAL$/i.test(cccCell)) continue;
 
+    const isTotal = /^TOTAL$/i.test(cccCell);
+    // Update division context even when this row is later skipped (no code)
     if (divCell && !isHeaderLabelName(divCell)) {
       currentDiv = cleanName(divCell);
-      if (code.length === 4) currentDivCode = code;
+      currentDivCode = codeFromMap(DRO_DIV_CODES, divCell) || '';
     }
+    const rollupLabel = slCell || divCell || cccCell;
+    const code = inferMissingOfficeCode(rawFromCol, {
+      isTotal,
+      rollupLabel,
+      currentDivCode,
+      cccName: cccCell,
+      divName: divCell || currentDiv,
+    });
+    if (!isLikelyOfficeCode(code) && code !== '1') continue;
 
-    const isTotal = /^TOTAL$/i.test(cccCell);
-    const office_type = isTotal ? 'division' : inferOfficeType(code, divCell || cccCell, cccCell);
+    const office_type = isTotal
+      ? 'division'
+      : inferOfficeType(code, rollupLabel || divCell || cccCell, cccCell);
+    if (office_type === 'utility') continue;
+
     let office_name = isTotal
       ? currentDiv || cleanName(divCell) || code
-      : cleanName(cccCell) || cleanName(divCell) || code;
+      : cleanName(cccCell) || cleanName(divCell) || cleanName(slCell) || code;
     if (office_type === 'region') office_name = 'Darjeeling Region';
-    if (office_type === 'zone') office_name = cleanName(divCell || cccCell) || 'Siliguri Zone';
-    if (!cleanName(cccCell) && !cleanName(divCell) && office_type === 'region') {
-      office_name = 'Darjeeling Region';
+    if (office_type === 'zone') {
+      office_name = cleanName(divCell || slCell || cccCell) || 'Siliguri Zone';
     }
 
     const division_code =
       office_type === 'ccc' ? code.slice(0, 4) : office_type === 'division' ? code : '';
+    if (office_type === 'ccc' && code.length >= 4) currentDivCode = code.slice(0, 4);
     if (office_type === 'division') currentDivCode = code;
 
     const base: AtcRow = {

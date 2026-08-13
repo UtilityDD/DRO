@@ -409,6 +409,117 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
   });
 });
 
+/** Admin (or atc-edit) patch of a single snapshot row by natural key. */
+app.patch('/api/atc', requireAuth, requirePerm('atc', 'edit'), async (req, res) => {
+  const period_label = String(req.body?.period_label || '').trim();
+  const office_code = String(req.body?.office_code || '').trim();
+  const source_format = String(req.body?.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
+  const patchIn = req.body?.patch && typeof req.body.patch === 'object' ? req.body.patch : {};
+  if (!period_label || !office_code) {
+    return res.status(400).json({ error: 'period_label and office_code required' });
+  }
+
+  const ALLOWED = [
+    'atc_loss',
+    'dist_loss',
+    'coll_eff',
+    'target_atc',
+    'target_dist',
+    'input_mu',
+    'demand_mu',
+    'collection_mu',
+    'consumer_count',
+  ];
+  const n = (v) => {
+    if (v == null || v === '') return null;
+    const x = Number(v);
+    return Number.isFinite(x) ? x : null;
+  };
+  const patch = { updated_at: new Date().toISOString() };
+  for (const key of ALLOWED) {
+    if (Object.prototype.hasOwnProperty.call(patchIn, key)) {
+      patch[key] = n(patchIn[key]);
+    }
+  }
+  if (Object.keys(patch).length <= 1) {
+    return res.status(400).json({ error: 'No editable fields in patch' });
+  }
+
+  try {
+    if (useSupabase()) {
+      await refreshFromSupabase('atc_snapshots');
+    }
+    const rows = readCollection('atc_snapshots', []);
+    const idx = rows.findIndex(
+      (r) =>
+        String(r.period_label) === period_label &&
+        String(r.source_format || 'IA').toUpperCase() === source_format &&
+        String(r.office_code) === office_code
+    );
+    if (idx < 0) {
+      return res.status(404).json({ error: 'ATC row not found for that office / month / format' });
+    }
+    const next = { ...rows[idx], ...patch };
+    rows[idx] = next;
+
+    if (useSupabase()) {
+      const filter =
+        `period_label=eq.${encodeURIComponent(period_label)}` +
+        `&source_format=eq.${encodeURIComponent(source_format)}` +
+        `&office_code=eq.${encodeURIComponent(office_code)}`;
+      await sb.updateByFilter('atc_snapshots', filter, patch);
+      await refreshFromSupabase('atc_snapshots');
+    } else {
+      await writeCollectionAndPersist('atc_snapshots', rows);
+    }
+
+    const fresh = readCollection('atc_snapshots', []).find(
+      (r) =>
+        String(r.period_label) === period_label &&
+        String(r.source_format || 'IA').toUpperCase() === source_format &&
+        String(r.office_code) === office_code
+    );
+
+    logActivity(
+      req.user.username,
+      'edit',
+      `atc ${source_format} ${period_label} ${office_code}: ${Object.keys(patch)
+        .filter((k) => k !== 'updated_at')
+        .join(',')}`
+    );
+    res.json({ ok: true, row: fresh || next });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to patch ATC row' });
+  }
+});
+
+/** Authoritative ATC workbook parse (server) — keeps Division TOTAL inference in sync. */
+app.post('/api/atc/parse', requireAuth, requirePerm('atc', 'upload'), (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    const { parseAtcWorkbook } = require('./atc_parse');
+    const b64 = String(req.body?.base64 || '');
+    if (!b64) return res.status(400).json({ error: 'Missing workbook (base64)' });
+    const buf = Buffer.from(b64, 'base64');
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const sheetToAoa = (sheet) =>
+      XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+    const parsed = parseAtcWorkbook(wb, sheetToAoa, {
+      period_label: req.body?.period_label || '',
+    });
+    res.json({
+      ok: true,
+      period_label: parsed.period_label,
+      target_fy: parsed.target_fy,
+      rows: parsed.rows,
+      filtered_out: parsed.filtered_out,
+      counts: parsed.counts,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Failed to parse ATC workbook' });
+  }
+});
+
 app.get('/api/batches', requireAuth, (req, res) => {
   const rows = readCollection('upload_batches', []);
   res.json({ rows });
@@ -476,6 +587,14 @@ function upsertByKey(collection, rows, keyFn, mapFn) {
 }
 
 async function upsertByKeyPersisted(collection, rows, keyFn, mapFn) {
+  // ATC is cloud-only and may be updated outside this process — always merge from live cloud.
+  if (collection === 'atc_snapshots' && useSupabase()) {
+    try {
+      await refreshFromSupabase('atc_snapshots');
+    } catch (e) {
+      console.error('[upload] refresh atc_snapshots failed:', e.message);
+    }
+  }
   const existing = readCollection(collection, []);
   const index = new Map(existing.map((r) => [keyFn(r), r]));
   let upserted = 0;
@@ -549,6 +668,28 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
 
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
   if (!rows.length) return res.status(400).json({ error: 'No rows' });
+
+  if (module === 'atc') {
+    const iaCccPeriods = new Set();
+    const iaDivPeriods = new Set();
+    for (const raw of rows) {
+      const fmt = String(raw.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
+      if (fmt !== 'IA') continue;
+      const period_label = String(raw.period_label || req.body.period_label || '').trim();
+      const office_type = String(raw.office_type || '').toLowerCase();
+      if (!period_label) continue;
+      if (office_type === 'ccc') iaCccPeriods.add(period_label);
+      if (office_type === 'division') iaDivPeriods.add(period_label);
+    }
+    const missingDiv = [...iaCccPeriods].filter((p) => !iaDivPeriods.has(p));
+    const focus = String(req.body.period_label || '').trim();
+    const badFocus = focus ? missingDiv.filter((p) => p === focus) : missingDiv;
+    if (badFocus.length) {
+      return res.status(400).json({
+        error: `Incl. Bulk missing Division TOTAL for ${badFocus.join(', ')}. Hard-refresh Upload (Ctrl+F5), re-drop the Format-IA file, and confirm the parse message shows division rows.`,
+      });
+    }
+  }
 
   const { batch } = await createBatchPersisted(module, req, rows.length, req.body.period_label);
   let upserted = 0;

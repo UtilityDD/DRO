@@ -14,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { api } from '../api';
+import { api, canEdit } from '../api';
 import { useAuth } from '../auth';
 
 /** Shared plot area height inside the equal workspace panels */
@@ -630,6 +630,13 @@ export function AtcPage() {
   const [panelTab, setPanelTab] = useState<'chart' | 'table'>('chart');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [editRow, setEditRow] = useState<AtcRow | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+
+  const canEditAtc = canEdit(user, 'atc');
 
   // Admin landing view: Division · Compare · AT&C (all divisions selected via office effect)
   useEffect(() => {
@@ -697,6 +704,100 @@ export function AtcPage() {
       .finally(() => setLoading(false));
   }, [format]);
 
+  const openEditFor = (officeCode: string, periodLabel?: string) => {
+    if (!canEditAtc || !officeCode) return;
+    const period = periodLabel || asOf || periods[periods.length - 1] || '';
+    const sameKey = (r: AtcRow) =>
+      String(r.office_code) === officeCode &&
+      String(r.period_label) === period &&
+      String(r.source_format || 'IA').toUpperCase() === format;
+    const row =
+      rows.find((r) => sameKey(r) && r.office_type === level) ||
+      rows.find((r) => sameKey(r));
+    if (!row) {
+      setError(`No ${format} row for ${officeCode} · ${period}`);
+      return;
+    }
+    const fields = [
+      'atc_loss',
+      'dist_loss',
+      'coll_eff',
+      'target_atc',
+      'target_dist',
+      'input_mu',
+      'demand_mu',
+      'collection_mu',
+    ];
+    const form: Record<string, string> = {};
+    for (const f of fields) {
+      const v = toNum(row[f]);
+      form[f] = v == null ? '' : String(v);
+    }
+    setEditRow(row);
+    setEditForm(form);
+    setEditError('');
+    setError('');
+    setEditOpen(true);
+  };
+
+  const officeCodeFromChartClick = (data: unknown): string => {
+    if (!data || typeof data !== 'object') return '';
+    const d = data as Record<string, unknown>;
+    const payload = (d.payload && typeof d.payload === 'object' ? d.payload : d) as Record<
+      string,
+      unknown
+    >;
+    return String(payload.code || d.code || '');
+  };
+
+  const periodFromChartClick = (data: unknown): string => {
+    if (!data || typeof data !== 'object') return '';
+    const d = data as Record<string, unknown>;
+    const payload = (d.payload && typeof d.payload === 'object' ? d.payload : d) as Record<
+      string,
+      unknown
+    >;
+    return String(payload.period || d.period || '');
+  };
+
+  const saveEdit = async () => {
+    if (!editRow) return;
+    setEditBusy(true);
+    setEditError('');
+    try {
+      const patch: Record<string, number | null> = {};
+      for (const [k, raw] of Object.entries(editForm)) {
+        const t = raw.trim();
+        patch[k] = t === '' ? null : Number(t);
+        if (t !== '' && !Number.isFinite(patch[k] as number)) {
+          throw new Error(`Invalid number for ${k}`);
+        }
+      }
+      const res = await api.patchAtc({
+        period_label: String(editRow.period_label),
+        source_format: format,
+        office_code: String(editRow.office_code),
+        patch,
+      });
+      const updated = res.row || { ...editRow, ...patch };
+      setRows((prev) =>
+        prev.map((r) =>
+          String(r.period_label) === String(editRow.period_label) &&
+          String(r.office_code) === String(editRow.office_code) &&
+          String(r.source_format || 'IA').toUpperCase() === format
+            ? { ...r, ...updated }
+            : r
+        )
+      );
+      setEditOpen(false);
+      setEditRow(null);
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (format === 'IB' && level === 'ccc') setLevel('division');
   }, [format, level]);
@@ -739,6 +840,16 @@ export function AtcPage() {
 
   const officeOptions = useMemo(() => {
     let list = rows.filter((r) => r.office_type === level);
+    // Guard against bad parses (short codes / non-DRO) showing up in Units
+    if (level === 'ccc') {
+      list = list.filter((r) => /^341[2-5]\d{3}$/.test(String(r.office_code || '')));
+    } else if (level === 'division') {
+      list = list.filter((r) => /^341[2-5]$/.test(String(r.office_code || '')));
+    } else if (level === 'region') {
+      list = list.filter((r) => String(r.office_code) === '341');
+    } else if (level === 'zone') {
+      list = list.filter((r) => String(r.office_code) === '34');
+    }
     if (division) {
       if (level === 'ccc') {
         list = list.filter(
@@ -1200,12 +1311,36 @@ export function AtcPage() {
       activeCodes.length > 0 &&
       (isIdcCompare ? muGroupedData.length > 0 : compareData.length > 0));
 
+  const startEditFlow = () => {
+    if (!canEditAtc) return;
+    if (activeCodes.length === 1) {
+      openEditFor(activeCodes[0]);
+      return;
+    }
+    setPanelTab('table');
+  };
+
   return (
-    <div className="atc-page">
+    <div className={`atc-page${canEditAtc ? ' atc-can-edit' : ''}`}>
       {error && <p className="error">{error}</p>}
+      {canEditAtc && (
+        <div className="atc-edit-bar">
+          <span>Admin edit available — click a chart bar, or open Table → Edit.</span>
+          <button type="button" className="btn atc-edit-toggle" onClick={startEditFlow}>
+            Edit values
+          </button>
+        </div>
+      )}
 
       <div className="atc-layout">
         <aside className="atc-controls panel">
+          {canEditAtc && (
+            <section className="atc-block">
+              <button type="button" className="btn atc-edit-toggle atc-edit-sidebar" onClick={startEditFlow}>
+                Edit AT&amp;C values
+              </button>
+            </section>
+          )}
           <section className="atc-block">
             <div className="atc-label">View</div>
             <Seg
@@ -1411,28 +1546,50 @@ export function AtcPage() {
                 <h2>{chartHeadline}</h2>
                 <p className="atc-result-sub">{chartSubline}</p>
               </div>
-              <div className="atc-tabs" role="tablist" aria-label="Chart or table">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={panelTab === 'chart'}
-                  className={`atc-tab ${panelTab === 'chart' ? 'on' : ''}`}
-                  onClick={() => setPanelTab('chart')}
-                >
-                  Chart
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={panelTab === 'table'}
-                  className={`atc-tab ${panelTab === 'table' ? 'on' : ''}`}
-                  onClick={() => setPanelTab('table')}
-                >
-                  Table
-                  <span className="atc-tab-count">{tableRows.length}</span>
-                </button>
+              <div className="atc-result-tools">
+                {canEditAtc && (
+                  <button
+                    type="button"
+                    className="btn atc-edit-toggle"
+                    disabled={!activeCodes.length}
+                    onClick={startEditFlow}
+                    title={
+                      activeCodes.length === 1
+                        ? 'Edit values for the selected office'
+                        : 'Open table and pick a row to edit'
+                    }
+                  >
+                    Edit values
+                  </button>
+                )}
+                <div className="atc-tabs" role="tablist" aria-label="Chart or table">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'chart'}
+                    className={`atc-tab ${panelTab === 'chart' ? 'on' : ''}`}
+                    onClick={() => setPanelTab('chart')}
+                  >
+                    Chart
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'table'}
+                    className={`atc-tab ${panelTab === 'table' ? 'on' : ''}`}
+                    onClick={() => setPanelTab('table')}
+                  >
+                    Table
+                    <span className="atc-tab-count">{tableRows.length}</span>
+                  </button>
+                </div>
               </div>
             </div>
+            {canEditAtc && (
+              <p className="atc-edit-hint muted">
+                Click a chart bar/point, or Edit in the table, to change values for the selected month.
+              </p>
+            )}
 
             {panelTab === 'chart' && (
               <div className="atc-tab-panel atc-tab-panel-chart" role="tabpanel">
@@ -1492,8 +1649,21 @@ export function AtcPage() {
                               stroke={colorByCode.get(code)}
                               strokeWidth={2.4}
                               dot={{ r: 3.5, strokeWidth: 0 }}
-                              activeDot={{ r: 6, strokeWidth: 2, stroke: '#0f2426' }}
+                              activeDot={{
+                                r: 6,
+                                strokeWidth: 2,
+                                stroke: '#0f2426',
+                                cursor: canEditAtc ? 'pointer' : undefined,
+                                onClick: (_evt: unknown, payload: unknown) => {
+                                  if (!canEditAtc) return;
+                                  openEditFor(code, periodFromChartClick(payload));
+                                },
+                              }}
                               connectNulls
+                              onClick={(data) => {
+                                if (!canEditAtc) return;
+                                openEditFor(code, periodFromChartClick(data));
+                              }}
                               label={
                                 showLineLabels
                                   ? (props: LabelProps) => (
@@ -1603,6 +1773,12 @@ export function AtcPage() {
                               name="Input"
                               fill={MU_BAR_COLORS.input}
                               radius={[7, 7, 0, 0]}
+                              cursor={canEditAtc ? 'pointer' : undefined}
+                              onClick={(data) => {
+                                if (!canEditAtc) return;
+                                const code = officeCodeFromChartClick(data);
+                                if (code) openEditFor(code);
+                              }}
                               activeBar={{ fill: MU_BAR_COLORS.input, stroke: '#e8f3f1', strokeWidth: 1 }}
                             >
                               <LabelList
@@ -1621,6 +1797,12 @@ export function AtcPage() {
                               name="Demand"
                               fill={MU_BAR_COLORS.demand}
                               radius={[7, 7, 0, 0]}
+                              cursor={canEditAtc ? 'pointer' : undefined}
+                              onClick={(data) => {
+                                if (!canEditAtc) return;
+                                const code = officeCodeFromChartClick(data);
+                                if (code) openEditFor(code);
+                              }}
                               activeBar={{ fill: MU_BAR_COLORS.demand, stroke: '#e8f3f1', strokeWidth: 1 }}
                             >
                               <LabelList
@@ -1639,6 +1821,12 @@ export function AtcPage() {
                               name="Collection"
                               fill={MU_BAR_COLORS.collection}
                               radius={[7, 7, 0, 0]}
+                              cursor={canEditAtc ? 'pointer' : undefined}
+                              onClick={(data) => {
+                                if (!canEditAtc) return;
+                                const code = officeCodeFromChartClick(data);
+                                if (code) openEditFor(code);
+                              }}
                               activeBar={{ fill: MU_BAR_COLORS.collection, stroke: '#e8f3f1', strokeWidth: 1 }}
                             >
                               <LabelList
@@ -1723,6 +1911,17 @@ export function AtcPage() {
                               dataKey="value"
                               name={isMetricCompare ? 'Loss %' : param.label}
                               radius={[8, 8, 0, 0]}
+                              cursor={canEditAtc ? 'pointer' : undefined}
+                              onClick={(data) => {
+                                if (!canEditAtc) return;
+                                if (isMetricCompare) {
+                                  const code = activeCodes[0];
+                                  if (code) openEditFor(code);
+                                  return;
+                                }
+                                const code = officeCodeFromChartClick(data);
+                                if (code) openEditFor(code);
+                              }}
                             >
                               {compareData.map((d) => (
                                 <Cell key={d.code} fill={d.fill || '#2dd4bf'} />
@@ -1808,11 +2007,19 @@ export function AtcPage() {
                         <th>Input</th>
                         <th>Demand</th>
                         <th>Collection</th>
+                        {canEditAtc && <th />}
                       </tr>
                     </thead>
                     <tbody>
                       {tableRows.map((r, i) => (
-                        <tr key={`${r.period_label}-${r.office_code}-${i}`}>
+                        <tr
+                          key={`${r.period_label}-${r.office_code}-${i}`}
+                          className={canEditAtc ? 'atc-row-editable' : undefined}
+                          onClick={() => {
+                            if (!canEditAtc) return;
+                            openEditFor(String(r.office_code), String(r.period_label));
+                          }}
+                        >
                           <td>{String(r.period_label)}</td>
                           <td>
                             <span
@@ -1830,11 +2037,25 @@ export function AtcPage() {
                           <td>{formatValue(r.input_mu, 'mu')}</td>
                           <td>{formatValue(r.demand_mu, 'mu')}</td>
                           <td>{formatValue(r.collection_mu, 'mu')}</td>
+                          {canEditAtc && (
+                            <td>
+                              <button
+                                type="button"
+                                className="linkish"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEditFor(String(r.office_code), String(r.period_label));
+                                }}
+                              >
+                                Edit
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                       {!tableRows.length && (
                         <tr>
-                          <td colSpan={9} className="muted">
+                          <td colSpan={canEditAtc ? 10 : 9} className="muted">
                             No rows for current selection
                           </td>
                         </tr>
@@ -1847,6 +2068,63 @@ export function AtcPage() {
           </div>
         </div>
       </div>
+
+      {editOpen && editRow && (
+        <div className="upload-modal-root" role="dialog" aria-modal="true" aria-labelledby="atc-edit-title">
+          <button
+            type="button"
+            className="upload-modal-backdrop"
+            aria-label="Close"
+            onClick={() => !editBusy && setEditOpen(false)}
+          />
+          <div className="upload-modal atc-edit-modal">
+            <div className="upload-modal-head">
+              <h3 id="atc-edit-title">Edit AT&amp;C values</h3>
+              <button type="button" className="linkish" disabled={editBusy} onClick={() => setEditOpen(false)}>
+                Close
+              </button>
+            </div>
+            <p className="muted atc-edit-meta">
+              {format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk'} · {String(editRow.period_label)} ·{' '}
+              {String(editRow.office_name)} ({String(editRow.office_code)})
+            </p>
+            {editError && <p className="error">{editError}</p>}
+            <div className="atc-edit-grid">
+              {(
+                [
+                  ['atc_loss', 'AT&C loss %'],
+                  ['target_atc', 'AT&C FY target %'],
+                  ['dist_loss', 'T&D loss %'],
+                  ['target_dist', 'T&D FY target %'],
+                  ['coll_eff', 'Collection eff. %'],
+                  ['input_mu', 'Input MU'],
+                  ['demand_mu', 'Demand MU'],
+                  ['collection_mu', 'Collection MU'],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="atc-edit-field">
+                  <span>{label}</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={editForm[key] ?? ''}
+                    disabled={editBusy}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, [key]: e.target.value }))}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="atc-edit-actions">
+              <button type="button" className="btn ghost" disabled={editBusy} onClick={() => setEditOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn" disabled={editBusy} onClick={() => void saveEdit()}>
+                {editBusy ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

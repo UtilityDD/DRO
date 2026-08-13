@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { api, AUTH_MODULES, canUploadModule } from '../api';
 import { useAuth } from '../auth';
-import { isAtcWorkbook, parseAtcWorkbookFromAoa } from '../lib/atcParse';
 
 type AtcSlot = 'IA' | 'IB';
 type StagedAtc = {
@@ -13,6 +12,17 @@ type StagedAtc = {
 };
 
 type Guide = { title: string; dos: string[]; donts: string[] };
+
+async function fileToBase64(file: File) {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
 
 const ATC_SLOT_GUIDE: Record<AtcSlot, Guide> = {
   IA: {
@@ -328,88 +338,96 @@ export function UploadPage() {
     );
   }
 
-  const parseWorkbookSheets = (wb: XLSX.WorkBook) =>
-    wb.SheetNames.map((name) => ({
-      name,
-      aoa: XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], {
-        header: 1,
-        defval: null,
-        raw: true,
-      }) as unknown[][],
-    }));
-
   const onAtcSlotFile = async (slot: AtcSlot, file: File) => {
     setError('');
     setMessage('');
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf);
-    const sheets = parseWorkbookSheets(wb);
-    const parsed = parseAtcWorkbookFromAoa(sheets, {});
-    const forSlot = parsed.rows.filter(
-      (r) => String(r.source_format || 'IA').toUpperCase() === slot
-    );
-    if (!forSlot.length) {
-      setError(
-        slot === 'IA'
-          ? 'No With-CCC (Incl. Bulk) data found in this file.'
-          : 'No Without-CCC (Excl. Bulk) data found in this file.'
+    setBusy(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const parsed = await api.atcParse({ base64, filename: file.name });
+      const forSlot = (parsed.rows || []).filter(
+        (r) => String(r.source_format || 'IA').toUpperCase() === slot
       );
-      return;
-    }
-    const months = monthsFromRows(forSlot);
-    const staged: StagedAtc = {
-      format: slot,
-      filename: file.name,
-      rows: forSlot,
-      months,
-    };
-    if (slot === 'IA') setIaSlot(staged);
-    else setIbSlot(staged);
-    if (parsed.period_label) setPeriod(parsed.period_label);
-    const other =
-      slot === 'IA'
-        ? parsed.counts.IB > 0
-          ? ' · Division sheet also found — drop it in Without CCC if needed'
-          : ''
-        : parsed.counts.IA > 0
-          ? ' · CCC sheet also found — drop it in With CCC if needed'
+      if (!forSlot.length) {
+        setError(
+          slot === 'IA'
+            ? 'No With-CCC (Incl. Bulk) data found in this file.'
+            : 'No Without-CCC (Excl. Bulk) data found in this file.'
+        );
+        return;
+      }
+      const months = monthsFromRows(forSlot);
+      const staged: StagedAtc = {
+        format: slot,
+        filename: file.name,
+        rows: forSlot,
+        months,
+      };
+      if (slot === 'IA') setIaSlot(staged);
+      else setIbSlot(staged);
+      if (parsed.period_label) setPeriod(parsed.period_label);
+      const divCount = forSlot.filter((r) => r.office_type === 'division').length;
+      const other =
+        slot === 'IA'
+          ? (parsed.counts?.IB || 0) > 0
+            ? ' · Division sheet also found — drop it in Without CCC if needed'
+            : ''
+          : (parsed.counts?.IA || 0) > 0
+            ? ' · CCC sheet also found — drop it in With CCC if needed'
+            : '';
+      const skipped =
+        (parsed.filtered_out || 0) > 0
+          ? ` · skipped ${parsed.filtered_out} out-of-scope offices (kept 34 / 341* only)`
           : '';
-    const skipped =
-      parsed.filtered_out > 0
-        ? ` · skipped ${parsed.filtered_out} out-of-scope offices (kept 34 / 341* only)`
-        : '';
-    setMessage(
-      `${slot === 'IA' ? 'With CCC' : 'Without CCC'}: ${forSlot.length} rows · ${months.join(', ') || '—'}${other}${skipped}`
-    );
+      const rollups =
+        slot === 'IA' && divCount === 0
+          ? ' · warning: no Division TOTAL rows detected'
+          : slot === 'IA'
+            ? ` · ${divCount} division rows`
+            : '';
+      setMessage(
+        `${slot === 'IA' ? 'With CCC' : 'Without CCC'}: ${forSlot.length} rows · ${months.join(', ') || '—'}${rollups}${other}${skipped}`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to parse ATC file on server');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onGenericFile = async (file: File) => {
     setError('');
     setMessage('');
     setFilename(file.name);
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf);
-
-    if (module === 'atc') {
-      const sheets = parseWorkbookSheets(wb);
-      if (isAtcWorkbook(wb.SheetNames, sheets[0]?.aoa) || sheets.some((s) => s.aoa.length > 5)) {
-        const parsed = parseAtcWorkbookFromAoa(sheets, {});
-        if (parsed.rows.length) {
+    setBusy(true);
+    try {
+      if (module === 'atc') {
+        const base64 = await fileToBase64(file);
+        const parsed = await api.atcParse({ base64, filename: file.name });
+        if (parsed.rows?.length) {
           const months = monthsFromRows(parsed.rows);
           if (parsed.period_label) setPeriod(parsed.period_label);
           setRows(parsed.rows);
           setMessage(
-            `Parsed ${parsed.counts.IA} Incl. + ${parsed.counts.IB} Excl. · ${months.join(', ')}`
+            `Parsed ${parsed.counts?.IA || 0} Incl. + ${parsed.counts?.IB || 0} Excl. · ${months.join(', ')}`
           );
           return;
         }
+        setError('No ATC rows found in this workbook.');
+        return;
       }
-    }
 
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
-    setRows(json);
-    setMessage(`Ready: ${json.length} rows`);
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf);
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      setRows(json);
+      setMessage(`Ready: ${json.length} rows`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to read file');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const downloadTemplate = () => {
