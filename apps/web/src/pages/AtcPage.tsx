@@ -1258,24 +1258,46 @@ export function AtcPage() {
       (compareBy === 'units' && showTarget && Boolean(param.targetField)));
 
   const compareTitle = isIdcCompare
-    ? 'Input · Demand · Collection'
+    ? 'Input, Demand & Collection'
     : isMetricCompare
-      ? `AT&C vs T&D · ${nameByCode.get(activeCodes[0] || '') || 'Office'}`
+      ? 'AT&C vs T&D'
       : param.label;
 
-  const chartHeadline =
-    mode === 'trend' ? `${param.label} · Trend` : `Compare · ${compareTitle}`;
+  const selectionLabel = useMemo(() => {
+    if (!activeCodes.length) return level === 'ccc' ? 'CCC' : level === 'division' ? 'Division' : 'Region';
+    if (activeCodes.length === 1) {
+      return nameByCode.get(activeCodes[0]) || activeCodes[0];
+    }
+    if (activeCodes.length <= 3) {
+      return activeCodes.map((c) => nameByCode.get(c) || c).join(', ');
+    }
+    const noun =
+      level === 'ccc' ? 'CCCs' : level === 'division' ? 'divisions' : level === 'region' ? 'region' : 'units';
+    return `${activeCodes.length} ${noun}`;
+  }, [activeCodes, nameByCode, level]);
 
-  const chartSubline = [
-    format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk',
-    level === 'region' ? 'Region' : level === 'division' ? 'Division' : 'CCC',
-    mode === 'compare' && asOf ? asOf : null,
-    activeCodes.length
-      ? `${activeCodes.length} ${activeCodes.length === 1 ? 'unit' : 'units'}`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const basisLabel = format === 'IA' ? 'Excl. Bulk' : 'Incl. Bulk';
+  const periodSpan =
+    sortedPeriods.length > 1
+      ? `${sortedPeriods[0]}–${sortedPeriods[sortedPeriods.length - 1]}`
+      : sortedPeriods[0] || '';
+
+  const chartHeadline = useMemo(() => {
+    if (mode === 'trend') {
+      return [param.label, selectionLabel, periodSpan, basisLabel].filter(Boolean).join(' · ');
+    }
+    const asOfLabel = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
+    return [compareTitle, selectionLabel, asOfLabel, basisLabel].filter(Boolean).join(' · ');
+  }, [
+    mode,
+    param.label,
+    selectionLabel,
+    periodSpan,
+    basisLabel,
+    compareTitle,
+    asOf,
+    sortedPeriods,
+  ]);
 
   const wideCompareAxis =
     mode === 'compare' &&
@@ -1399,8 +1421,8 @@ export function AtcPage() {
               value={format}
               onChange={setFormat}
               options={[
-                { value: 'IA', label: 'Incl. Bulk' },
-                { value: 'IB', label: 'Excl. Bulk' },
+                { value: 'IA', label: 'Excl. Bulk' },
+                { value: 'IB', label: 'Incl. Bulk' },
               ]}
             />
           </section>
@@ -1583,26 +1605,21 @@ export function AtcPage() {
           <div className="panel atc-result-panel">
             <div className="atc-result-head">
               <div className="atc-result-title">
-                <h2>{chartHeadline}</h2>
-                <p className="atc-result-sub">{chartSubline}</p>
+                <h2>{panelTab === 'analytic' ? 'Weakness analytic' : chartHeadline}</h2>
               </div>
               <div className="atc-result-tools">
-                {canEditAtc && (
+                {canEditAtc && panelTab !== 'analytic' && (
                   <button
                     type="button"
                     className="btn atc-edit-toggle"
                     disabled={!activeCodes.length}
                     onClick={startEditFlow}
-                    title={
-                      activeCodes.length === 1
-                        ? 'Edit values for the selected office'
-                        : 'Open table and pick a row to edit'
-                    }
+                    title="Click a chart bar/point or a table Edit link to change values for the selected month"
                   >
                     Edit values
                   </button>
                 )}
-                <div className="atc-tabs" role="tablist" aria-label="Chart or table">
+                <div className="atc-tabs" role="tablist" aria-label="Chart, table or analytic">
                   <button
                     type="button"
                     role="tab"
@@ -1634,11 +1651,6 @@ export function AtcPage() {
                 </div>
               </div>
             </div>
-            {canEditAtc && (
-              <p className="atc-edit-hint muted">
-                Click a chart bar/point, or Edit in the table, to change values for the selected month.
-              </p>
-            )}
 
             {panelTab === 'chart' && (
               <div className="atc-tab-panel atc-tab-panel-chart" role="tabpanel">
@@ -2123,7 +2135,7 @@ export function AtcPage() {
                     <p className="atc-analytic-sub muted">
                       {focusPeriod}
                       {focusPrevPeriod ? ` vs ${focusPrevPeriod}` : ''} · {level} ·{' '}
-                      {format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk'} · offices with Input MU:{' '}
+                      {format === 'IA' ? 'Excl. Bulk' : 'Incl. Bulk'} · offices with Input MU:{' '}
                       {focusRows.length}
                     </p>
                   </div>
@@ -2314,7 +2326,7 @@ export function AtcPage() {
               </button>
             </div>
             <p className="muted atc-edit-meta">
-              {format === 'IA' ? 'Incl. Bulk' : 'Excl. Bulk'} · {String(editRow.period_label)} ·{' '}
+              {format === 'IA' ? 'Excl. Bulk' : 'Incl. Bulk'} · {String(editRow.period_label)} ·{' '}
               {String(editRow.office_name)} ({String(editRow.office_code)})
             </p>
             {editError && <p className="error">{editError}</p>}

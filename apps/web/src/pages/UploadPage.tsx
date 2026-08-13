@@ -26,27 +26,27 @@ async function fileToBase64(file: File) {
 
 const ATC_SLOT_GUIDE: Record<AtcSlot, Guide> = {
   IA: {
-    title: 'With CCC (Incl. Bulk) — Do & Don’t',
+    title: 'With CCC (Excl. Bulk) — Do & Don’t',
     dos: [
-      'Use the Format-IA / Incl. Bulk workbook (CCC rows).',
+      'Use the Format-IA / Excl. Bulk workbook (CCC rows).',
       'Keep official month headers (e.g. May’25, Mar’26).',
       'Re-upload to fix months — only months in this file are replaced.',
     ],
     donts: [
-      'Don’t put the Division-only (Excl. Bulk) sheet here.',
+      'Don’t put the Division-only (Incl. Bulk) sheet here.',
       'Don’t delete or rename month header columns.',
       'Don’t upload password-protected or scanned PDFs.',
     ],
   },
   IB: {
-    title: 'Without CCC (Excl. Bulk) — Do & Don’t',
+    title: 'Without CCC (Incl. Bulk) — Do & Don’t',
     dos: [
-      'Use the Format-IB / Excl. Bulk workbook (Division+).',
+      'Use the Format-IB / Incl. Bulk workbook (Division+).',
       'Keep official month headers (e.g. May’25, Mar’26).',
       'Re-upload to fix months — only months in this file are replaced.',
     ],
     donts: [
-      'Don’t put the CCC / Incl. Bulk sheet here.',
+      'Don’t put the CCC / Excl. Bulk sheet here.',
       'Don’t delete or rename month header columns.',
       'Don’t expect months missing from the file to change.',
     ],
@@ -57,8 +57,8 @@ const GUIDE: Record<string, Guide> = {
   atc: {
     title: 'AT&C upload — Do & Don’t',
     dos: [
-      'Upload the CCC sheet in With CCC (Incl. Bulk).',
-      'Upload the Division sheet in Without CCC (Excl. Bulk).',
+      'Upload the CCC sheet in With CCC (Excl. Bulk).',
+      'Upload the Division sheet in Without CCC (Incl. Bulk).',
       'Re-upload to fix mistakes — only months in the new file are replaced.',
       'Keep the official header months (e.g. May’25, Mar’26, May’26).',
       'Statewide sheets are OK — only Zone 34 / Region 341 offices are kept.',
@@ -351,8 +351,8 @@ export function UploadPage() {
       if (!forSlot.length) {
         setError(
           slot === 'IA'
-            ? 'No With-CCC (Incl. Bulk) data found in this file.'
-            : 'No Without-CCC (Excl. Bulk) data found in this file.'
+            ? 'No With-CCC (Excl. Bulk) data found in this file.'
+            : 'No Without-CCC (Incl. Bulk) data found in this file.'
         );
         return;
       }
@@ -449,7 +449,7 @@ export function UploadPage() {
     const lines: string[] = [];
     for (const f of ['IA', 'IB'] as const) {
       if (!byFmt[f].length) continue;
-      const label = f === 'IA' ? 'With CCC (Incl. Bulk)' : 'Without CCC (Excl. Bulk)';
+      const label = f === 'IA' ? 'With CCC (Excl. Bulk)' : 'Without CCC (Incl. Bulk)';
       const overlap = byFmt[f].filter((m) => existingByFormat[f].includes(m));
       const fresh = byFmt[f].filter((m) => !existingByFormat[f].includes(m));
       lines.push(`${label}: ${byFmt[f].join(', ')}`);
@@ -622,7 +622,7 @@ export function UploadPage() {
             <div className="upload-slots">
               <AtcDropSlot
                 title="With CCC"
-                tag="Incl. Bulk"
+                tag="Excl. Bulk"
                 staged={iaSlot}
                 onFile={(f) => onAtcSlotFile('IA', f)}
                 onClear={() => clearSlot('IA')}
@@ -630,7 +630,7 @@ export function UploadPage() {
               />
               <AtcDropSlot
                 title="Without CCC"
-                tag="Excl. Bulk"
+                tag="Incl. Bulk"
                 staged={ibSlot}
                 onFile={(f) => onAtcSlotFile('IB', f)}
                 onClear={() => clearSlot('IB')}

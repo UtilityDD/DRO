@@ -686,7 +686,7 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
     const badFocus = focus ? missingDiv.filter((p) => p === focus) : missingDiv;
     if (badFocus.length) {
       return res.status(400).json({
-        error: `Incl. Bulk missing Division TOTAL for ${badFocus.join(', ')}. Hard-refresh Upload (Ctrl+F5), re-drop the Format-IA file, and confirm the parse message shows division rows.`,
+        error: `Excl. Bulk missing Division TOTAL for ${badFocus.join(', ')}. Hard-refresh Upload (Ctrl+F5), re-drop the Format-IA file, and confirm the parse message shows division rows.`,
       });
     }
   }
