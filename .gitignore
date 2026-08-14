@@ -10,3 +10,5 @@ server/data/*.json
 !server/data/supabase_config.example.json
 apps/web/dev-dist/
 .vscode/
+
+.vercel
