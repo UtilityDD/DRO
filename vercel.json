@@ -3,6 +3,6 @@
   "outputDirectory": "apps/web/dist",
   "installCommand": "npm install --include=dev",
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" }
+    { "source": "/api/:path*", "destination": "/api/index.js" }
   ]
 }
