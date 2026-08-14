@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Darjeeling Region (DRO) Ops PWA — WBSEDCL day-to-day monitoring",
   "scripts": {
+    "postinstall": "npm install --prefix apps/web && npm install --prefix server",
     "dev": "concurrently -n server,web -c teal,cyan \"npm run dev --prefix server\" \"npm run dev --prefix apps/web\"",
     "dev:server": "npm run dev --prefix server",
     "dev:web": "npm run dev --prefix apps/web",
