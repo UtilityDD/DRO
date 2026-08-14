@@ -18,6 +18,8 @@
     "supabase:push": "npm run supabase:push --prefix server"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
   }
 }
