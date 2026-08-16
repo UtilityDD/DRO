@@ -61,7 +61,7 @@ export const api = {
       body: JSON.stringify({ username, pin }),
     }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
-  session: () => request<{ user: User }>('/api/session'),
+  session: () => request<{ user: User | null }>('/api/session'),
   authCatalog: () => request<{ modules: AuthModule[]; permissions: Permissions }>('/api/auth/catalog'),
   pulse: () => request<{ pulse: Record<string, number> }>('/api/pulse'),
   hierarchy: () =>

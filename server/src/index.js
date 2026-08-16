@@ -209,12 +209,12 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/session', (req, res) => {
-  if (!req.session?.user) return res.status(401).json({ error: 'No session' });
+  if (!req.session?.user) return res.json({ user: null });
   const users = readUsers();
   const fresh = users.find((u) => u.username === req.session.user.username);
   if (!fresh) {
     req.session.destroy(() => {});
-    return res.status(401).json({ error: 'User missing' });
+    return res.json({ user: null });
   }
   const user = publicUser(fresh);
   req.session.user = user;
