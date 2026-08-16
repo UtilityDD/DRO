@@ -1,5 +1,5 @@
 {
-  "installCommand": "npm install && npm install --prefix apps/web && npm install --prefix server",
+  "installCommand": "npm install",
   "buildCommand": "node scripts/vercel-build.js",
   "outputDirectory": "apps/web/dist",
   "rewrites": [
