@@ -11,7 +11,7 @@
     "dev": "concurrently -n server,web -c teal,cyan \"npm run dev --prefix server\" \"npm run dev --prefix apps/web\"",
     "dev:server": "npm run dev --prefix server",
     "dev:web": "npm run dev --prefix apps/web",
-    "build": "npm run build -w dro-web",
+    "build": "node scripts/vercel-build.js",
     "start": "npm start --prefix server",
     "seed": "node scripts/seed_offices.js",
     "supabase:status": "npm run supabase:status --prefix server",
