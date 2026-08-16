@@ -1099,16 +1099,22 @@ if (fs.existsSync(webDist)) {
   });
 }
 
-async function boot() {
-  await initStore();
-  ensureSeeded();
-  app.listen(PORT, () => {
-    console.log(`DRO Ops API on http://localhost:${PORT}`);
-    console.log(`[DRO] data store: ${storeMode()}${useSupabase() ? ' (' + sb.status().host + ')' : ''}`);
+const initPromise = initStore()
+  .then(() => {
+    ensureSeeded();
+  })
+  .catch((e) => {
+    console.error('[DRO] initStore failed:', e);
+  });
+
+if (require.main === module) {
+  initPromise.then(() => {
+    app.listen(PORT, () => {
+      console.log(`DRO Ops API on http://localhost:${PORT}`);
+      console.log(`[DRO] data store: ${storeMode()}${useSupabase() ? ' (' + sb.status().host + ')' : ''}`);
+    });
   });
 }
 
-boot().catch((e) => {
-  console.error('[DRO] boot failed:', e);
-  process.exit(1);
-});
+module.exports = app;
+module.exports.initPromise = initPromise;

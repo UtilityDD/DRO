@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "description": "Darjeeling Region (DRO) Ops PWA — WBSEDCL day-to-day monitoring",
+  "workspaces": [
+    "apps/web",
+    "server"
+  ],
   "scripts": {
     "dev": "concurrently -n server,web -c teal,cyan \"npm run dev --prefix server\" \"npm run dev --prefix apps/web\"",
     "dev:server": "npm run dev --prefix server",
@@ -14,6 +18,8 @@
     "supabase:push": "npm run supabase:push --prefix server"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
   }
 }
