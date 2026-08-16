@@ -22,7 +22,7 @@ const TABLES = {
 };
 
 /** Never fall back to local JSON for these when Supabase is configured. */
-const CLOUD_ONLY = new Set(['atc_snapshots']);
+const CLOUD_ONLY = new Set();
 
 /** In-memory cache when Supabase is active */
 const cache = Object.create(null);

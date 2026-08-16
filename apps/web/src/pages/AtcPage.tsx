@@ -1741,7 +1741,14 @@ export function AtcPage() {
               <div className="atc-tab-panel atc-tab-panel-chart" role="tabpanel">
                 {loading && <p className="muted">Loading…</p>}
 
-                {!loading && !activeCodes.length && (
+                {!loading && !rows.length && (
+                  <p className="atc-empty">
+                    No AT&C snapshots in the database yet. Open{' '}
+                    <a href="/upload">Upload Center</a> and publish Format IA / IB.
+                  </p>
+                )}
+
+                {!loading && rows.length > 0 && !activeCodes.length && (
                   <p className="atc-empty">
                     {isMetricCompare
                       ? 'Select one office on the left.'

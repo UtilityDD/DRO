@@ -337,27 +337,23 @@ app.get('/api/consumers', requireAuth, requirePerm('consumers', 'view'), (req, r
 });
 
 app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) => {
-  if (!useSupabase()) {
-    return res.status(503).json({
-      error: 'AT&C requires Supabase. Configure server/data/supabase_config.json.',
-      rows: [],
-      periods: [],
-      formats: ['IA', 'IB'],
-      source: 'none',
-    });
+  let rows = [];
+  let source = 'local';
+  if (useSupabase()) {
+    try {
+      rows = await refreshFromSupabase('atc_snapshots');
+      source = 'supabase';
+    } catch (e) {
+      console.warn('[atc] supabase load failed:', e.message);
+      rows = [];
+    }
   }
-
-  let rows;
-  try {
-    rows = await refreshFromSupabase('atc_snapshots');
-  } catch (e) {
-    return res.status(502).json({
-      error: `Failed to load AT&C from Supabase: ${e.message}`,
-      rows: [],
-      periods: [],
-      formats: ['IA', 'IB'],
-      source: 'supabase',
-    });
+  if (!rows.length) {
+    const local = readCollection('atc_snapshots', []);
+    if (local.length) {
+      rows = local;
+      source = 'local';
+    }
   }
 
   const period = req.query.period ? String(req.query.period) : '';
@@ -409,7 +405,7 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
     rows: out,
     periods,
     formats: ['IA', 'IB'],
-    source: 'supabase',
+    source,
     host: sb.status().host,
     can_edit: canEdit(req.user, 'atc'),
     can_upload: canUpload(req.user, 'atc'),
