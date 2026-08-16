@@ -43,19 +43,19 @@ export function HomePage() {
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer>
               <BarChart data={nscDiv}>
-                <XAxis dataKey="division_name" tick={{ fill: '#8faba8', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#8faba8', fontSize: 11 }} allowDecimals={false} />
+                <XAxis dataKey="division_name" tick={{ fill: '#64748b', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 11 }} allowDecimals={false} />
                 <Tooltip
                   contentStyle={{
-                    background: '#0f2426',
-                    border: '1px solid rgba(180,220,210,0.16)',
+                    background: '#ffffff',
+                    border: '1px solid rgba(30,64,120,0.12)',
                     borderRadius: 12,
-                    color: '#e8f3f1',
+                    color: '#1e293b',
                   }}
-                  labelStyle={{ color: '#e8f3f1', fontWeight: 600 }}
-                  itemStyle={{ color: '#e8f3f1' }}
+                  labelStyle={{ color: '#1e293b', fontWeight: 600 }}
+                  itemStyle={{ color: '#1e293b' }}
                 />
-                <Bar dataKey="pending" fill="#2dd4bf" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="pending" fill="#1a73e8" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -150,13 +150,13 @@ function MilestoneLabel({
   const oy = cy - 28 - stagger * 14;
   return (
     <g className="atc-datalabel">
-      <rect x={ox} y={oy} width={w} height={h} rx={9} fill="#0f2426" stroke={color} strokeWidth={1.25} />
+      <rect x={ox} y={oy} width={w} height={h} rx={9} fill="#ffffff" stroke={color} strokeWidth={1.25} />
       <text
         x={cx}
         y={oy + h / 2 + 0.5}
         textAnchor="middle"
         dominantBaseline="middle"
-        fill="#e8f3f1"
+        fill="#1e293b"
         fontSize={10}
         fontWeight={650}
       >
@@ -218,7 +218,7 @@ function BarValueLabel(props: {
   const canFitInside = inside && h >= (deltaText ? 44 : 28) && w >= 28;
   const fontSize = canFitInside ? (w < 48 ? 12 : 15) : 10;
   const deltaSize = canFitInside ? (w < 48 ? 10 : 12) : 9;
-  const fill = canFitInside ? '#042f2e' : '#c5ddd9';
+  const fill = canFitInside ? '#ffffff' : '#334155';
   const deltaFill =
     deltaRaw == null
       ? fill
@@ -229,9 +229,9 @@ function BarValueLabel(props: {
             ? '#14532d'
             : fill
         : deltaRaw > 0
-          ? '#fca5a5'
+          ? '#dc2626'
           : deltaRaw < 0
-            ? '#86efac'
+            ? '#059669'
             : fill;
 
   const cy = canFitInside
@@ -296,7 +296,7 @@ function TargetPointLabel(props: {
         width={w}
         height={h}
         rx={8}
-        fill="#0f2426"
+        fill="#ffffff"
         stroke={TARGET_COLOR}
         strokeWidth={1.25}
       />
@@ -316,9 +316,9 @@ function TargetPointLabel(props: {
 }
 
 const MU_BAR_COLORS = {
-  input: '#2dd4bf',
-  demand: '#38bdf8',
-  collection: '#a78bfa',
+  input: '#1a73e8',
+  demand: '#00bcd4',
+  collection: '#7c4dff',
 };
 
 /** Value labels on I·D·C grouped bars */
@@ -345,7 +345,7 @@ function MuGroupBarLabel(props: {
       y={canInside ? top + 14 : top - 6}
       textAnchor="middle"
       dominantBaseline="middle"
-      fill={canInside ? '#042f2e' : '#d7ebe8'}
+      fill={canInside ? '#ffffff' : '#334155'}
       fontSize={canInside && w >= 36 ? 12 : 10}
       fontWeight={750}
     >
@@ -379,41 +379,41 @@ const PARAMS: ParamDef[] = [
 
 /** One-office compare: AT&C vs T&D */
 const LOSS_METRICS: ParamDef[] = [
-  { id: 'atc', label: 'AT&C loss', short: 'AT&C', field: 'atc_loss', kind: 'pct', targetField: 'target_atc', color: '#2dd4bf' },
+  { id: 'atc', label: 'AT&C loss', short: 'AT&C', field: 'atc_loss', kind: 'pct', targetField: 'target_atc', color: '#1a73e8' },
   { id: 'td', label: 'T&D loss', short: 'T&D', field: 'dist_loss', kind: 'pct', targetField: 'target_dist', color: '#60a5fa' },
 ];
 
 type CompareBy = 'units' | 'losses' | 'energy';
 
 const LINE_COLORS = [
-  '#2dd4bf',
-  '#60a5fa',
-  '#c084fc',
-  '#f07178',
-  '#34d399',
-  '#fb923c',
-  '#e879f9',
-  '#38bdf8',
-  '#f472b6',
-  '#7dd3fc',
+  '#1a73e8',
+  '#00bcd4',
+  '#7c4dff',
+  '#ef5350',
+  '#26a69a',
+  '#fb8c00',
+  '#ec407a',
+  '#42a5f5',
+  '#ab47bc',
+  '#26c6da',
 ];
 
 const CHART_TOOLTIP = {
   contentStyle: {
-    background: '#0f2426',
-    border: '1px solid rgba(180,220,210,0.16)',
+    background: '#ffffff',
+    border: '1px solid rgba(30,64,120,0.12)',
     borderRadius: 12,
-    color: '#e8f3f1',
-    boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+    color: '#1e293b',
+    boxShadow: '0 8px 24px rgba(30,64,120,0.12)',
   },
-  labelStyle: { color: '#e8f3f1', fontWeight: 600, marginBottom: 4 },
-  itemStyle: { color: '#e8f3f1', padding: '2px 0' },
+  labelStyle: { color: '#1e293b', fontWeight: 600, marginBottom: 4 },
+  itemStyle: { color: '#1e293b', padding: '2px 0' },
   wrapperStyle: { outline: 'none' },
 };
 
-const TIP_WORSE = '#fca5a5';
-const TIP_BETTER = '#86efac';
-const TIP_FLAT = '#c5ddd9';
+const TIP_WORSE = '#dc2626';
+const TIP_BETTER = '#059669';
+const TIP_FLAT = '#64748b';
 
 /** Loss tooltip: value vs target with coloured above/below + delta */
 function LossTargetTooltip(props: {
@@ -603,7 +603,7 @@ function YAxisTick2({
   const n = Number(payload?.value);
   if (!Number.isFinite(n) || x == null || y == null) return null;
   return (
-    <text x={x} y={y} dy={4} textAnchor="end" fill="#8faba8" fontSize={12}>
+    <text x={x} y={y} dy={4} textAnchor="end" fill="#64748b" fontSize={12}>
       {n.toFixed(2)}
       {unit}
     </text>
@@ -1074,7 +1074,7 @@ export function AtcPage() {
           value,
           target,
           delta,
-          fill: m.color || '#2dd4bf',
+          fill: m.color || '#1a73e8',
         };
       });
     }
@@ -1093,7 +1093,7 @@ export function AtcPage() {
         value,
         target,
         delta: value != null && target != null ? value - target : null,
-        fill: colorByCode.get(code) || '#2dd4bf',
+        fill: colorByCode.get(code) || '#1a73e8',
       };
     });
   }, [
@@ -1427,7 +1427,7 @@ export function AtcPage() {
       return {
         code,
         name: nameByCode.get(code) || code,
-        color: colorByCode.get(code) || '#2dd4bf',
+        color: colorByCode.get(code) || '#1a73e8',
         period,
         text: formatLabel(value, param.kind),
       };
@@ -1655,7 +1655,7 @@ export function AtcPage() {
                     const on = selectedCodes.includes(o.code);
                     const color = isMetricCompare
                       ? on
-                        ? '#2dd4bf'
+                        ? '#1a73e8'
                         : undefined
                       : colorByCode.get(o.code);
                     return (
@@ -1757,14 +1757,14 @@ export function AtcPage() {
                           data={trendData}
                           margin={{ top: 28, right: 16, left: 4, bottom: 8 }}
                         >
-                          <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
+                          <CartesianGrid stroke="rgba(30,64,120,0.08)" vertical={false} />
                           <XAxis
                             dataKey="period"
                             type="category"
                             allowDuplicatedCategory={false}
                             padding={{ left: 0, right: 8 }}
                             interval={0}
-                            tick={{ fill: '#8faba8', fontSize: 12 }}
+                            tick={{ fill: '#64748b', fontSize: 12 }}
                             minTickGap={0}
                           />
                           <YAxis
@@ -1785,7 +1785,7 @@ export function AtcPage() {
                             {...CHART_TOOLTIP}
                             formatter={(v: number, name: string) => [fmtTip(v), name]}
                           />
-                          <Legend wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }} />
+                          <Legend wrapperStyle={{ fontSize: 11, color: '#1e293b', paddingTop: 4 }} />
                           {activeCodes.map((code, si) => (
                             <Line
                               key={code}
@@ -1798,7 +1798,7 @@ export function AtcPage() {
                               activeDot={{
                                 r: 6,
                                 strokeWidth: 2,
-                                stroke: '#0f2426',
+                                stroke: '#ffffff',
                                 cursor: canEditAtc ? 'pointer' : undefined,
                                 onClick: (_evt: unknown, payload: unknown) => {
                                   if (!canEditAtc) return;
@@ -1818,7 +1818,7 @@ export function AtcPage() {
                                         periods={trendPeriods}
                                         milestones={milestonePeriods}
                                         lastIndex={lastIndexByCode.get(code) ?? -1}
-                                        color={colorByCode.get(code) || '#2dd4bf'}
+                                        color={colorByCode.get(code) || '#1a73e8'}
                                         kind={param.kind}
                                         stagger={si % 4}
                                       />
@@ -1840,7 +1840,7 @@ export function AtcPage() {
                                 strokeDasharray="7 4"
                                 strokeOpacity={0.95}
                                 dot={false}
-                                activeDot={{ r: 4, fill: TARGET_COLOR, stroke: '#0f2426' }}
+                                activeDot={{ r: 4, fill: TARGET_COLOR, stroke: '#ffffff' }}
                                 connectNulls
                                 legendType={activeCodes.length <= 4 ? 'line' : 'none'}
                               />
@@ -1878,11 +1878,11 @@ export function AtcPage() {
                             barCategoryGap={wideCompareAxis ? '18%' : '12%'}
                             barGap={4}
                           >
-                            <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
+                            <CartesianGrid stroke="rgba(30,64,120,0.08)" vertical={false} />
                             <XAxis
                               dataKey="name"
                               tick={{
-                                fill: '#c5ddd9',
+                                fill: '#94a3b8',
                                 fontSize: wideCompareAxis ? 13 : 11,
                                 fontWeight: wideCompareAxis ? 650 : 500,
                               }}
@@ -1912,7 +1912,7 @@ export function AtcPage() {
                               }}
                             />
                             <Legend
-                              wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }}
+                              wrapperStyle={{ fontSize: 11, color: '#1e293b', paddingTop: 4 }}
                             />
                             <Bar
                               dataKey="input"
@@ -1925,7 +1925,7 @@ export function AtcPage() {
                                 const code = officeCodeFromChartClick(data);
                                 if (code) openEditFor(code);
                               }}
-                              activeBar={{ fill: MU_BAR_COLORS.input, stroke: '#e8f3f1', strokeWidth: 1 }}
+                              activeBar={{ fill: MU_BAR_COLORS.input, stroke: '#1e293b', strokeWidth: 1 }}
                             >
                               <LabelList
                                 dataKey="input"
@@ -1949,7 +1949,7 @@ export function AtcPage() {
                                 const code = officeCodeFromChartClick(data);
                                 if (code) openEditFor(code);
                               }}
-                              activeBar={{ fill: MU_BAR_COLORS.demand, stroke: '#e8f3f1', strokeWidth: 1 }}
+                              activeBar={{ fill: MU_BAR_COLORS.demand, stroke: '#1e293b', strokeWidth: 1 }}
                             >
                               <LabelList
                                 dataKey="demand"
@@ -1973,7 +1973,7 @@ export function AtcPage() {
                                 const code = officeCodeFromChartClick(data);
                                 if (code) openEditFor(code);
                               }}
-                              activeBar={{ fill: MU_BAR_COLORS.collection, stroke: '#e8f3f1', strokeWidth: 1 }}
+                              activeBar={{ fill: MU_BAR_COLORS.collection, stroke: '#1e293b', strokeWidth: 1 }}
                             >
                               <LabelList
                                 dataKey="collection"
@@ -1997,11 +1997,11 @@ export function AtcPage() {
                               bottom: isMetricCompare ? 16 : wideCompareAxis ? 28 : 48,
                             }}
                           >
-                            <CartesianGrid stroke="rgba(180,220,210,0.1)" vertical={false} />
+                            <CartesianGrid stroke="rgba(30,64,120,0.08)" vertical={false} />
                             <XAxis
                               dataKey="name"
                               tick={{
-                                fill: '#c5ddd9',
+                                fill: '#94a3b8',
                                 fontSize: wideCompareAxis ? 13 : isMetricCompare ? 12 : 11,
                                 fontWeight: wideCompareAxis ? 650 : 500,
                               }}
@@ -2051,7 +2051,7 @@ export function AtcPage() {
                               />
                             )}
                             <Legend
-                              wrapperStyle={{ fontSize: 11, color: '#e8f3f1', paddingTop: 4 }}
+                              wrapperStyle={{ fontSize: 11, color: '#1e293b', paddingTop: 4 }}
                             />
                             <Bar
                               dataKey="value"
@@ -2070,7 +2070,7 @@ export function AtcPage() {
                               }}
                             >
                               {compareData.map((d) => (
-                                <Cell key={d.code} fill={d.fill || '#2dd4bf'} />
+                                <Cell key={d.code} fill={d.fill || '#1a73e8'} />
                               ))}
                               <LabelList
                                 dataKey="value"
@@ -2098,7 +2098,7 @@ export function AtcPage() {
                                   dot={{
                                     r: 5,
                                     fill: TARGET_COLOR,
-                                    stroke: '#0f2426',
+                                    stroke: '#ffffff',
                                     strokeWidth: 1.5,
                                   }}
                                   activeDot={{ r: 6 }}

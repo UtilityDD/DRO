@@ -192,46 +192,70 @@ export function AppShell() {
         ? `Div ${user.division_code}`
         : 'Region 341';
 
+  const initials = user.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase();
+
+  const logoutIcon = (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2M14 12H4M7 9l-3 3 3 3" />
+    </svg>
+  );
+
+  const userCard = (
+    <div className="sidebar-user">
+      <div className="sidebar-user-avatar" aria-hidden>
+        {initials}
+      </div>
+      <div className="sidebar-user-meta">
+        <strong>{user.name}</strong>
+        <span>{scope}</span>
+      </div>
+      <button type="button" className="sidebar-logout" aria-label="Sign out" onClick={() => logout()}>
+        {logoutIcon}
+      </button>
+    </div>
+  );
+
   return (
     <div className="app-shell">
-      <aside className="sidebar desktop-only">
-        <div className="brand">
+      <header className="app-bar">
+        <div className="brand desktop-only">
           <div className="brand-mark">DRO</div>
-          <div className="brand-sub">Darjeeling Region Ops</div>
+          <div className="brand-sub">Actionable Insight</div>
         </div>
-        <nav className="nav">
-          {visible.map((l) => (
-            <NavLink key={l.to} to={l.to} end={l.end} className={({ isActive }) => (isActive ? 'active' : '')}>
-              <span className="nav-icon">
-                <Icon name={l.icon} />
-              </span>
-              {l.label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="muted scope-label">Scope: {scope}</div>
-      </aside>
+        <div className="app-bar-text">
+          <div className="app-bar-brand">DRO</div>
+          <h1>{current?.label || 'DRO Ops'}</h1>
+        </div>
+        <button type="button" className="icon-btn mobile-only" aria-label="Sign out" onClick={() => logout()}>
+          {logoutIcon}
+        </button>
+      </header>
 
-      <div className="main">
-        <header className="app-bar">
-          <div className="app-bar-text">
-            <div className="app-bar-brand">DRO</div>
-            <div>
-              <h1>{current?.label || 'DRO Ops'}</h1>
-              <p>
-                {user.name} · {scope}
-              </p>
-            </div>
+      <div className="app-body">
+        <aside className="sidebar desktop-only">
+          <nav className="nav">
+            {visible.map((l) => (
+              <NavLink key={l.to} to={l.to} end={l.end} className={({ isActive }) => (isActive ? 'active' : '')}>
+                <span className="nav-icon">
+                  <Icon name={l.icon} />
+                </span>
+                {l.label}
+              </NavLink>
+            ))}
+          </nav>
+          {userCard}
+        </aside>
+
+        <div className="main">
+          <div className="page-content">
+            <Outlet />
           </div>
-          <button type="button" className="icon-btn" aria-label="Sign out" onClick={() => logout()}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2M14 12H4M7 9l-3 3 3 3" />
-            </svg>
-          </button>
-        </header>
-
-        <div className="page-content">
-          <Outlet />
         </div>
       </div>
 
@@ -261,6 +285,7 @@ export function AppShell() {
           <button type="button" className="sheet-backdrop" aria-label="Close" onClick={() => setMoreOpen(false)} />
           <div className="sheet-panel">
             <div className="sheet-handle" />
+            {userCard}
             <div className="sheet-title">More modules</div>
             <div className="sheet-grid">
               {moreLinks.map((l) => (
