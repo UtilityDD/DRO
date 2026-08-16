@@ -4,6 +4,7 @@ const { normalizeUser } = require('./permissions');
 const sb = require('./supabase');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
+const READONLY_FS = Boolean(process.env.VERCEL || process.env.NOW_REGION);
 
 const TABLES = {
   offices: 'offices',
@@ -28,6 +29,7 @@ const cache = Object.create(null);
 let initialized = false;
 
 function ensureDir() {
+  if (READONLY_FS) return;
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
@@ -58,8 +60,13 @@ function readLocal(name, fallback = []) {
 }
 
 function writeLocal(name, data) {
-  ensureDir();
-  fs.writeFileSync(filePath(name), JSON.stringify(data, null, 2), 'utf8');
+  if (READONLY_FS) return;
+  try {
+    ensureDir();
+    fs.writeFileSync(filePath(name), JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[store] local write skipped:', e.message);
+  }
 }
 
 function sanitizeRow(row) {

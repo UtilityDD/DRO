@@ -32,6 +32,7 @@ const { seedAll } = require('./seed_lib');
 const PORT = process.env.PORT || 8787;
 const app = express();
 
+app.set('trust proxy', 1);
 app.use(
   cors({
     origin: true,
@@ -49,6 +50,7 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
+      secure: process.env.VERCEL === '1' || process.env.NODE_ENV === 'production',
       maxAge: 1000 * 60 * 60 * 12,
     },
   })
@@ -175,20 +177,26 @@ function kpiPulse(user) {
 
 // ——— Auth ———
 app.post('/api/login', (req, res) => {
-  const username = String(req.body.username || '').trim();
-  const pin = String(req.body.pin || '').trim();
-  const users = readCollection('portal_users', []);
-  const raw = users.find(
-    (u) => u.username.toLowerCase() === username.toLowerCase() && String(u.pin) === pin
-  );
-  if (!raw) return res.status(401).json({ error: 'Invalid username or PIN' });
+  try {
+    const body = req.body || {};
+    const username = String(body.username || '').trim();
+    const pin = String(body.pin || '').trim();
+    const users = readCollection('portal_users', []);
+    const raw = users.find(
+      (u) => String(u.username || '').toLowerCase() === username.toLowerCase() && String(u.pin) === pin
+    );
+    if (!raw) return res.status(401).json({ error: 'Invalid username or PIN' });
 
-  raw.last_login = new Date().toISOString();
-  writeCollection('portal_users', users);
-  const user = publicUser(raw);
-  req.session.user = user;
-  logActivity(user.username, 'login', 'Signed in');
-  res.json({ ok: true, user });
+    raw.last_login = new Date().toISOString();
+    writeCollection('portal_users', users);
+    const user = publicUser(raw);
+    req.session.user = user;
+    logActivity(user.username, 'login', 'Signed in');
+    res.json({ ok: true, user });
+  } catch (e) {
+    console.error('[login]', e);
+    res.status(500).json({ error: e.message || 'Login failed' });
+  }
 });
 
 app.post('/api/logout', (req, res) => {
