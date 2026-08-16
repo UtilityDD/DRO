@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
-const session = require('express-session');
+const cookieSession = require('cookie-session');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const {
@@ -42,19 +42,19 @@ app.use(
 app.use(express.json({ limit: '15mb' }));
 app.use(cookieParser());
 app.use(
-  session({
+  cookieSession({
     name: 'dro_sid',
-    secret: process.env.SESSION_SECRET || 'dro-ops-dev-secret-change-me',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.VERCEL === '1' || process.env.NODE_ENV === 'production',
-      maxAge: 1000 * 60 * 60 * 12,
-    },
+    keys: [process.env.SESSION_SECRET || 'dro-ops-dev-secret-change-me'],
+    maxAge: 1000 * 60 * 60 * 12,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.VERCEL === '1' || process.env.NODE_ENV === 'production',
   })
 );
+
+function clearSession(req) {
+  req.session = null;
+}
 
 function ensureSeeded() {
   const offices = readCollection('offices', null);
@@ -90,7 +90,7 @@ function requireAuth(req, res, next) {
   const users = readUsers();
   const fresh = users.find((u) => u.username === req.session.user.username);
   if (!fresh) {
-    req.session.destroy(() => {});
+    clearSession(req);
     return res.status(401).json({ error: 'User missing' });
   }
   req.user = publicUser(fresh);
@@ -201,11 +201,10 @@ app.post('/api/login', (req, res) => {
 
 app.post('/api/logout', (req, res) => {
   const u = req.session?.user?.username;
-  req.session.destroy(() => {
-    if (u) logActivity(u, 'logout', 'Signed out');
-    res.clearCookie('dro_sid');
-    res.json({ ok: true });
-  });
+  if (u) logActivity(u, 'logout', 'Signed out');
+  clearSession(req);
+  res.clearCookie('dro_sid');
+  res.json({ ok: true });
 });
 
 app.get('/api/session', (req, res) => {
@@ -213,7 +212,7 @@ app.get('/api/session', (req, res) => {
   const users = readUsers();
   const fresh = users.find((u) => u.username === req.session.user.username);
   if (!fresh) {
-    req.session.destroy(() => {});
+    clearSession(req);
     return res.json({ user: null });
   }
   const user = publicUser(fresh);
