@@ -1,7 +1,7 @@
 {
-  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build -w dro-web",
   "outputDirectory": "apps/web/dist",
-  "installCommand": "npm install --include=dev",
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/index.js" }
   ]
