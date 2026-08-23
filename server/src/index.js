@@ -16,10 +16,13 @@ const {
   scopeFilter,
   readUsers,
   initStore,
+  ensureCollection,
+  isNscLoaded,
   refreshFromSupabase,
   storeMode,
   useSupabase,
   isReady,
+  isAuthReady,
 } = require('./store');
 const sb = require('./supabase');
 const {
@@ -65,24 +68,53 @@ app.use(
   })
 );
 
-const initPromise = initStore()
+let resolveAuthReady;
+const initAuthPromise = new Promise((resolve) => {
+  resolveAuthReady = resolve;
+});
+const initPromise = initStore({
+  onAuthReady: () => resolveAuthReady(),
+})
   .then(() => {
     ensureSeeded();
+    resolveAuthReady();
     console.log('[DRO] store ready');
   })
   .catch((e) => {
+    resolveAuthReady();
     console.error('[DRO] initStore failed:', e);
     throw e;
   });
 
+const AUTH_PATHS = new Set(['/api/login', '/api/session', '/api/logout', '/api/health']);
+
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api') || req.path === '/api/health') return next();
+  const authOnly = AUTH_PATHS.has(req.path);
+  if (authOnly) {
+    if (isAuthReady()) return next();
+    const timer = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(503).json({ error: 'API is starting. Wait a moment and retry.' });
+      }
+    }, 20000);
+    initAuthPromise
+      .then(() => {
+        clearTimeout(timer);
+        if (!res.headersSent) next();
+      })
+      .catch((e) => {
+        clearTimeout(timer);
+        if (!res.headersSent) res.status(503).json({ error: e.message || 'Store failed to start' });
+      });
+    return;
+  }
   if (isReady()) return next();
   const timer = setTimeout(() => {
     if (!res.headersSent) {
-      res.status(503).json({ error: 'API is still loading NSC data. Wait a few seconds and retry.' });
+      res.status(503).json({ error: 'API is still starting. Wait a few seconds and retry.' });
     }
-  }, 90000);
+  }, 30000);
   initPromise
     .then(() => {
       clearTimeout(timer);
@@ -118,6 +150,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     ready: isReady(),
+    auth_ready: isAuthReady(),
     store: storeMode(),
     supabase: sb.status(),
   });
@@ -236,8 +269,38 @@ function filterScoped(user, rows) {
   return enrichRows(rows.filter((r) => scopeFilter(user, r)));
 }
 
-function kpiPulse(user) {
-  const nsc = filterScoped(user, readCollection('nsc_cases', []));
+function nscScopeQuery(user) {
+  const role = String(user?.role || '').toLowerCase();
+  if (role === 'ccc' && user.ccc_code) return `ccc_code=eq.${encodeURIComponent(user.ccc_code)}`;
+  if (role === 'division' && user.division_code) {
+    return `division_code=eq.${encodeURIComponent(user.division_code)}`;
+  }
+  return '';
+}
+
+function joinQs(...parts) {
+  return parts.filter(Boolean).join('&');
+}
+
+async function nscCounts(user) {
+  if (isNscLoaded()) {
+    const nsc = filterScoped(user, readCollection('nsc_cases', []));
+    return {
+      pending: nsc.filter((r) => nscLib.isPendingQueue(r)).length,
+      withheld: nsc.filter((r) => String(r.status || '').toLowerCase() === 'withheld').length,
+    };
+  }
+  if (!useSupabase()) return { pending: 0, withheld: 0 };
+  const scope = nscScopeQuery(user);
+  const [pending, withheld] = await Promise.all([
+    sb.countRows('nsc_cases', joinQs('status=eq.pending', scope)),
+    sb.countRows('nsc_cases', joinQs('status=eq.withheld', scope)),
+  ]);
+  return { pending, withheld };
+}
+
+async function kpiPulse(user) {
+  const nsc = await nscCounts(user);
   const disco = filterScoped(user, readCollection('disconnections', []));
   const griev = filterScoped(user, readCollection('grievances', [])).filter((r) => !isDemoGrievance(r));
   const tech = filterScoped(user, readCollection('tech_works', []));
@@ -250,8 +313,8 @@ function kpiPulse(user) {
   const spotBilled = spot.reduce((s, r) => s + (r.billed_count || 0), 0);
 
   return {
-    pending_nsc: nsc.filter((r) => nscLib.isPendingQueue(r)).length,
-    withheld_nsc: nsc.filter((r) => String(r.status || '').toLowerCase() === 'withheld').length,
+    pending_nsc: nsc.pending,
+    withheld_nsc: nsc.withheld,
     pending_disco: disco.filter((r) => r.status === 'pending').length,
     open_grievances: griev.filter((r) => r.status === 'open').length,
     open_tech_works: tech.filter((r) => r.status !== 'completed').length,
@@ -319,8 +382,12 @@ app.get('/api/auth/catalog', requireAuth, (req, res) => {
 });
 
 // ——— Core ———
-app.get('/api/pulse', requireAuth, (req, res) => {
-  res.json({ pulse: kpiPulse(req.user) });
+app.get('/api/pulse', requireAuth, async (req, res) => {
+  try {
+    res.json({ pulse: await kpiPulse(req.user) });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Pulse failed' });
+  }
 });
 
 app.get('/api/offices', requireAuth, (req, res) => {
@@ -547,10 +614,11 @@ function nscQueryFromReq(req) {
   };
 }
 
-app.get('/api/nsc', requireAuth, (req, res) => {
+app.get('/api/nsc', requireAuth, async (req, res) => {
   if (!canView(req.user, 'nsc')) {
     return res.status(403).json({ error: 'No view permission for nsc' });
   }
+  await ensureCollection('nsc_cases');
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
   const q = nscQueryFromReq(req);
   let out = nscLib.filterNscRows(rows, q);
@@ -570,14 +638,16 @@ app.get('/api/nsc', requireAuth, (req, res) => {
   });
 });
 
-app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), (req, res) => {
+app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+  await ensureCollection('nsc_cases');
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
   res.json(nscLib.buildNscDesk(rows, nscQueryFromReq(req)));
 });
 
-app.get('/api/nsc/export', requireAuth, requirePerm('nsc', 'view'), (req, res) => {
+app.get('/api/nsc/export', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
   req.setTimeout(180000);
   res.setTimeout(180000);
+  await ensureCollection('nsc_cases');
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
   const filtered = nscLib.filterNscRows(rows, nscQueryFromReq(req));
   const cols = Object.keys(nscLib.nscExportRow({}));
@@ -877,8 +947,53 @@ app.get('/api/activity', requireAuth, requireAdmin, (req, res) => {
   res.json({ rows: readCollection('activity_logs', []) });
 });
 
-app.get('/api/nsc/summary', requireAuth, requirePerm('nsc', 'view'), (req, res) => {
-  const rows = filterScoped(req.user, readCollection('nsc_cases', []));
+app.get('/api/nsc/summary', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+  try {
+    if (!isNscLoaded() && useSupabase()) {
+      const offices = readCollection('offices', []).filter(
+        (o) => o.office_type === 'division' && scopeFilter(req.user, o)
+      );
+      const scope = nscScopeQuery(req.user);
+      const jobs = [
+        sb.countRows('nsc_cases', joinQs('status=eq.pending', scope)),
+        sb.countRows('nsc_cases', joinQs('status=eq.withheld', scope)),
+      ];
+      for (const d of offices) {
+        const extra = String(req.user.role || '').toLowerCase() === 'ccc' ? scope : '';
+        jobs.push(
+          sb.countRows(
+            'nsc_cases',
+            joinQs('status=eq.pending', `division_code=eq.${encodeURIComponent(d.code)}`, extra)
+          )
+        );
+        jobs.push(
+          sb.countRows(
+            'nsc_cases',
+            joinQs('status=eq.withheld', `division_code=eq.${encodeURIComponent(d.code)}`, extra)
+          )
+        );
+      }
+      const nums = await Promise.all(jobs);
+      const pending = nums[0];
+      const withheld = nums[1];
+      const byDivision = offices.map((d, i) => ({
+        division_code: d.code,
+        division_name: d.name,
+        pending: nums[2 + i * 2] || 0,
+        withheld: nums[3 + i * 2] || 0,
+        total: (nums[2 + i * 2] || 0) + (nums[3 + i * 2] || 0),
+        avg_delay: 0,
+      }));
+      return res.json({
+        byStatus: { pending, withheld },
+        byDivision,
+        total: pending + withheld,
+        pending,
+        withheld,
+        report_date: null,
+      });
+    }
+    const rows = filterScoped(req.user, readCollection('nsc_cases', []));
   const byDivision = {};
   const byStatus = {};
   let pending = 0;
@@ -921,6 +1036,9 @@ app.get('/api/nsc/summary', requireAuth, requirePerm('nsc', 'view'), (req, res) 
     withheld,
     report_date: rows[0]?.report_date || null,
   });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'NSC summary failed' });
+  }
 });
 
 app.post('/api/nsc/parse', requireAuth, requirePerm('nsc', 'upload'), nscUpload.single('file'), (req, res) => {
@@ -1737,3 +1855,4 @@ if (require.main === module) {
 
 module.exports = app;
 module.exports.initPromise = initPromise;
+module.exports.initAuthPromise = initAuthPromise;

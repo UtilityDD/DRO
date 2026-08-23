@@ -25,8 +25,15 @@ const TABLES = {
 /** Never fall back to local JSON for these when Supabase is configured. */
 const CLOUD_ONLY = new Set(['atc_snapshots']);
 
+/** Tables needed before login/session can succeed. */
+const AUTH_TABLES = ['offices', 'portal_users'];
+/** Too large to pull on every Vercel cold start — load on first NSC request. */
+const DEFER_TABLES = new Set(['nsc_cases']);
+
+const loading = Object.create(null);
 /** In-memory cache when Supabase is active */
 const cache = Object.create(null);
+let authReady = false;
 let initialized = false;
 
 function ensureDir() {
@@ -158,71 +165,112 @@ function packGrievanceCloudRow(row) {
 
 /**
  * Load from your Supabase project into memory (+ local mirror).
- * Call once at server boot before accepting traffic.
+ * Auth tables first so login is not blocked by the 71k NSC snapshot.
  */
-async function initStore() {
+async function loadTable(name) {
+  const table = TABLES[name];
+  if (!table) return;
+  try {
+    const local = name === 'nsc_cases' ? readLocal(name, []) : null;
+    if (name === 'nsc_cases' && local && local.length > 500) {
+      cache[name] = hydrateNscRows(local);
+      console.log(`[store] loaded ${table} from local: ${cache[name].length} rows (skipped supabase pull)`);
+      return;
+    }
+    const rows = await sb.selectAll(table);
+    const remote = Array.isArray(rows) ? rows : [];
+    const localRows = local || readLocal(name, []);
+    if (CLOUD_ONLY.has(name)) {
+      cache[name] = remote;
+      writeLocal(name, cache[name]);
+      console.log(`[store] loaded ${table} (cloud-only): ${cache[name].length} rows`);
+      return;
+    }
+    if (remote.length === 0 && localRows.length > 0) {
+      cache[name] =
+        name === 'grievances' ? localRows.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(localRows) : localRows;
+      console.warn(`[store] ${table}: supabase empty, keeping local mirror (${localRows.length} rows)`);
+    } else {
+      cache[name] =
+        name === 'grievances' ? remote.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(remote) : remote;
+      if (!(name === 'nsc_cases' && localRows.length === cache[name].length)) {
+        writeLocal(name, cache[name]);
+      }
+      console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
+    }
+  } catch (e) {
+    if (CLOUD_ONLY.has(name)) {
+      cache[name] = [];
+      console.error(`[store] ${table} cloud load failed (no local fallback):`, e.message);
+    } else {
+      console.warn(`[store] ${table} load failed, using local mirror:`, e.message);
+      const fallback = readLocal(name, []);
+      cache[name] =
+        name === 'grievances'
+          ? fallback.map(hydrateGrievance)
+          : name === 'nsc_cases'
+            ? hydrateNscRows(fallback)
+            : fallback;
+    }
+  }
+}
+
+async function initStore(opts = {}) {
+  const onAuthReady = typeof opts.onAuthReady === 'function' ? opts.onAuthReady : null;
   if (!useSupabase()) {
+    authReady = true;
     initialized = true;
+    if (onAuthReady) onAuthReady();
     console.log('[store] Mode: local JSON (Supabase not configured)');
     return { mode: 'local' };
   }
   console.log('[store] Mode: supabase →', sb.status().host);
   try {
-    await sb.resolveAtcSchema();
-  } catch (e) {
-    console.warn('[store] schema probe failed:', e.message);
-  }
-  for (const [name, table] of Object.entries(TABLES)) {
+    for (const name of AUTH_TABLES) {
+      await loadTable(name);
+    }
+    authReady = true;
+    if (onAuthReady) onAuthReady();
+    console.log('[store] auth ready');
     try {
-      const local = name === 'nsc_cases' ? readLocal(name, []) : null;
-      // 71k NSC rows: boot from local JSON so login is not blocked on a full Supabase pull + 68MB rewrite.
-      if (name === 'nsc_cases' && local && local.length > 500) {
-        cache[name] = hydrateNscRows(local);
-        console.log(`[store] loaded ${table} from local: ${cache[name].length} rows (skipped supabase pull)`);
-        continue;
-      }
-      const rows = await sb.selectAll(table);
-      const remote = Array.isArray(rows) ? rows : [];
-      const localRows = local || readLocal(name, []);
-      if (CLOUD_ONLY.has(name)) {
-        cache[name] = remote;
-        writeLocal(name, cache[name]);
-        console.log(`[store] loaded ${table} (cloud-only): ${cache[name].length} rows`);
-        continue;
-      }
-      // Never wipe a populated local mirror with an empty remote (schema lag / failed push).
-      if (remote.length === 0 && localRows.length > 0) {
-        cache[name] =
-          name === 'grievances' ? localRows.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(localRows) : localRows;
-        console.warn(
-          `[store] ${table}: supabase empty, keeping local mirror (${localRows.length} rows)`
-        );
-      } else {
-        cache[name] =
-          name === 'grievances' ? remote.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(remote) : remote;
-        if (!(name === 'nsc_cases' && localRows.length === cache[name].length)) {
-          writeLocal(name, cache[name]);
-        }
-        console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
-      }
+      await sb.resolveAtcSchema();
     } catch (e) {
-      if (CLOUD_ONLY.has(name)) {
-        cache[name] = [];
-        console.error(`[store] ${table} cloud load failed (no local fallback):`, e.message);
-      } else {
-        console.warn(`[store] ${table} load failed, using local mirror:`, e.message);
-        const fallback = readLocal(name, []);
-        cache[name] =
-          name === 'grievances'
-            ? fallback.map(hydrateGrievance)
-            : name === 'nsc_cases'
-              ? hydrateNscRows(fallback)
-              : fallback;
+      console.warn('[store] schema probe failed:', e.message);
+    }
+    for (const name of Object.keys(TABLES)) {
+      if (AUTH_TABLES.includes(name) || DEFER_TABLES.has(name)) continue;
+      await loadTable(name);
+    }
+    if (!READONLY_FS) {
+      const localNsc = readLocal('nsc_cases', []);
+      if (localNsc.length > 500) {
+        cache.nsc_cases = hydrateNscRows(localNsc);
+        console.log(`[store] warmed nsc_cases from local: ${cache.nsc_cases.length} rows`);
       }
     }
+  } catch (e) {
+    authReady = true;
+    if (onAuthReady) onAuthReady();
+    throw e;
   }
   initialized = true;
   return { mode: 'supabase', host: sb.status().host };
+}
+
+async function ensureCollection(name) {
+  if (!useSupabase()) return readCollection(name, []);
+  if (cache[name] !== undefined) return cache[name];
+  if (!loading[name]) {
+    loading[name] = loadTable(name).finally(() => {
+      delete loading[name];
+    });
+  }
+  await loading[name];
+  return cache[name] || [];
+}
+
+function isNscLoaded() {
+  return Array.isArray(cache.nsc_cases);
 }
 
 /**
@@ -432,6 +480,8 @@ module.exports = {
   useSupabase,
   storeMode,
   initStore,
+  ensureCollection,
+  isNscLoaded,
   refreshFromSupabase,
   readCollection,
   writeCollection,
@@ -444,5 +494,6 @@ module.exports = {
   saveUserRecord,
   pushAllLocalToSupabase,
   isReady: () => initialized,
+  isAuthReady: () => authReady || initialized,
   isCloudOnly: (name) => CLOUD_ONLY.has(name),
 };

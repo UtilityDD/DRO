@@ -104,11 +104,42 @@ async function querySupabase(apiPath, options = {}) {
   }
 }
 
-async function selectAll(table, order = 'id.asc') {
+async function countRows(table, query = '') {
+  if (!isConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+  const qs = query
+    ? query.includes('select=')
+      ? query
+      : `select=id&${query}`
+    : 'select=id';
+  const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${table}?${qs}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Accept-Profile': SCHEMA,
+      Prefer: 'count=exact',
+      Range: '0-0',
+      'Range-Unit': 'items',
+    },
+  });
+  if (!response.ok && response.status !== 206) {
+    const errText = await response.text();
+    throw new Error(`Supabase HTTP ${response.status}: ${errText}`);
+  }
+  const cr = response.headers.get('content-range') || '';
+  const m = cr.match(/\/(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+async function selectAll(table, order = 'id.asc', select = '*') {
   const page = 1000;
   const all = [];
+  const sel = select || '*';
   for (let from = 0; from < 500000; from += page) {
-    const q = order ? `${table}?select=*&order=${order}` : `${table}?select=*`;
+    const q = `${table}?select=${encodeURIComponent(sel)}${order ? `&order=${order}` : ''}`;
     const rows = await querySupabase(q, {
       headers: {
         Range: `${from}-${from + page - 1}`,
@@ -278,6 +309,7 @@ module.exports = {
   status,
   querySupabase,
   selectAll,
+  countRows,
   resolveAtcSchema,
   upsertRows,
   replaceTable,
