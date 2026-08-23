@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api, AUTH_MODULES, canUploadModule } from '../api';
 import { useAuth } from '../auth';
@@ -71,9 +72,18 @@ const GUIDE: Record<string, Guide> = {
     ],
   },
   nsc: {
-    title: 'NSC — Do & Don’t',
-    dos: ['Use the template columns.', 'One row per application.'],
-    donts: ['Don’t leave application_no blank.', 'Don’t mix other modules in the same file.'],
+    title: 'Pending NSC — Do & Don’t',
+    dos: [
+      'Upload the SAP pending-NSC dump (Working / Accepted / Withheld).',
+      'Enter the report date from the file name (e.g. 22-08-2026).',
+      'Malda / other-zone files are remapped onto Darjeeling Region’s 21 CCCs.',
+      'Re-upload replaces the whole pending snapshot.',
+    ],
+    donts: [
+      'Don’t upload completed-connection history — this desk is pending only.',
+      'Don’t mix other modules in the same file.',
+      'Don’t password-protect the workbook.',
+    ],
   },
   disco: {
     title: 'Disconnection — Do & Don’t',
@@ -252,9 +262,14 @@ function buildAtcDiff(
 
 export function UploadPage() {
   const { user } = useAuth();
-  const allowedModules = AUTH_MODULES.filter((m) => canUploadModule(user, m.id));
+  const [searchParams] = useSearchParams();
+  const allowedModules = AUTH_MODULES.filter(
+    (m) => m.id !== 'grievance' && canUploadModule(user, m.id)
+  );
+  const requestedModule = searchParams.get('module') || '';
   const [module, setModule] = useState<string>(
-    allowedModules.find((m) => m.uploadKey === 'atc')?.uploadKey ||
+    allowedModules.find((m) => m.uploadKey === requestedModule)?.uploadKey ||
+      allowedModules.find((m) => m.uploadKey === 'atc')?.uploadKey ||
       allowedModules[0]?.uploadKey ||
       'nsc'
   );
@@ -282,10 +297,23 @@ export function UploadPage() {
   });
   const [cloudHost, setCloudHost] = useState('');
   const [storeMode, setStoreMode] = useState<'supabase' | 'local'>('local');
+  const [nscReportDate, setNscReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [nscParseId, setNscParseId] = useState('');
+  const [nscPreview, setNscPreview] = useState<{
+    filename: string;
+    report_date: string;
+    remapped: boolean;
+    total: number;
+    ccc_count: number;
+    by_queue: Record<string, number>;
+    by_division: { key: string; count: number }[];
+    by_quotation_slab: { key: string; count: number }[];
+  } | null>(null);
 
   const meta = AUTH_MODULES.find((m) => m.uploadKey === module) || AUTH_MODULES[0];
   const allowed = canUploadModule(user, meta.id);
   const isAtc = module === 'atc';
+  const isNsc = module === 'nsc';
   const moduleGuide = GUIDE[module] || GUIDE.atc;
   const guide = activeGuide || moduleGuide;
 
@@ -425,6 +453,58 @@ export function UploadPage() {
       setMessage(`Ready: ${json.length} rows`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to read file');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onNscFile = async (file: File) => {
+    setError('');
+    setMessage('');
+    setNscParseId('');
+    setNscPreview(null);
+    setBusy(true);
+    setMessage('Parsing workbook… this can take a minute for large SAP dumps.');
+    try {
+      const parsed = await api.nscParse(file, nscReportDate);
+      setNscParseId(parsed.parse_id);
+      setNscPreview(parsed.preview);
+      const q = parsed.preview.by_queue || {};
+      setMessage(
+        `${parsed.preview.total.toLocaleString('en-IN')} applications · pending ${q.pending || 0} · withheld ${q.withheld || 0}${
+          parsed.preview.remapped ? ' · remapped onto DRO 21 CCCs' : ''
+        }`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to parse NSC file');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const commitNsc = async () => {
+    if (!nscParseId) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.nscCommit(nscParseId);
+      const host = res.cloud?.host ? ` (${res.cloud.host})` : '';
+      if (res.cloud?.persisted === false) {
+        setMessage(`Saved ${res.upserted.toLocaleString('en-IN')} rows locally`);
+        setError(res.cloud.error ? `Supabase upload failed: ${res.cloud.error}` : 'Supabase upload failed — data kept locally.');
+      } else {
+        setMessage(`Saved ${res.upserted.toLocaleString('en-IN')} pending NSC rows${host}`);
+      }
+      setNscParseId('');
+      setNscPreview(null);
+      try {
+        const b = await api.batches();
+        setBatches(b.rows);
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save NSC');
     } finally {
       setBusy(false);
     }
@@ -596,6 +676,8 @@ export function UploadPage() {
                 setRows([]);
                 setIaSlot(null);
                 setIbSlot(null);
+                setNscParseId('');
+                setNscPreview(null);
                 setMessage('');
                 setError('');
               }}
@@ -660,7 +742,42 @@ export function UploadPage() {
           </div>
         )}
 
-        {!isAtc && allowed && (
+        {isNsc && allowed && (
+          <div className="upload-nsc">
+            <label className="upload-file-label">
+              <span>Report date (as on)</span>
+              <input type="date" value={nscReportDate} onChange={(e) => setNscReportDate(e.target.value)} />
+            </label>
+            <label className="upload-file-label">
+              <span>Pending NSC file</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.xlsb,.csv"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onNscFile(f);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            <button type="button" className="btn" disabled={!nscParseId || busy} onClick={commitNsc}>
+              {busy ? busyLabel : actionLabel}
+            </button>
+            {nscPreview && (
+              <div className="nsc-preview muted">
+                <p>
+                  {nscPreview.filename} · {nscPreview.total.toLocaleString('en-IN')} rows · {nscPreview.ccc_count} CCCs
+                  {nscPreview.remapped ? ' · geography remapped to DRO' : ''}
+                </p>
+                <p>
+                  {nscPreview.by_division.map((d) => `${d.key} ${d.count.toLocaleString('en-IN')}`).join(' · ')}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isAtc && !isNsc && allowed && (
           <div className="upload-generic">
             <label className="upload-file-label">
               <span>File</span>

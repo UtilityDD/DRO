@@ -1,9 +1,13 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 const express = require('express');
 const cookieSession = require('cookie-session');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
+const multer = require('multer');
+const nscLib = require('./nsc_parse');
 const {
   readCollection,
   writeCollection,
@@ -15,6 +19,7 @@ const {
   refreshFromSupabase,
   storeMode,
   useSupabase,
+  isReady,
 } = require('./store');
 const sb = require('./supabase');
 const {
@@ -26,11 +31,19 @@ const {
   canUpload,
   canEdit,
   uploadRouteToModule,
+  isAdmin,
 } = require('./permissions');
-const { seedAll } = require('./seed_lib');
+const { seedAll, sampleSubstations } = require('./seed_lib');
 
 const PORT = process.env.PORT || 8787;
 const app = express();
+
+const nscTmpDir = path.join(os.tmpdir(), 'dro-nsc');
+fs.mkdirSync(nscTmpDir, { recursive: true });
+const nscUpload = multer({
+  dest: nscTmpDir,
+  limits: { fileSize: 60 * 1024 * 1024 },
+});
 
 app.set('trust proxy', 1);
 app.use(
@@ -52,6 +65,35 @@ app.use(
   })
 );
 
+const initPromise = initStore()
+  .then(() => {
+    ensureSeeded();
+    console.log('[DRO] store ready');
+  })
+  .catch((e) => {
+    console.error('[DRO] initStore failed:', e);
+    throw e;
+  });
+
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api') || req.path === '/api/health') return next();
+  if (isReady()) return next();
+  const timer = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(503).json({ error: 'API is still loading NSC data. Wait a few seconds and retry.' });
+    }
+  }, 90000);
+  initPromise
+    .then(() => {
+      clearTimeout(timer);
+      if (!res.headersSent) next();
+    })
+    .catch((e) => {
+      clearTimeout(timer);
+      if (!res.headersSent) res.status(503).json({ error: e.message || 'Store failed to start' });
+    });
+});
+
 function clearSession(req) {
   req.session = null;
 }
@@ -65,14 +107,37 @@ function ensureSeeded() {
       console.log('[DRO] Auto-seeded from data/office_map.json');
     }
   }
+  const substations = readCollection('substations', []);
+  if (!Array.isArray(substations) || !substations.length) {
+    writeCollection('substations', sampleSubstations());
+    console.log('[DRO] Seeded 33/11 kV substations under DRO divisions');
+  }
 }
 
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
+    ready: isReady(),
     store: storeMode(),
     supabase: sb.status(),
   });
+});
+
+app.get('/api/powermap/config', requireAuth, async (req, res) => {
+  const pub = sb.publicPowerMapConfig();
+  let live = { ok: false, reason: 'not probed' };
+  try {
+    live = await sb.probePowerMap();
+  } catch (e) {
+    live = { ok: false, reason: e.message || 'probe failed' };
+  }
+  const schema =
+    String(live.table || '').startsWith('powermap.') || String(live.table || '') === 'v_substations'
+      ? 'powermap'
+      : String(live.table || '').startsWith('pm_')
+        ? 'public'
+        : pub.schema;
+  res.json({ ...pub, schema, live });
 });
 
 function publicUser(u) {
@@ -137,12 +202,34 @@ function officeName(code) {
   return offices.find((o) => String(o.code) === String(code))?.name || code;
 }
 
+function officeNameMap() {
+  const offices = readCollection('offices', []);
+  return new Map(offices.map((o) => [String(o.code), o.name]));
+}
+
 function enrichRows(rows) {
-  return rows.map((r) => ({
-    ...r,
-    ccc_name: r.ccc_code ? officeName(r.ccc_code) : '',
-    division_name: r.division_code ? officeName(r.division_code) : '',
-  }));
+  const names = officeNameMap();
+  return rows.map((r) => {
+    if (r.ccc_name && r.division_name) return r;
+    return {
+      ...r,
+      ccc_name: r.ccc_name || (r.ccc_code ? names.get(String(r.ccc_code)) || r.ccc_code : ''),
+      division_name: r.division_name || (r.division_code ? names.get(String(r.division_code)) || r.division_code : ''),
+    };
+  });
+}
+
+function droCccList() {
+  const offices = readCollection('offices', []);
+  const divs = officeNameMap();
+  return offices
+    .filter((o) => o.office_type === 'ccc')
+    .map((o) => ({
+      code: String(o.code),
+      name: o.name,
+      division_code: String(o.division_code || ''),
+      division_name: divs.get(String(o.division_code)) || o.division_code || '',
+    }));
 }
 
 function filterScoped(user, rows) {
@@ -152,7 +239,7 @@ function filterScoped(user, rows) {
 function kpiPulse(user) {
   const nsc = filterScoped(user, readCollection('nsc_cases', []));
   const disco = filterScoped(user, readCollection('disconnections', []));
-  const griev = filterScoped(user, readCollection('grievances', []));
+  const griev = filterScoped(user, readCollection('grievances', [])).filter((r) => !isDemoGrievance(r));
   const tech = filterScoped(user, readCollection('tech_works', []));
   const spot = filterScoped(user, readCollection('spot_billing', []));
   const consumers = filterScoped(user, readCollection('consumer_master', []));
@@ -163,7 +250,8 @@ function kpiPulse(user) {
   const spotBilled = spot.reduce((s, r) => s + (r.billed_count || 0), 0);
 
   return {
-    pending_nsc: nsc.filter((r) => r.status === 'pending' || r.status === 'in_progress').length,
+    pending_nsc: nsc.filter((r) => nscLib.isPendingQueue(r)).length,
+    withheld_nsc: nsc.filter((r) => String(r.status || '').toLowerCase() === 'withheld').length,
     pending_disco: disco.filter((r) => r.status === 'pending').length,
     open_grievances: griev.filter((r) => r.status === 'open').length,
     open_tech_works: tech.filter((r) => r.status !== 'completed').length,
@@ -290,6 +378,139 @@ app.get('/api/hierarchy', requireAuth, (req, res) => {
   res.json({ region, divisions: filtered });
 });
 
+function filterSubstations(user, rows) {
+  const role = String(user?.role || '').toLowerCase();
+  if (role === 'admin' || role === 'region') return rows;
+  const div = String(user?.division_code || '').trim();
+  if (!div) return [];
+  return rows.filter((r) => String(r.division_code || '') === div);
+}
+
+function hydrateSubstation(row, offices) {
+  const list = offices || readCollection('offices', []);
+  const div = list.find((o) => o.office_type === 'division' && String(o.code) === String(row.division_code || ''));
+  const ccc = list.find((o) => o.office_type === 'ccc' && String(o.code) === String(row.ccc_code || ''));
+  return {
+    ...row,
+    division_name: div?.name || row.division_name || '',
+    ccc_name: ccc?.name || row.ccc_name || '',
+  };
+}
+
+app.get('/api/substations', requireAuth, (req, res) => {
+  const offices = readCollection('offices', []);
+  const rows = filterSubstations(req.user, readCollection('substations', [])).map((r) =>
+    hydrateSubstation(r, offices)
+  );
+  const byDivision = {};
+  for (const r of rows) {
+    const key = String(r.division_code || 'unassigned');
+    if (!byDivision[key]) {
+      byDivision[key] = { division_code: key, division_name: r.division_name || key, count: 0, capacity_mva: 0 };
+    }
+    byDivision[key].count += 1;
+    byDivision[key].capacity_mva += Number(r.capacity_mva) || 0;
+  }
+  res.json({
+    rows,
+    total: rows.length,
+    by_division: Object.values(byDivision).map((d) => ({
+      ...d,
+      capacity_mva: Math.round(d.capacity_mva * 100) / 100,
+    })),
+    can_edit: String(req.user?.role || '').toLowerCase() === 'admin',
+  });
+});
+
+const SS_FIELDS = [
+  'name',
+  'voltage_kv',
+  'capacity_mva',
+  'division_code',
+  'ccc_code',
+  'district',
+  'latitude',
+  'longitude',
+  'feeder_count',
+  'status',
+  'commissioned_on',
+  'remarks',
+];
+
+function applySubstationPatch(row, body, offices) {
+  const next = { ...row };
+  for (const key of SS_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+    let val = body[key];
+    if (key === 'capacity_mva' || key === 'latitude' || key === 'longitude' || key === 'feeder_count') {
+      if (val === '' || val == null) val = key === 'feeder_count' ? null : null;
+      else {
+        const n = Number(val);
+        val = Number.isFinite(n) ? n : row[key];
+      }
+    } else if (val == null) {
+      val = '';
+    } else {
+      val = String(val).trim();
+    }
+    next[key] = val;
+  }
+  const div = offices.find((o) => o.office_type === 'division' && String(o.code) === String(next.division_code || ''));
+  const ccc = offices.find((o) => o.office_type === 'ccc' && String(o.code) === String(next.ccc_code || ''));
+  next.division_name = div?.name || next.division_name || '';
+  next.ccc_name = ccc?.name || '';
+  if (ccc && String(ccc.division_code) !== String(next.division_code)) {
+    next.ccc_code = '';
+    next.ccc_name = '';
+  }
+  next.updated_at = new Date().toISOString();
+  return next;
+}
+
+app.post('/api/substations', requireAuth, requireAdmin, (req, res) => {
+  const offices = readCollection('offices', []);
+  const rows = readCollection('substations', []);
+  const row = applySubstationPatch(
+    {
+      id: nextId(rows),
+      voltage_kv: '33/11',
+      status: 'in_service',
+      source: 'DRO admin',
+      district: 'Darjeeling',
+    },
+    req.body || {},
+    offices
+  );
+  if (!row.name) return res.status(400).json({ error: 'Name is required' });
+  rows.push(row);
+  writeCollection('substations', rows);
+  logActivity(req.user.username, 'substation_create', row.name);
+  res.json({ row: hydrateSubstation(row, offices) });
+});
+
+app.patch('/api/substations/:id', requireAuth, requireAdmin, (req, res) => {
+  const offices = readCollection('offices', []);
+  const rows = readCollection('substations', []);
+  const idx = rows.findIndex((r) => String(r.id) === String(req.params.id));
+  if (idx < 0) return res.status(404).json({ error: 'Not found' });
+  const row = applySubstationPatch(rows[idx], req.body || {}, offices);
+  if (!row.name) return res.status(400).json({ error: 'Name is required' });
+  rows[idx] = row;
+  writeCollection('substations', rows);
+  logActivity(req.user.username, 'substation_update', row.name);
+  res.json({ row: hydrateSubstation(row, offices) });
+});
+
+app.delete('/api/substations/:id', requireAuth, requireAdmin, (req, res) => {
+  const rows = readCollection('substations', []);
+  const idx = rows.findIndex((r) => String(r.id) === String(req.params.id));
+  if (idx < 0) return res.status(404).json({ error: 'Not found' });
+  const [removed] = rows.splice(idx, 1);
+  writeCollection('substations', rows);
+  logActivity(req.user.username, 'substation_delete', removed.name);
+  res.json({ ok: true });
+});
+
 function listModule(collection, moduleId) {
   return (req, res) => {
     if (!canView(req.user, moduleId)) {
@@ -312,9 +533,98 @@ function listModule(collection, moduleId) {
   };
 }
 
-app.get('/api/nsc', requireAuth, listModule('nsc_cases', 'nsc'));
+function nscQueryFromReq(req) {
+  return {
+    queue: req.query.queue,
+    clock: req.query.clock,
+    division: req.query.division,
+    ccc: req.query.ccc,
+    class: req.query.class,
+    slab: req.query.slab,
+    time: req.query.time,
+    q: req.query.q,
+    status: req.query.status,
+  };
+}
+
+app.get('/api/nsc', requireAuth, (req, res) => {
+  if (!canView(req.user, 'nsc')) {
+    return res.status(403).json({ error: 'No view permission for nsc' });
+  }
+  const rows = filterScoped(req.user, readCollection('nsc_cases', []));
+  const q = nscQueryFromReq(req);
+  let out = nscLib.filterNscRows(rows, q);
+  if (q.status) {
+    out = out.filter((r) => String(r.status) === String(q.status) || String(r.sap_status) === String(q.status));
+  }
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 80));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  res.json({
+    rows: out.slice(offset, offset + limit).map(nscLib.nscListRow),
+    total: out.length,
+    limit,
+    offset,
+    report_date: rows[0]?.report_date || null,
+    can_edit: canEdit(req.user, 'nsc'),
+    can_upload: canUpload(req.user, 'nsc'),
+  });
+});
+
+app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), (req, res) => {
+  const rows = filterScoped(req.user, readCollection('nsc_cases', []));
+  res.json(nscLib.buildNscDesk(rows, nscQueryFromReq(req)));
+});
+
+app.get('/api/nsc/export', requireAuth, requirePerm('nsc', 'view'), (req, res) => {
+  req.setTimeout(180000);
+  res.setTimeout(180000);
+  const rows = filterScoped(req.user, readCollection('nsc_cases', []));
+  const filtered = nscLib.filterNscRows(rows, nscQueryFromReq(req));
+  const cols = Object.keys(nscLib.nscExportRow({}));
+  const header = cols.join(',');
+  const body = filtered
+    .map((r) => {
+      const o = nscLib.nscExportRow(r);
+      return cols.map((k) => `"${String(o[k] ?? '').replace(/"/g, '""')}"`).join(',');
+    })
+    .join('\n');
+  const queue = String(req.query.queue || 'all');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="nsc_${queue}.csv"`);
+  res.send(`${header}\n${body}`);
+});
 app.get('/api/disco', requireAuth, listModule('disconnections', 'disco'));
-app.get('/api/grievances', requireAuth, listModule('grievances', 'grievance'));
+function isDemoGrievance(r) {
+  const name = String(r.consumer_name || r.complainant_name || '');
+  const ref = String(r.complaint_id || r.docket_no || '');
+  if (/^CG\/\d{4}\/\d{4}$/i.test(ref)) return false;
+  if (/^Complainant\s+\d+$/i.test(name)) return true;
+  if (/^DKT-/i.test(ref)) return true;
+  if (/^C34120\d{3}$/i.test(String(r.consumer_id || ''))) return true;
+  return false;
+}
+
+app.get('/api/grievances', requireAuth, requirePerm('grievance', 'view'), (req, res) => {
+  let rows = readCollection('grievances', []);
+  const kept = rows.filter((r) => !isDemoGrievance(r));
+  if (kept.length !== rows.length) {
+    writeCollection('grievances', kept);
+    rows = kept;
+  }
+  let out = filterScoped(req.user, rows);
+  const division = req.query.division;
+  const ccc = req.query.ccc;
+  const status = req.query.status;
+  if (division) out = out.filter((r) => String(r.division_code) === String(division));
+  if (ccc) out = out.filter((r) => String(r.ccc_code) === String(ccc));
+  if (status) out = out.filter((r) => String(r.status) === String(status));
+  res.json({
+    rows: out,
+    total: out.length,
+    can_edit: canEdit(req.user, 'grievance'),
+    can_upload: canUpload(req.user, 'grievance'),
+  });
+});
 app.get('/api/tech-works', requireAuth, listModule('tech_works', 'tech_works'));
 app.get('/api/spot-billing', requireAuth, listModule('spot_billing', 'spot_billing'));
 app.get('/api/bulk', requireAuth, listModule('bulk_consumers', 'bulk'));
@@ -337,23 +647,27 @@ app.get('/api/consumers', requireAuth, requirePerm('consumers', 'view'), (req, r
 });
 
 app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) => {
-  let rows = [];
-  let source = 'local';
-  if (useSupabase()) {
-    try {
-      rows = await refreshFromSupabase('atc_snapshots');
-      source = 'supabase';
-    } catch (e) {
-      console.warn('[atc] supabase load failed:', e.message);
-      rows = [];
-    }
+  if (!useSupabase()) {
+    return res.status(503).json({
+      error: 'AT&C requires Supabase. Configure server/data/supabase_config.json.',
+      rows: [],
+      periods: [],
+      formats: ['IA', 'IB'],
+      source: 'none',
+    });
   }
-  if (!rows.length) {
-    const local = readCollection('atc_snapshots', []);
-    if (local.length) {
-      rows = local;
-      source = 'local';
-    }
+
+  let rows;
+  try {
+    rows = await refreshFromSupabase('atc_snapshots');
+  } catch (e) {
+    return res.status(502).json({
+      error: `Failed to load AT&C from Supabase: ${e.message}`,
+      rows: [],
+      periods: [],
+      formats: ['IA', 'IB'],
+      source: 'supabase',
+    });
   }
 
   const period = req.query.period ? String(req.query.period) : '';
@@ -361,17 +675,32 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
   const officeType = req.query.office_type ? String(req.query.office_type) : '';
   const division = req.query.division_code ? String(req.query.division_code) : '';
 
-  let out = rows.filter((r) => {
-    const scoped = scopeFilter(req.user, {
+  const inferOfficeType = (code, hinted) => {
+    if (hinted) return hinted;
+    const c = String(code || '').trim();
+    if (c === '34') return 'zone';
+    if (c === '341') return 'region';
+    if (/^341[2-5]$/.test(c)) return 'division';
+    if (/^341[2-5]\d{3}$/.test(c)) return 'ccc';
+    return hinted || '';
+  };
+
+  rows = rows.map((r) => {
+    const office_code = String(r.office_code || '').trim();
+    const office_type = inferOfficeType(office_code, r.office_type);
+    return {
       ...r,
-      ccc_code: r.ccc_code || (r.office_type === 'ccc' ? r.office_code : ''),
+      office_code,
+      office_type,
+      ccc_code: r.ccc_code || (office_type === 'ccc' ? office_code : ''),
       division_code:
         r.division_code ||
-        (r.office_type === 'division' ? r.office_code : r.office_type === 'ccc' ? String(r.office_code || '').slice(0, 4) : ''),
+        (office_type === 'division' ? office_code : office_type === 'ccc' ? office_code.slice(0, 4) : ''),
       region_code: r.region_code || '341',
-    });
-    return scoped;
+    };
   });
+
+  let out = rows.filter((r) => scopeFilter(req.user, r));
 
   if (period) out = out.filter((r) => r.period_label === period);
   if (format) out = out.filter((r) => String(r.source_format || 'IA').toUpperCase() === format);
@@ -405,7 +734,7 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
     rows: out,
     periods,
     formats: ['IA', 'IB'],
-    source,
+    source: 'supabase',
     host: sb.status().host,
     can_edit: canEdit(req.user, 'atc'),
     can_upload: canUpload(req.user, 'atc'),
@@ -552,19 +881,109 @@ app.get('/api/nsc/summary', requireAuth, requirePerm('nsc', 'view'), (req, res) 
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
   const byDivision = {};
   const byStatus = {};
+  let pending = 0;
+  let withheld = 0;
   for (const r of rows) {
-    byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+    const sap = r.sap_status || r.stage || r.status;
+    byStatus[sap] = (byStatus[sap] || 0) + 1;
     const key = r.division_code || 'unknown';
-    if (!byDivision[key]) byDivision[key] = { division_code: key, division_name: officeName(key), pending: 0, total: 0, avg_delay: 0, delay_sum: 0 };
+    if (!byDivision[key]) {
+      byDivision[key] = {
+        division_code: key,
+        division_name: r.division_name || officeName(key),
+        pending: 0,
+        withheld: 0,
+        total: 0,
+        avg_delay: 0,
+        delay_sum: 0,
+      };
+    }
     byDivision[key].total += 1;
-    if (r.status === 'pending' || r.status === 'in_progress') byDivision[key].pending += 1;
-    byDivision[key].delay_sum += r.delay_days || 0;
+    if (nscLib.isPendingQueue(r)) {
+      byDivision[key].pending += 1;
+      pending += 1;
+    }
+    if (String(r.status) === 'withheld') {
+      byDivision[key].withheld += 1;
+      withheld += 1;
+    }
+    byDivision[key].delay_sum += Number(r.quotation_age_days ?? r.delay_days) || 0;
   }
   Object.values(byDivision).forEach((d) => {
     d.avg_delay = d.total ? Math.round(d.delay_sum / d.total) : 0;
     delete d.delay_sum;
   });
-  res.json({ byStatus, byDivision: Object.values(byDivision), total: rows.length });
+  res.json({
+    byStatus,
+    byDivision: Object.values(byDivision),
+    total: rows.length,
+    pending,
+    withheld,
+    report_date: rows[0]?.report_date || null,
+  });
+});
+
+app.post('/api/nsc/parse', requireAuth, requirePerm('nsc', 'upload'), nscUpload.single('file'), (req, res) => {
+  req.setTimeout(180000);
+  res.setTimeout(180000);
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  const report_date = String(req.body.report_date || '').trim().slice(0, 10);
+  try {
+    const { rows, preview } = nscLib.parseNscWorkbook({
+      filePath: req.file.path,
+      filename: req.file.originalname || req.body.filename || 'nsc.xlsb',
+      reportDate: report_date,
+      droCccs: droCccList(),
+    });
+    const parse_id = crypto.randomUUID();
+    fs.writeFileSync(
+      path.join(nscTmpDir, `${parse_id}.json`),
+      JSON.stringify({ report_date: preview.report_date, filename: preview.filename, rows })
+    );
+    res.json({ ok: true, parse_id, preview });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Failed to parse NSC workbook' });
+  } finally {
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+app.post('/api/nsc/commit', requireAuth, requirePerm('nsc', 'upload'), async (req, res) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  const parse_id = String(req.body.parse_id || '').trim();
+  const staging = path.join(nscTmpDir, `${parse_id}.json`);
+  if (!parse_id || !fs.existsSync(staging)) {
+    return res.status(400).json({ error: 'Parse expired — drop the file again' });
+  }
+  try {
+    const payload = JSON.parse(fs.readFileSync(staging, 'utf8'));
+    const rows = (payload.rows || []).map((r, i) => ({ ...r, id: i + 1 }));
+    req.body.filename = payload.filename;
+    req.body.notes = `report ${payload.report_date}`;
+    const { batch } = await createBatchPersisted('nsc', req, rows.length, payload.report_date);
+    for (const r of rows) r.batch_id = batch.id;
+    const cloud = await writeCollectionAndPersist('nsc_cases', rows);
+    try {
+      fs.unlinkSync(staging);
+    } catch {
+      /* ignore */
+    }
+    logActivity(req.user.username, 'upload', `nsc: ${rows.length} rows (${payload.filename || 'file'})`);
+    res.json({
+      ok: true,
+      upserted: rows.length,
+      batch,
+      cloud,
+      report_date: payload.report_date,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to save pending NSC' });
+  }
 });
 
 app.get('/api/disco/summary', requireAuth, requirePerm('disco', 'view'), (req, res) => {
@@ -683,6 +1102,11 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
   if (!moduleId) return res.status(400).json({ error: 'Unknown module' });
   if (!canUpload(req.user, moduleId)) {
     return res.status(403).json({ error: `No upload permission for ${moduleId}` });
+  }
+  if (module === 'grievance' || moduleId === 'grievance') {
+    return res.status(400).json({
+      error: 'Grievances are not Excel-uploaded. Add them one by one on the Grievance desk.',
+    });
   }
 
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
@@ -1056,14 +1480,216 @@ app.patch('/api/disco/:id', requireAuth, requirePerm('disco', 'edit'), (req, res
   res.json({ row });
 });
 
-app.patch('/api/grievances/:docket_no', requireAuth, requirePerm('grievance', 'edit'), (req, res) => {
+function nextComplaintId(rows, year) {
+  const y = String(year);
+  const re = new RegExp(`^CG/${y}/(\\d{4})$`, 'i');
+  let max = 0;
+  for (const r of rows) {
+    const id = String(r.complaint_id || r.docket_no || '');
+    const m = id.match(re);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `CG/${y}/${String(max + 1).padStart(4, '0')}`;
+}
+
+function parseFollowupUsers(raw) {
+  const names = [
+    ...new Set(
+      (Array.isArray(raw) ? raw : [])
+        .map((u) => String(u || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (!names.length) return { error: 'Pick at least one follow-up user' };
+  const allowed = new Set(
+    readUsers()
+      .filter((u) => String(u.role || '').toLowerCase() !== 'admin')
+      .map((u) => u.username)
+  );
+  if (names.some((n) => !allowed.has(n))) return { error: 'Invalid follow-up user' };
+  return { names };
+}
+
+function canFollowupGrievance(user, row) {
+  if (isAdmin(user)) return true;
+  const list = Array.isArray(row.followup_users) ? row.followup_users : [];
+  return list.includes(user?.username);
+}
+
+const GRIEVANCE_STATUSES = new Set(['open', 'resolved', 'closed']);
+const GRIEVANCE_DONE = new Set(['resolved', 'closed']);
+
+function canCloseGrievance(user, row) {
+  if (isAdmin(user) || canEdit(user, 'grievance')) return true;
+  return canFollowupGrievance(user, row);
+}
+
+app.post('/api/grievances', requireAuth, requireAdmin, (req, res) => {
+  const complainant_type = String(req.body?.complainant_type || 'consumer') === 'non_consumer' ? 'non_consumer' : 'consumer';
+  const consumer_id = complainant_type === 'consumer' ? String(req.body?.consumer_id || '').trim() : '';
+  const complainant_name = String(req.body?.complainant_name || req.body?.consumer_name || '').trim();
+  const office_code = String(req.body?.office_code || req.body?.ccc_code || '').trim();
+  const short_description = String(req.body?.short_description || req.body?.remarks || '').trim();
+  const type = String(req.body?.type || req.body?.category || 'other').trim().toLowerCase();
+  const priority = String(req.body?.priority || 'normal').trim().toLowerCase();
+  const phone = String(req.body?.complainant_phone || '').replace(/\D/g, '').slice(-10);
+  if (!['billing', 'technical', 'legal', 'metering', 'supply', 'other'].includes(type)) {
+    return res.status(400).json({ error: 'Invalid type' });
+  }
+  if (!['high', 'normal', 'low'].includes(priority)) {
+    return res.status(400).json({ error: 'Invalid priority' });
+  }
+  if (!/^[\p{L}][\p{L} .'-]{1,59}$/u.test(complainant_name)) {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
+  if (complainant_type === 'consumer' && !/^\d{11}$/.test(consumer_id)) {
+    return res.status(400).json({ error: 'Consumer ID must be 11 digits' });
+  }
+  if (phone && !/^[6-9]\d{9}$/.test(phone)) {
+    return res.status(400).json({ error: 'Invalid phone' });
+  }
+  if (short_description.length < 8 || short_description.length > 240 || /[<>]/.test(short_description)) {
+    return res.status(400).json({ error: 'Invalid description' });
+  }
+  const assigned = parseFollowupUsers(req.body?.followup_users);
+  if (assigned.error) return res.status(400).json({ error: assigned.error });
+
+  const offices = readCollection('offices', []);
+  const office = offices.find(
+    (o) => String(o.code) === office_code && (o.office_type === 'ccc' || o.office_type === 'division')
+  );
+  if (!office) return res.status(400).json({ error: 'Invalid office' });
+  const now = new Date().toISOString();
+  const lodged_on = String(req.body?.lodged_on || now.slice(0, 10)).slice(0, 10);
+  const target_resolve_on = String(req.body?.target_resolve_on || '').slice(0, 10);
+  const isoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(new Date(`${v}T00:00:00`).getTime());
+  const today = now.slice(0, 10);
+  if (!isoDate(lodged_on) || lodged_on > today || lodged_on < '2020-01-01') {
+    return res.status(400).json({ error: 'Invalid lodged date' });
+  }
+  if (!isoDate(target_resolve_on) || target_resolve_on < lodged_on) {
+    return res.status(400).json({ error: 'Invalid target date' });
+  }
+  const division_code = String(
+    req.body?.division_code ||
+      office.division_code ||
+      (office.office_type === 'division' ? office.code : office_code.slice(0, 4))
+  );
   const rows = readCollection('grievances', []);
-  const row = rows.find((r) => r.docket_no === req.params.docket_no);
+  const id = nextId(rows);
+  const year = lodged_on.slice(0, 4) || String(new Date().getFullYear());
+  const complaint_id = nextComplaintId(rows, year);
+  const row = {
+    id,
+    complaint_id,
+    docket_no: complaint_id,
+    complainant_type,
+    consumer_id,
+    consumer_name: complainant_name,
+    complainant_phone: phone,
+    ccc_code: office?.office_type === 'ccc' ? office_code : '',
+    office_code,
+    office_type: office?.office_type || 'ccc',
+    office_name: office?.name || office_code,
+    division_code,
+    region_code: '341',
+    category: type,
+    lodged_on,
+    target_resolve_on,
+    status: 'open',
+    aging_days: 0,
+    priority,
+    remarks: short_description,
+    followups: [],
+    followup_users: assigned.names,
+    assigned_username: assigned.names[0],
+    created_by: req.user.username,
+    batch_id: null,
+    created_at: now,
+    updated_at: now,
+  };
+  rows.push(row);
+  writeCollection('grievances', rows);
+  res.json({ row });
+});
+
+app.patch('/api/grievances/:id', requireAuth, requirePerm('grievance', 'view'), (req, res) => {
+  const rows = readCollection('grievances', []);
+  const key = String(req.params.id);
+  const row = rows.find(
+    (r) => String(r.id) === key || String(r.complaint_id) === key || String(r.docket_no) === key
+  );
   if (!row || !scopeFilter(req.user, row)) return res.status(404).json({ error: 'Not found' });
-  ['status', 'priority', 'remarks', 'aging_days'].forEach((k) => {
+  const admin = isAdmin(req.user);
+  const prevStatus = String(row.status || 'open').toLowerCase();
+  const nextStatus =
+    req.body.status !== undefined ? String(req.body.status || '').trim().toLowerCase() : undefined;
+  if (nextStatus !== undefined) {
+    if (!GRIEVANCE_STATUSES.has(nextStatus)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    if (nextStatus !== prevStatus && !canCloseGrievance(req.user, row)) {
+      return res.status(403).json({ error: 'Not authorized to change case status' });
+    }
+  }
+  const editFields = ['priority', 'remarks', 'aging_days', 'target_resolve_on'];
+  const wantsEdit = editFields.some((k) => req.body[k] !== undefined);
+  if (wantsEdit && !admin && !canEdit(req.user, 'grievance')) {
+    return res.status(403).json({ error: 'No edit permission for grievance' });
+  }
+  editFields.forEach((k) => {
     if (req.body[k] !== undefined) row[k] = req.body[k];
   });
-  row.updated_at = new Date().toISOString();
+  if (req.body.followup_users !== undefined) {
+    if (!admin) return res.status(403).json({ error: 'Admin only' });
+    const assigned = parseFollowupUsers(req.body.followup_users);
+    if (assigned.error) return res.status(400).json({ error: assigned.error });
+    row.followup_users = assigned.names;
+    row.assigned_username = assigned.names[0];
+  }
+  const note = String(req.body?.followup || '').trim().slice(0, 240);
+  if (note && (note.length < 3 || /[<>]/.test(note))) {
+    return res.status(400).json({ error: 'Invalid follow-up' });
+  }
+  const now = new Date().toISOString();
+  const closingNow = nextStatus !== undefined && GRIEVANCE_DONE.has(nextStatus) && nextStatus !== prevStatus;
+  if (note) {
+    if (GRIEVANCE_DONE.has(prevStatus) && !closingNow) {
+      return res.status(400).json({ error: 'Case is already resolved or closed' });
+    }
+    if (!closingNow && !canFollowupGrievance(req.user, row)) {
+      return res.status(403).json({ error: 'Not assigned to follow up this case' });
+    }
+    if (!Array.isArray(row.followups)) row.followups = [];
+    row.followups.unshift({
+      at: now,
+      by: req.user.username,
+      remark: note,
+    });
+    row.last_followup_on = row.followups[0].at;
+    row.last_followup_by = req.user.username;
+  }
+  if (nextStatus !== undefined && nextStatus !== prevStatus) {
+    row.status = nextStatus;
+    if (GRIEVANCE_DONE.has(nextStatus)) {
+      row.resolved_on = now.slice(0, 10);
+      row.resolved_by = req.user.username;
+      if (!note) {
+        if (!Array.isArray(row.followups)) row.followups = [];
+        row.followups.unshift({
+          at: now,
+          by: req.user.username,
+          remark: nextStatus === 'closed' ? 'Marked closed' : 'Marked resolved',
+        });
+        row.last_followup_on = row.followups[0].at;
+        row.last_followup_by = req.user.username;
+      }
+    } else {
+      row.resolved_on = null;
+      row.resolved_by = null;
+    }
+  }
+  row.updated_at = now;
   writeCollection('grievances', rows);
   res.json({ row });
 });
@@ -1102,20 +1728,10 @@ if (fs.existsSync(webDist)) {
   });
 }
 
-const initPromise = initStore()
-  .then(() => {
-    ensureSeeded();
-  })
-  .catch((e) => {
-    console.error('[DRO] initStore failed:', e);
-  });
-
 if (require.main === module) {
-  initPromise.then(() => {
-    app.listen(PORT, () => {
-      console.log(`DRO Ops API on http://localhost:${PORT}`);
-      console.log(`[DRO] data store: ${storeMode()}${useSupabase() ? ' (' + sb.status().host + ')' : ''}`);
-    });
+  app.listen(PORT, () => {
+    console.log(`DRO Ops API on http://localhost:${PORT}${isReady() ? '' : ' — loading store…'}`);
+    console.log(`[DRO] data store: ${storeMode()}${useSupabase() ? ' (' + sb.status().host + ')' : ''}`);
   });
 }
 

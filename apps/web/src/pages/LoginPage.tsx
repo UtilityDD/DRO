@@ -13,6 +13,7 @@ export function LoginPage() {
     return (
       <div className="login-page">
         <div className="loading-spinner" aria-label="Loading" />
+        <p className="muted" style={{ marginTop: 16 }}>Starting DRO…</p>
       </div>
     );
   }

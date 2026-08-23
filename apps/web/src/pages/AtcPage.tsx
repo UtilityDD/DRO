@@ -872,6 +872,15 @@ export function AtcPage() {
     if (format === 'IB' && level === 'ccc') setLevel('division');
   }, [format, level]);
 
+  useEffect(() => {
+    if (!rows.length) return;
+    const hasLevel = rows.some((r) => r.office_type === level);
+    if (hasLevel) return;
+    if (rows.some((r) => r.office_type === 'division')) setLevel('division');
+    else if (rows.some((r) => r.office_type === 'ccc')) setLevel('ccc');
+    else if (rows.some((r) => r.office_type === 'region')) setLevel('region');
+  }, [rows, level]);
+
   const sortedPeriods = useMemo(() => {
     return [...periods].sort((a, b) => {
       const ra = rows.find((r) => r.period_label === a);

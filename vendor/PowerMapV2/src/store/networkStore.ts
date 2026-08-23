@@ -1,0 +1,1291 @@
+import { create } from 'zustand';
+import type {
+  AssetLifecycle,
+  MapLayerSettings,
+  NetworkFilters,
+  OrgUnit,
+  Selection,
+  Substation,
+  TapLateral,
+  TapNode,
+  ToolMode,
+  TrunkLine,
+  VoltageCode,
+} from '@/domain/types';
+import { haversineKm, isOldAsset, isOverloaded } from '@/domain/geo';
+import {
+  authorizeEditor as authorizeEditorRemote,
+  listEditors,
+  listPendingSuggestions,
+  reviewSuggestion,
+  revokeEditor as revokeEditorRemote,
+  submitSuggestion,
+  verifyEditorLogin,
+  type EditSuggestion,
+  type EditorAccount,
+} from '@/lib/editorsRepo';
+import {
+  canEditorTouchLine,
+  canEditorTouchSubstation,
+  resolveEditableSubstationIds,
+} from '@/lib/editorScope';
+import {
+  analyze33KvSiting,
+  type SitingAnalysis,
+} from '@/lib/sitingSuggestions';
+import {
+  DEFAULT_PRINT_SETTINGS,
+  type PrintSettings,
+} from '@/lib/printLayout';
+import {
+  computeAnalytics,
+  createLine,
+  createSubstation,
+  createTapLateral,
+  createTapOnLine,
+  linesConnectedTo,
+  loadNetwork,
+  persistLine,
+  persistSubstation,
+  persistTapLateral,
+  persistTapNode,
+  persistSubstationBundle,
+  probeSupabaseBridge,
+  pushNetworkToSupabase,
+  removeEntity,
+  reprojectTapsForLine,
+  tapsOnLine,
+} from '@/lib/networkRepo';
+
+export type AdminRole = 'super' | 'editor' | null;
+
+interface DraftConnect {
+  fromId: string | null;
+}
+
+interface DraftTap {
+  sourceLineId: string | null;
+  sourceTapId: string | null;
+  sourceLat: number | null;
+  sourceLng: number | null;
+}
+
+interface PlaceDraft {
+  lat: number;
+  lng: number;
+}
+
+interface UiState {
+  tool: ToolMode;
+  selection: Selection | null;
+  panel: 'properties' | 'filters' | 'layers' | 'reports' | 'settings' | 'place-ss' | 'siting' | 'print' | null;
+  searchOpen: boolean;
+  searchQuery: string;
+  statusMessage: string | null;
+  connectDraft: DraftConnect;
+  tapDraft: DraftTap;
+  pendingDelete: Selection | null;
+  /** Draft position while placing a new substation */
+  placeDraft: PlaceDraft | null;
+  /** Live cursor coords while Add SS is active */
+  hoverCoords: PlaceDraft | null;
+  /** Request map to fly to these coords (lat/lng entry) */
+  mapFocus: PlaceDraft | null;
+}
+
+interface NetworkStore extends UiState {
+  loaded: boolean;
+  backend: 'local' | 'supabase';
+  adminMode: boolean;
+  adminRole: AdminRole;
+  adminName: string | null;
+  /** Logged-in editor account (scope); null for super / viewer */
+  editorAccount: EditorAccount | null;
+  /** Resolved SS ids this editor may edit (explicit + districts) */
+  editableSsIds: string[];
+  editors: EditorAccount[];
+  /** Pending suggestions (super admin map + review) */
+  suggestions: EditSuggestion[];
+  showSuggestionsOnMap: boolean;
+  /** Suggestion highlighted from the side-panel list */
+  focusedSuggestionId: string | null;
+  /** Live map-edit hint (snap target, distance) for status bar */
+  editCursorHint: string | null;
+  /** 33 kV spacing-based siting analysis */
+  sitingAnalysis: SitingAnalysis | null;
+  sitingBusy: boolean;
+  showSitingOnMap: boolean;
+  focusedSitingId: string | null;
+  printSettings: PrintSettings;
+  printPreviewOpen: boolean;
+  substations: Substation[];
+  lines: TrunkLine[];
+  tapNodes: TapNode[];
+  tapLaterals: TapLateral[];
+  orgUnits: OrgUnit[];
+  filters: NetworkFilters;
+  mapLayers: MapLayerSettings;
+  availableDistricts: string[];
+
+  bootstrap: () => Promise<void>;
+  reloadFromSupabase: () => Promise<void>;
+  pushToSupabase: () => Promise<void>;
+  checkSupabase: () => Promise<void>;
+  unlockAdmin: (pin: string, name?: string) => Promise<boolean>;
+  lockAdmin: () => void;
+  requireAdmin: () => boolean;
+  requireSuperAdmin: () => boolean;
+  refreshEditors: () => Promise<void>;
+  refreshSuggestions: () => Promise<void>;
+  authorizeEditor: (
+    name: string,
+    pin: string,
+    scope: { allowedSubstationIds: string[]; allowedDistricts: string[] },
+  ) => Promise<boolean>;
+  revokeEditor: (id: string) => Promise<void>;
+  setShowSuggestionsOnMap: (on: boolean) => void;
+  focusSuggestion: (id: string | null) => void;
+  setEditCursorHint: (hint: string | null) => void;
+  runSitingAnalysis: () => Promise<void>;
+  clearSitingAnalysis: () => void;
+  setShowSitingOnMap: (on: boolean) => void;
+  focusSitingCandidate: (id: string | null) => void;
+  adoptSitingCandidate: (id: string) => void;
+  setPrintSettings: (patch: Partial<PrintSettings>) => void;
+  setPrintPreviewOpen: (open: boolean) => void;
+  approveSuggestion: (id: string) => Promise<void>;
+  rejectSuggestion: (id: string) => Promise<void>;
+  editorCanEditSs: (ssId: string) => boolean;
+  editorCanEditLine: (lineId: string) => boolean;
+  setTool: (tool: ToolMode) => void;
+  setSelection: (sel: Selection | null) => void;
+  setPanel: (panel: UiState['panel']) => void;
+  setSearchOpen: (open: boolean) => void;
+  setSearchQuery: (q: string) => void;
+  flashStatus: (msg: string) => void;
+  setFilters: (patch: Partial<NetworkFilters>) => void;
+  setMapLayers: (patch: Partial<MapLayerSettings>) => void;
+  setAvailableDistricts: (names: string[]) => void;
+  toggleDistrictFocus: (name: string, additive?: boolean) => void;
+  clearDistrictFocus: () => void;
+  dimAllDistricts: () => void;
+  focusOnlyDistrict: (name: string) => void;
+
+  setPlaceDraft: (draft: PlaceDraft | null) => void;
+  setHoverCoords: (coords: PlaceDraft | null) => void;
+  setMapFocus: (coords: PlaceDraft | null) => void;
+  applyLatLngInput: (lat: number, lng: number) => void;
+  confirmPlaceSubstation: () => Promise<void>;
+  addSubstationAt: (lat: number, lng: number) => Promise<void>;
+  updateSubstation: (id: string, patch: Partial<Substation>) => Promise<void>;
+  moveSubstation: (id: string, lat: number, lng: number) => Promise<void>;
+
+  beginConnect: (ssId: string) => void;
+  completeConnect: (toId: string) => Promise<void>;
+  cancelDrafts: () => void;
+
+  beginTapOnLine: (lineId: string, lat: number, lng: number) => void;
+  completeTapToSubstation: (ssId: string) => Promise<void>;
+  completeTapToLine: (lineId: string, lat: number, lng: number) => Promise<void>;
+
+  updateLine: (id: string, patch: Partial<TrunkLine>) => Promise<void>;
+  updateTapLateral: (id: string, patch: Partial<TapLateral>) => Promise<void>;
+  saveSubstationBundle: (
+    ss: Substation,
+    relatedLines: TrunkLine[],
+  ) => Promise<{ ok: boolean; message: string }>;
+
+  requestDelete: (sel: Selection) => void;
+  confirmDelete: () => Promise<void>;
+  cancelDelete: () => void;
+
+  visibleSubstations: () => Substation[];
+  visibleLines: () => TrunkLine[];
+  analytics: () => ReturnType<typeof computeAnalytics>;
+}
+
+const defaultFilters: NetworkFilters = {
+  statuses: ['existing', 'proposed'],
+  voltages: ['400', '220', '132', '33'],
+  orgUnitIds: [],
+  overloadedOnly: false,
+  oldOnly: false,
+  needUpgradeOnly: false,
+  showProposed: true,
+};
+
+const defaultMapLayers: MapLayerSettings = {
+  basemap: 'carto',
+  showMask: true,
+  maskOpacity: 0.35,
+  showDistricts: true,
+  showDistrictLabels: true,
+  showSsNames: false,
+  showSsCapacity: false,
+  showFeederNames: false,
+  showFeederLength: false,
+  focusedDistricts: [],
+  dimAllDistricts: false,
+};
+
+const ADMIN_SESSION_KEY = 'powermap.adminSession';
+const MUTATING_TOOLS: ToolMode[] = ['add-ss', 'connect', 'tap', 'move', 'delete'];
+
+interface AdminSession {
+  role: 'super' | 'editor';
+  name: string;
+  editorId?: string;
+}
+
+function readAdminSession(): AdminSession | null {
+  try {
+    const raw = sessionStorage.getItem(ADMIN_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AdminSession;
+    if (parsed?.role === 'super' || parsed?.role === 'editor') return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAdminSession(session: AdminSession | null) {
+  try {
+    if (session) sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
+    else sessionStorage.removeItem(ADMIN_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function expectedAdminPin(): string {
+  return (import.meta.env.VITE_ADMIN_PIN as string | undefined)?.trim() || 'powermap';
+}
+
+const initialSession = readAdminSession();
+
+export const useNetworkStore = create<NetworkStore>((set, get) => ({
+  loaded: false,
+  backend: 'local',
+  adminMode: !!initialSession,
+  adminRole: initialSession?.role ?? null,
+  adminName: initialSession?.name ?? null,
+  editorAccount: null,
+  editableSsIds: [],
+  editors: [],
+  suggestions: [],
+  showSuggestionsOnMap: true,
+  focusedSuggestionId: null,
+  editCursorHint: null,
+  sitingAnalysis: null,
+  sitingBusy: false,
+  showSitingOnMap: true,
+  focusedSitingId: null,
+  printSettings: { ...DEFAULT_PRINT_SETTINGS },
+  printPreviewOpen: false,
+  substations: [],
+  lines: [],
+  tapNodes: [],
+  tapLaterals: [],
+  orgUnits: [],
+  filters: defaultFilters,
+  mapLayers: defaultMapLayers,
+  availableDistricts: [],
+
+  tool: 'cursor',
+  selection: null,
+  panel: null,
+  searchOpen: false,
+  searchQuery: '',
+  statusMessage: null,
+  connectDraft: { fromId: null },
+  tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+  pendingDelete: null,
+  placeDraft: null,
+  hoverCoords: null,
+  mapFocus: null,
+
+  bootstrap: async () => {
+    const data = await loadNetwork();
+    set({
+      loaded: true,
+      backend: data.backend,
+      substations: data.substations,
+      lines: data.lines,
+      tapNodes: data.tapNodes,
+      tapLaterals: data.tapLaterals,
+      orgUnits: data.orgUnits,
+    });
+    const session = readAdminSession();
+    if (session?.role === 'super') {
+      set({
+        adminMode: true,
+        adminRole: 'super',
+        adminName: session.name,
+        editorAccount: null,
+        editableSsIds: [],
+      });
+      void get().refreshEditors();
+      void get().refreshSuggestions();
+    } else if (session?.role === 'editor' && session.editorId) {
+      const listed = await listEditors();
+      const ed = listed.editors.find((e) => e.id === session.editorId);
+      if (ed) {
+        const editable = await resolveEditableSubstationIds(ed, data.substations);
+        set({
+          adminMode: true,
+          adminRole: 'editor',
+          adminName: ed.name,
+          editorAccount: ed,
+          editableSsIds: [...editable],
+        });
+      } else {
+        writeAdminSession(null);
+        set({ adminMode: false, adminRole: null, adminName: null });
+      }
+    }
+  },
+
+  reloadFromSupabase: async () => {
+    const data = await loadNetwork();
+    set({
+      backend: data.backend,
+      substations: data.substations,
+      lines: data.lines,
+      tapNodes: data.tapNodes,
+      tapLaterals: data.tapLaterals,
+      orgUnits: data.orgUnits,
+    });
+    get().flashStatus(
+      data.backend === 'supabase'
+        ? `Network refreshed · ${data.substations.length} substations`
+        : 'Could not refresh — showing your current copy',
+    );
+  },
+
+  pushToSupabase: async () => {
+    if (!get().requireSuperAdmin()) return;
+    const state = get();
+    const result = await pushNetworkToSupabase({
+      orgUnits: state.orgUnits,
+      substations: state.substations,
+      lines: state.lines,
+      tapNodes: state.tapNodes,
+      tapLaterals: state.tapLaterals,
+    });
+    if (result.ok) {
+      set({ backend: 'supabase' });
+      await get().reloadFromSupabase();
+    }
+    get().flashStatus(result.message);
+  },
+
+  checkSupabase: async () => {
+    const probe = await probeSupabaseBridge();
+    get().flashStatus(
+      probe.ok
+        ? `Connection OK · ${probe.counts?.ss ?? 0} substations / ${probe.counts?.lines ?? 0} lines`
+        : 'Connection failed — try again later',
+    );
+  },
+
+  unlockAdmin: async (pin, name = '') => {
+    const trimmedPin = pin.trim();
+    if (!trimmedPin) {
+      get().flashStatus('Enter your PIN');
+      return false;
+    }
+
+    if (trimmedPin === expectedAdminPin()) {
+      const session: AdminSession = { role: 'super', name: 'Super Admin' };
+      writeAdminSession(session);
+      set({
+        adminMode: true,
+        adminRole: 'super',
+        adminName: session.name,
+        editorAccount: null,
+        editableSsIds: [],
+      });
+      await get().refreshEditors();
+      await get().refreshSuggestions();
+      get().flashStatus('Unlocked as super admin');
+      return true;
+    }
+
+    const result = await verifyEditorLogin(name, trimmedPin);
+    if (!result.ok || !result.editor) {
+      get().flashStatus(result.message || 'Incorrect name or PIN');
+      return false;
+    }
+    const editor = result.editor;
+    const editable = await resolveEditableSubstationIds(editor, get().substations);
+    writeAdminSession({ role: 'editor', name: editor.name, editorId: editor.id });
+    set({
+      adminMode: true,
+      adminRole: 'editor',
+      adminName: editor.name,
+      editorAccount: editor,
+      editableSsIds: [...editable],
+    });
+    get().flashStatus(`Unlocked · ${editor.name} · ${editable.size} SS in scope`);
+    return true;
+  },
+
+  lockAdmin: () => {
+    writeAdminSession(null);
+    set({
+      adminMode: false,
+      adminRole: null,
+      adminName: null,
+      editorAccount: null,
+      editableSsIds: [],
+      tool: 'cursor',
+      placeDraft: null,
+      connectDraft: { fromId: null },
+      tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+    });
+    get().flashStatus('Locked — view only');
+  },
+
+  requireAdmin: () => {
+    if (get().adminMode) return true;
+    get().flashStatus('Unlock in Settings to edit');
+    set({ panel: 'settings' });
+    return false;
+  },
+
+  requireSuperAdmin: () => {
+    if (get().adminRole === 'super') return true;
+    get().flashStatus('Not available for your account');
+    return false;
+  },
+
+  editorCanEditSs: (ssId) => {
+    if (get().adminRole === 'super') return true;
+    if (get().adminRole !== 'editor') return false;
+    return canEditorTouchSubstation(new Set(get().editableSsIds), ssId);
+  },
+
+  editorCanEditLine: (lineId) => {
+    if (get().adminRole === 'super') return true;
+    if (get().adminRole !== 'editor') return false;
+    const line = get().lines.find((l) => l.id === lineId);
+    if (!line) return false;
+    return canEditorTouchLine(new Set(get().editableSsIds), line);
+  },
+
+  refreshEditors: async () => {
+    const result = await listEditors();
+    if (!result.ok) {
+      if (get().adminRole === 'super') {
+        get().flashStatus(result.message || 'Could not load editors');
+      }
+      set({ editors: [] });
+      return;
+    }
+    set({ editors: result.editors });
+  },
+
+  refreshSuggestions: async () => {
+    const result = await listPendingSuggestions();
+    if (!result.ok) {
+      set({ suggestions: [] });
+      return;
+    }
+    set({ suggestions: result.suggestions });
+  },
+
+  setShowSuggestionsOnMap: (showSuggestionsOnMap) => set({ showSuggestionsOnMap }),
+
+  focusSuggestion: (id) => {
+    const sug = id ? get().suggestions.find((s) => s.id === id) : null;
+    if (!sug) {
+      set({ focusedSuggestionId: null });
+      return;
+    }
+    set({ focusedSuggestionId: sug.id, showSuggestionsOnMap: true });
+    if (sug.lat != null && sug.lng != null) {
+      set({ mapFocus: { lat: sug.lat, lng: sug.lng } });
+    }
+    if (sug.assetId && sug.assetKind === 'substation') {
+      set({ selection: { kind: 'substation', id: sug.assetId }, panel: 'settings' });
+    } else if (sug.assetId && sug.assetKind === 'line') {
+      set({ selection: { kind: 'line', id: sug.assetId }, panel: 'settings' });
+    } else {
+      set({ panel: 'settings' });
+    }
+    get().flashStatus(`Focused · ${sug.summary}`);
+  },
+
+  setEditCursorHint: (editCursorHint) => set({ editCursorHint }),
+
+  runSitingAnalysis: async () => {
+    set({ sitingBusy: true });
+    try {
+      const analysis = await analyze33KvSiting(get().substations);
+      set({
+        sitingAnalysis: analysis,
+        focusedSitingId: null,
+        showSitingOnMap: true,
+        panel: 'siting',
+      });
+      if (analysis.message) {
+        get().flashStatus(analysis.message);
+      } else {
+        get().flashStatus(
+          `${analysis.candidates.length} candidate site(s) · typical spacing ${analysis.targetSpacingKm.toFixed(1)} km`,
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Siting analysis failed';
+      get().flashStatus(msg);
+      set({ sitingAnalysis: null });
+    } finally {
+      set({ sitingBusy: false });
+    }
+  },
+
+  clearSitingAnalysis: () =>
+    set({ sitingAnalysis: null, focusedSitingId: null }),
+
+  setShowSitingOnMap: (showSitingOnMap) => set({ showSitingOnMap }),
+
+  focusSitingCandidate: (id) => {
+    const c = id
+      ? get().sitingAnalysis?.candidates.find((x) => x.id === id)
+      : null;
+    if (!c) {
+      set({ focusedSitingId: null });
+      return;
+    }
+    set({
+      focusedSitingId: c.id,
+      showSitingOnMap: true,
+      mapFocus: { lat: c.lat, lng: c.lng },
+      panel: 'siting',
+    });
+    get().flashStatus(
+      `Candidate · ${c.district} · ${c.nearerSs?.length ?? 1} nearby SS (nearest ${c.gapKm.toFixed(1)} km)`,
+    );
+  },
+
+  adoptSitingCandidate: (id) => {
+    const c = get().sitingAnalysis?.candidates.find((x) => x.id === id);
+    if (!c) return;
+    if (!get().requireAdmin()) return;
+    set({
+      focusedSitingId: c.id,
+      placeDraft: { lat: c.lat, lng: c.lng },
+      tool: 'add-ss',
+      panel: 'place-ss',
+      mapFocus: { lat: c.lat, lng: c.lng },
+    });
+    get().flashStatus(`Place draft at candidate · confirm in panel`);
+  },
+
+  setPrintSettings: (patch) =>
+    set({ printSettings: { ...get().printSettings, ...patch } }),
+
+  setPrintPreviewOpen: (printPreviewOpen) => set({ printPreviewOpen }),
+
+  authorizeEditor: async (name, pin, scope) => {
+    if (!get().requireSuperAdmin()) return false;
+    const result = await authorizeEditorRemote({
+      name,
+      pin,
+      allowedSubstationIds: scope.allowedSubstationIds,
+      allowedDistricts: scope.allowedDistricts,
+    });
+    get().flashStatus(result.message);
+    if (result.ok) await get().refreshEditors();
+    return result.ok;
+  },
+
+  revokeEditor: async (id) => {
+    if (!get().requireSuperAdmin()) return;
+    const result = await revokeEditorRemote(id);
+    get().flashStatus(result.message);
+    if (result.ok) await get().refreshEditors();
+  },
+
+  approveSuggestion: async (id) => {
+    if (!get().requireSuperAdmin()) return;
+    const sug = get().suggestions.find((s) => s.id === id);
+    if (!sug) return;
+
+    // Mark approved first so nested saveSubstationBundle (super) applies live
+    const reviewed = await reviewSuggestion(id, 'approved', get().adminName || 'Super Admin');
+    if (!reviewed.ok) {
+      get().flashStatus(reviewed.message);
+      return;
+    }
+
+    if (sug.assetKind === 'substation' && sug.payload.ss) {
+      const nextSs = sug.payload.ss as Substation;
+      const related = (sug.payload.relatedLines as TrunkLine[] | undefined) ?? [];
+      const apply = await get().saveSubstationBundle(
+        nextSs,
+        related.length ? related : linesConnectedTo(nextSs.id, get().lines),
+      );
+      get().flashStatus(apply.ok ? 'Suggestion approved & applied' : apply.message);
+    } else if (sug.assetKind === 'line' && sug.payload.line) {
+      const line = sug.payload.line as TrunkLine;
+      const { id: _id, ...patch } = line;
+      await get().updateLine(line.id, patch);
+      get().flashStatus('Suggestion approved & applied');
+    } else {
+      get().flashStatus(reviewed.message);
+    }
+    await get().refreshSuggestions();
+  },
+
+  rejectSuggestion: async (id) => {
+    if (!get().requireSuperAdmin()) return;
+    const result = await reviewSuggestion(id, 'rejected', get().adminName || 'Super Admin');
+    get().flashStatus(result.message);
+    await get().refreshSuggestions();
+  },
+
+  setTool: (tool) => {
+    if (MUTATING_TOOLS.includes(tool) && !get().adminMode) {
+      get().requireAdmin();
+      return;
+    }
+    set({
+      tool,
+      connectDraft: { fromId: null },
+      tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+      placeDraft: tool === 'add-ss' ? get().placeDraft : null,
+      hoverCoords: null,
+      editCursorHint: null,
+      focusedSuggestionId: null,
+      panel:
+        tool === 'add-ss'
+          ? 'place-ss'
+          : tool === 'cursor'
+            ? get().panel
+            : get().panel === 'place-ss'
+              ? null
+              : get().panel,
+    });
+  },
+
+  setSelection: (selection) =>
+    set({
+      selection,
+      panel: selection ? 'properties' : get().panel === 'properties' ? null : get().panel,
+    }),
+
+  setPanel: (panel) => set({ panel }),
+  setSearchOpen: (searchOpen) => set({ searchOpen }),
+  setSearchQuery: (searchQuery) => set({ searchQuery }),
+
+  flashStatus: (statusMessage) => {
+    set({ statusMessage });
+    window.setTimeout(() => {
+      if (get().statusMessage === statusMessage) set({ statusMessage: null });
+    }, 2800);
+  },
+
+  setFilters: (patch) => set({ filters: { ...get().filters, ...patch } }),
+
+  setMapLayers: (patch) => set({ mapLayers: { ...get().mapLayers, ...patch } }),
+
+  setAvailableDistricts: (availableDistricts) => set({ availableDistricts }),
+
+  toggleDistrictFocus: (name, additive = false) => {
+    const layers = get().mapLayers;
+    const current = layers.dimAllDistricts ? [] : layers.focusedDistricts;
+    let next: string[];
+    if (!additive) {
+      next = current.length === 1 && current[0] === name && !layers.dimAllDistricts ? [] : [name];
+    } else if (current.includes(name)) {
+      next = current.filter((d) => d !== name);
+    } else {
+      next = [...current, name];
+    }
+    set({
+      mapLayers: {
+        ...get().mapLayers,
+        showDistricts: true,
+        dimAllDistricts: false,
+        focusedDistricts: next,
+      },
+    });
+    get().flashStatus(
+      next.length === 0
+        ? 'All districts undimmed'
+        : next.length === 1
+          ? `Focused: ${next[0]}`
+          : `Focused: ${next.length} districts`,
+    );
+  },
+
+  clearDistrictFocus: () => {
+    set({
+      mapLayers: {
+        ...get().mapLayers,
+        focusedDistricts: [],
+        dimAllDistricts: false,
+      },
+    });
+    get().flashStatus('All districts undimmed');
+  },
+
+  dimAllDistricts: () => {
+    set({
+      mapLayers: {
+        ...get().mapLayers,
+        showDistricts: true,
+        focusedDistricts: [],
+        dimAllDistricts: true,
+      },
+    });
+    get().flashStatus('All districts dimmed');
+  },
+
+  focusOnlyDistrict: (name) => {
+    set({
+      mapLayers: {
+        ...get().mapLayers,
+        showDistricts: true,
+        dimAllDistricts: false,
+        focusedDistricts: [name],
+      },
+    });
+  },
+
+  setPlaceDraft: (placeDraft) => set({ placeDraft, panel: 'place-ss' }),
+
+  setHoverCoords: (hoverCoords) => set({ hoverCoords }),
+
+  setMapFocus: (mapFocus) => set({ mapFocus }),
+
+  applyLatLngInput: (lat, lng) => {
+    set({
+      placeDraft: { lat, lng },
+      mapFocus: { lat, lng },
+      panel: 'place-ss',
+      tool: 'add-ss',
+    });
+    get().flashStatus(`Position set · ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+  },
+
+  confirmPlaceSubstation: async () => {
+    if (!get().requireAdmin()) return;
+    const draft = get().placeDraft;
+    if (!draft) {
+      get().flashStatus('Click map or enter lat/lng first');
+      return;
+    }
+    await get().addSubstationAt(draft.lat, draft.lng);
+  },
+
+  addSubstationAt: async (lat, lng) => {
+    if (!get().requireAdmin()) return;
+    const ss = createSubstation({
+      name: 'New Substation',
+      lat,
+      lng,
+      voltageCode: '33',
+      status: 'proposed',
+      orgUnitId: get().orgUnits.find((o) => o.type === 'division')?.id ?? null,
+      transformers: [{ id: crypto.randomUUID(), ratingMva: 10, quantity: 1, sequence: 1 }],
+    });
+    await persistSubstation(ss);
+    set({
+      substations: [...get().substations, ss],
+      selection: { kind: 'substation', id: ss.id },
+      panel: 'properties',
+      tool: 'cursor',
+      placeDraft: null,
+      hoverCoords: null,
+    });
+    get().flashStatus(`Substation created at ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+  },
+
+  updateSubstation: async (id, patch) => {
+    if (!get().requireAdmin()) return;
+    const substations = get().substations.map((s) =>
+      s.id === id ? { ...s, ...patch, updatedAt: new Date().toISOString(), version: s.version + 1 } : s,
+    );
+    const ss = substations.find((s) => s.id === id)!;
+    await persistSubstation(ss);
+    set({ substations });
+  },
+
+  moveSubstation: async (id, lat, lng) => {
+    if (!get().requireAdmin()) return;
+    const state = get();
+    const substations = state.substations.map((s) =>
+      s.id === id ? { ...s, lat, lng, updatedAt: new Date().toISOString() } : s,
+    );
+    const moved = substations.find((s) => s.id === id)!;
+    const lines = state.lines.map((l) => {
+      if (l.fromId !== id && l.toId !== id) return l;
+      const from = substations.find((s) => s.id === l.fromId)!;
+      const to = substations.find((s) => s.id === l.toId)!;
+      return {
+        ...l,
+        lengthKm: haversineKm(from.lat, from.lng, to.lat, to.lng),
+      };
+    });
+
+    let tapNodes = [...state.tapNodes];
+    for (const line of lines.filter((l) => l.fromId === id || l.toId === id)) {
+      const from = substations.find((s) => s.id === line.fromId)!;
+      const to = substations.find((s) => s.id === line.toId)!;
+      const updated = reprojectTapsForLine(line, from, to, tapNodes);
+      tapNodes = tapNodes.map((t) => updated.find((u) => u.id === t.id) ?? t);
+    }
+
+    await persistSubstation(moved);
+    await Promise.all(lines.filter((l) => l.fromId === id || l.toId === id).map(persistLine));
+    await Promise.all(tapNodes.map(persistTapNode));
+
+    set({ substations, lines, tapNodes });
+  },
+
+  beginConnect: (ssId) => {
+    if (!get().requireAdmin()) return;
+    const { connectDraft } = get();
+    if (!connectDraft.fromId) {
+      set({ connectDraft: { fromId: ssId } });
+      get().flashStatus('Select target substation');
+      return;
+    }
+    if (connectDraft.fromId === ssId) {
+      get().flashStatus('Choose a different substation');
+      return;
+    }
+    void get().completeConnect(ssId);
+  },
+
+  completeConnect: async (toId) => {
+    if (!get().requireAdmin()) return;
+    const { connectDraft, substations, lines } = get();
+    if (!connectDraft.fromId) return;
+    const from = substations.find((s) => s.id === connectDraft.fromId);
+    const to = substations.find((s) => s.id === toId);
+    if (!from || !to) return;
+
+    const existingParallel = lines.filter(
+      (l) =>
+        (l.fromId === from.id && l.toId === to.id) ||
+        (l.fromId === to.id && l.toId === from.id),
+    );
+
+    const voltageCode: VoltageCode =
+      from.voltageCode === to.voltageCode
+        ? from.voltageCode
+        : ([from.voltageCode, to.voltageCode].sort(
+            (a, b) => Number(a) - Number(b),
+          )[0] as VoltageCode);
+
+    const line = createLine({
+      from,
+      to,
+      voltageCode,
+      status: 'proposed',
+      circuitCount: existingParallel.length + 1,
+      parallelTotal: existingParallel.length + 1,
+      circuitConfig: existingParallel.length > 0 ? 'double' : 'single',
+    });
+
+    const nextLines = lines.map((l) => {
+      const isSibling = existingParallel.some((s) => s.id === l.id);
+      if (!isSibling || l.circuitConfig !== 'single') return l;
+      return { ...l, circuitConfig: 'double' as const, version: l.version + 1 };
+    });
+
+    await persistLine(line);
+    await Promise.all(
+      nextLines
+        .filter((l) => existingParallel.some((s) => s.id === l.id) && l.circuitConfig === 'double')
+        .filter((l) => existingParallel.find((s) => s.id === l.id)?.circuitConfig === 'single')
+        .map((l) => persistLine(l)),
+    );
+
+    set({
+      lines: [...nextLines, line],
+      connectDraft: { fromId: null },
+      selection: { kind: 'line', id: line.id },
+      panel: 'properties',
+      tool: 'cursor',
+    });
+    get().flashStatus(
+      existingParallel.length
+        ? `Parallel circuit #${line.circuitCount} created`
+        : 'Line created',
+    );
+  },
+
+  cancelDrafts: () =>
+    set({
+      connectDraft: { fromId: null },
+      tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+    }),
+
+  beginTapOnLine: (lineId, lat, lng) => {
+    if (!get().requireAdmin()) return;
+    const { lines, substations } = get();
+    const line = lines.find((l) => l.id === lineId);
+    if (!line) return;
+    const from = substations.find((s) => s.id === line.fromId);
+    const to = substations.find((s) => s.id === line.toId);
+    if (!from || !to) return;
+
+    const tap = createTapOnLine(line, from, to, lat, lng);
+    void persistTapNode(tap).then(() => {
+      set({
+        tapNodes: [...get().tapNodes, tap],
+        tapDraft: {
+          sourceLineId: lineId,
+          sourceTapId: tap.id,
+          sourceLat: tap.lat,
+          sourceLng: tap.lng,
+        },
+      });
+      get().flashStatus('Now click a substation or another line');
+    });
+  },
+
+  completeTapToSubstation: async (ssId) => {
+    if (!get().requireAdmin()) return;
+    const { tapDraft, substations, tapLaterals, tapNodes } = get();
+    if (!tapDraft.sourceTapId) return;
+    const tap = tapNodes.find((t) => t.id === tapDraft.sourceTapId);
+    const ss = substations.find((s) => s.id === ssId);
+    if (!tap || !ss) return;
+
+    const lateral = createTapLateral({
+      fromTap: tap,
+      toKind: 'substation',
+      toAssetId: ss.id,
+      toLat: ss.lat,
+      toLng: ss.lng,
+      voltageCode: ss.voltageCode,
+      status: 'proposed',
+      name: `Tap → ${ss.name}`,
+    });
+    await persistTapLateral(lateral);
+    set({
+      tapLaterals: [...tapLaterals, lateral],
+      tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+      selection: { kind: 'tap_lateral', id: lateral.id },
+      panel: 'properties',
+      tool: 'cursor',
+    });
+    get().flashStatus('Tap lateral created');
+  },
+
+  completeTapToLine: async (lineId, lat, lng) => {
+    if (!get().requireAdmin()) return;
+    const { tapDraft, lines, substations, tapNodes, tapLaterals } = get();
+    if (!tapDraft.sourceTapId || tapDraft.sourceLineId === lineId) {
+      get().flashStatus('Choose a different line');
+      return;
+    }
+    const sourceTap = tapNodes.find((t) => t.id === tapDraft.sourceTapId);
+    const line = lines.find((l) => l.id === lineId);
+    if (!sourceTap || !line) return;
+    const from = substations.find((s) => s.id === line.fromId);
+    const to = substations.find((s) => s.id === line.toId);
+    if (!from || !to) return;
+
+    const targetTap = createTapOnLine(line, from, to, lat, lng);
+    await persistTapNode(targetTap);
+
+    const lateral = createTapLateral({
+      fromTap: sourceTap,
+      toKind: 'tap_node',
+      toAssetId: targetTap.id,
+      toLat: targetTap.lat,
+      toLng: targetTap.lng,
+      voltageCode: line.voltageCode,
+      status: 'proposed',
+      name: `Tap link ${sourceTap.name} ↔ ${targetTap.name}`,
+    });
+    await persistTapLateral(lateral);
+
+    set({
+      tapNodes: [...get().tapNodes, targetTap],
+      tapLaterals: [...tapLaterals, lateral],
+      tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+      selection: { kind: 'tap_lateral', id: lateral.id },
+      panel: 'properties',
+      tool: 'cursor',
+    });
+    get().flashStatus('Line-to-line tap created');
+  },
+
+  updateLine: async (id, patch) => {
+    if (!get().requireAdmin()) return;
+    if (get().adminRole === 'editor') {
+      if (!get().editorCanEditLine(id)) {
+        get().flashStatus('This feeder is outside your authorized area');
+        return;
+      }
+      const orig = get().lines.find((l) => l.id === id);
+      if (!orig) return;
+      const next = { ...orig, ...patch, version: orig.version + 1 };
+      const from = get().substations.find((s) => s.id === next.fromId);
+      const result = await submitSuggestion({
+        editorId: get().editorAccount?.id ?? null,
+        editorName: get().adminName || 'Editor',
+        action: 'update',
+        assetKind: 'line',
+        assetId: id,
+        summary: `Update feeder “${next.name}”`,
+        payload: { line: next },
+        lat: from?.lat ?? null,
+        lng: from?.lng ?? null,
+      });
+      get().flashStatus(result.message);
+      if (result.ok && result.suggestion) {
+        set({ suggestions: [result.suggestion, ...get().suggestions] });
+      }
+      return;
+    }
+    const lines = get().lines.map((l) => (l.id === id ? { ...l, ...patch, version: l.version + 1 } : l));
+    const line = lines.find((l) => l.id === id)!;
+    await persistLine(line);
+    set({ lines });
+  },
+
+  updateTapLateral: async (id, patch) => {
+    if (!get().requireAdmin()) return;
+    const tapLaterals = get().tapLaterals.map((l) => (l.id === id ? { ...l, ...patch } : l));
+    const lateral = tapLaterals.find((l) => l.id === id)!;
+    await persistTapLateral(lateral);
+    set({ tapLaterals });
+  },
+
+  saveSubstationBundle: async (ss, relatedLines) => {
+    if (!get().requireAdmin()) return { ok: false, message: 'Admin unlock required' };
+
+    // Editors: scoped + submit as suggestion (does not change live network)
+    if (get().adminRole === 'editor') {
+      if (!get().editorCanEditSs(ss.id)) {
+        return { ok: false, message: 'This substation is outside your authorized area' };
+      }
+      for (const line of relatedLines) {
+        if (!get().editorCanEditLine(line.id)) {
+          return { ok: false, message: `Line “${line.name}” is outside your authorized area` };
+        }
+      }
+      const result = await submitSuggestion({
+        editorId: get().editorAccount?.id ?? null,
+        editorName: get().adminName || 'Editor',
+        action: 'update',
+        assetKind: 'substation',
+        assetId: ss.id,
+        summary: `Update SS “${ss.name}” + ${relatedLines.length} related line(s)`,
+        payload: { ss, relatedLines },
+        lat: ss.lat,
+        lng: ss.lng,
+      });
+      if (result.ok && result.suggestion) {
+        set({ suggestions: [result.suggestion, ...get().suggestions] });
+      }
+      return { ok: result.ok, message: result.message };
+    }
+
+    const now = new Date().toISOString();
+    const nextSs = { ...ss, updatedAt: now, version: ss.version + 1 };
+    const relatedIds = new Set(relatedLines.map((l) => l.id));
+    const nextRelated = relatedLines.map((l) => ({ ...l, version: l.version + 1 }));
+    const lines = get().lines.map((l) => {
+      const patched = nextRelated.find((p) => p.id === l.id);
+      return patched ?? l;
+    });
+
+    // Recompute lengths for lines connected to this SS after coord change
+    const withLengths = lines.map((l) => {
+      if (!relatedIds.has(l.id) && l.fromId !== ss.id && l.toId !== ss.id) return l;
+      if (l.fromId !== ss.id && l.toId !== ss.id) return l;
+      const from = l.fromId === ss.id ? nextSs : get().substations.find((s) => s.id === l.fromId);
+      const to = l.toId === ss.id ? nextSs : get().substations.find((s) => s.id === l.toId);
+      if (!from || !to) return l;
+      return {
+        ...l,
+        lengthKm: haversineKm(from.lat, from.lng, to.lat, to.lng),
+      };
+    });
+
+    const bundleLines = withLengths.filter((l) => relatedIds.has(l.id));
+    const result = await persistSubstationBundle(nextSs, bundleLines);
+    if (!result.ok) return { ok: false, message: result.message || 'Save failed' };
+
+    let tapNodes = [...get().tapNodes];
+    for (const line of bundleLines) {
+      const from = line.fromId === ss.id ? nextSs : get().substations.find((s) => s.id === line.fromId);
+      const to = line.toId === ss.id ? nextSs : get().substations.find((s) => s.id === line.toId);
+      if (!from || !to) continue;
+      const updated = reprojectTapsForLine(line, from, to, tapNodes);
+      tapNodes = tapNodes.map((t) => updated.find((u) => u.id === t.id) ?? t);
+      await Promise.all(updated.map(persistTapNode));
+    }
+
+    set({
+      substations: get().substations.map((s) => (s.id === nextSs.id ? nextSs : s)),
+      lines: withLengths,
+      tapNodes,
+    });
+    return {
+      ok: true,
+      message: result.message || 'Saved SS & related lines',
+    };
+  },
+
+  requestDelete: (sel) => {
+    if (!get().requireAdmin()) return;
+    if (sel.kind === 'substation') {
+      const deps = linesConnectedTo(sel.id, get().lines);
+      if (deps.length) {
+        set({ pendingDelete: sel });
+        return;
+      }
+    }
+    if (sel.kind === 'line') {
+      const deps = tapsOnLine(sel.id, get().tapNodes);
+      if (deps.length) {
+        set({ pendingDelete: sel });
+        return;
+      }
+    }
+    set({ pendingDelete: sel });
+  },
+
+  confirmDelete: async () => {
+    if (!get().requireAdmin()) return;
+    const sel = get().pendingDelete;
+    if (!sel) return;
+
+    if (sel.kind === 'substation') {
+      const lineIds = linesConnectedTo(sel.id, get().lines).map((l) => l.id);
+      const tapIds = get().tapNodes.filter((t) => lineIds.includes(t.parentLineId)).map((t) => t.id);
+      const lateralIds = get()
+        .tapLaterals.filter(
+          (l) =>
+            tapIds.includes(l.fromTapId) ||
+            (l.toKind === 'substation' && l.toAssetId === sel.id) ||
+            (l.toKind === 'tap_node' && tapIds.includes(l.toAssetId)),
+        )
+        .map((l) => l.id);
+
+      await Promise.all([
+        ...lateralIds.map((id) => removeEntity('tap_lateral', id)),
+        ...tapIds.map((id) => removeEntity('tap_node', id)),
+        ...lineIds.map((id) => removeEntity('line', id)),
+        removeEntity('substation', sel.id),
+      ]);
+
+      set({
+        tapLaterals: get().tapLaterals.filter((l) => !lateralIds.includes(l.id)),
+        tapNodes: get().tapNodes.filter((t) => !tapIds.includes(t.id)),
+        lines: get().lines.filter((l) => !lineIds.includes(l.id)),
+        substations: get().substations.filter((s) => s.id !== sel.id),
+        selection: null,
+        pendingDelete: null,
+        panel: null,
+      });
+      get().flashStatus('Substation and connected network removed');
+      return;
+    }
+
+    if (sel.kind === 'line') {
+      const tapIds = tapsOnLine(sel.id, get().tapNodes).map((t) => t.id);
+      const lateralIds = get()
+        .tapLaterals.filter((l) => tapIds.includes(l.fromTapId) || (l.toKind === 'tap_node' && tapIds.includes(l.toAssetId)))
+        .map((l) => l.id);
+      await Promise.all([
+        ...lateralIds.map((id) => removeEntity('tap_lateral', id)),
+        ...tapIds.map((id) => removeEntity('tap_node', id)),
+        removeEntity('line', sel.id),
+      ]);
+      set({
+        tapLaterals: get().tapLaterals.filter((l) => !lateralIds.includes(l.id)),
+        tapNodes: get().tapNodes.filter((t) => !tapIds.includes(t.id)),
+        lines: get().lines.filter((l) => l.id !== sel.id),
+        selection: null,
+        pendingDelete: null,
+        panel: null,
+      });
+      get().flashStatus('Line and taps removed');
+      return;
+    }
+
+    if (sel.kind === 'tap_node') {
+      const lateralIds = get()
+        .tapLaterals.filter((l) => l.fromTapId === sel.id || (l.toKind === 'tap_node' && l.toAssetId === sel.id))
+        .map((l) => l.id);
+      await Promise.all([
+        ...lateralIds.map((id) => removeEntity('tap_lateral', id)),
+        removeEntity('tap_node', sel.id),
+      ]);
+      set({
+        tapLaterals: get().tapLaterals.filter((l) => !lateralIds.includes(l.id)),
+        tapNodes: get().tapNodes.filter((t) => t.id !== sel.id),
+        selection: null,
+        pendingDelete: null,
+        panel: null,
+      });
+      return;
+    }
+
+    await removeEntity('tap_lateral', sel.id);
+    set({
+      tapLaterals: get().tapLaterals.filter((l) => l.id !== sel.id),
+      selection: null,
+      pendingDelete: null,
+      panel: null,
+    });
+    get().flashStatus('Deleted');
+  },
+
+  cancelDelete: () => set({ pendingDelete: null }),
+
+  visibleSubstations: () => {
+    const { substations, filters } = get();
+    return substations.filter((s) => {
+      if (!filters.showProposed && s.status === 'proposed') return false;
+      if (!filters.statuses.includes(s.status)) return false;
+      if (!filters.voltages.includes(s.voltageCode)) return false;
+      if (filters.orgUnitIds.length && s.orgUnitId && !filters.orgUnitIds.includes(s.orgUnitId))
+        return false;
+      if (filters.overloadedOnly && !isOverloaded(s.loadingPct)) return false;
+      if (filters.oldOnly && !isOldAsset(s.commissionYear)) return false;
+      if (filters.needUpgradeOnly && !(isOverloaded(s.loadingPct) || isOldAsset(s.commissionYear)))
+        return false;
+      return true;
+    });
+  },
+
+  visibleLines: () => {
+    const { lines, substations, filters } = get();
+    const ssById = new Map(substations.map((s) => [s.id, s]));
+    return lines.filter((l) => {
+      if (!filters.showProposed && l.status === 'proposed') return false;
+      if (!filters.statuses.includes(l.status)) return false;
+      if (!filters.voltages.includes(l.voltageCode)) return false;
+      // Need both endpoints for geometry, but do NOT hide an existing line
+      // just because one end is a proposed SS that is filtered off the map.
+      const from = ssById.get(l.fromId);
+      const to = ssById.get(l.toId);
+      if (!from || !to) return false;
+      if (filters.overloadedOnly && !isOverloaded(l.loadingPct)) return false;
+      if (filters.oldOnly && !isOldAsset(l.commissionYear)) return false;
+      return true;
+    });
+  },
+
+  analytics: () => {
+    const ss = get().visibleSubstations();
+    const lines = get().visibleLines();
+    const taps = get().tapNodes.filter((t) => lines.some((l) => l.id === t.parentLineId));
+    return computeAnalytics(ss, lines, taps);
+  },
+}));
+
+export type { AssetLifecycle };

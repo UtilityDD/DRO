@@ -16,6 +16,7 @@ import { UploadPage } from './pages/UploadPage';
 import { AdminPage } from './pages/AdminPage';
 import { AtcPage } from './pages/AtcPage';
 import { ConsumersPage } from './pages/ConsumersPage';
+import { PowerMapPage } from './pages/PowerMapPage';
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
           <Route element={<AppShell />}>
             <Route path="/" element={<HomePage />} />
             <Route path="/hierarchy" element={<HierarchyPage />} />
+            <Route path="/powermap" element={<PowerMapPage />} />
             <Route path="/nsc" element={<NscPage />} />
             <Route path="/disco" element={<DiscoPage />} />
             <Route path="/grievances" element={<GrievancePage />} />

@@ -1,6 +1,9 @@
 {
-  "supabaseUrl": "https://YOUR_PROJECT_REF.supabase.co",
-  "supabaseServiceRoleKey": "YOUR_SERVICE_ROLE_KEY_HERE",
+  "supabaseUrl": "https://YOUR_DRO_PROJECT.supabase.co",
+  "supabaseServiceRoleKey": "YOUR_DRO_SERVICE_ROLE_KEY",
   "schema": "public",
-  "_comment": "schema: use public (easiest on a new project) OR dro (then expose dro under Project Settings → API → Exposed schemas). Prefer service_role on the server. Never commit this file."
+  "powermapUrl": "https://YOUR_POWERMAP_PROJECT.supabase.co",
+  "powermapAnonKey": "YOUR_POWERMAP_ANON_KEY",
+  "powermapSchema": "powermap",
+  "_comment": "DRO ops use supabaseUrl + service_role. Power Map uses powermapUrl + powermapAnonKey (anon only in the browser). Never commit this file."
 }

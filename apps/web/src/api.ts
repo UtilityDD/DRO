@@ -69,17 +69,123 @@ export const api = {
       region: Office;
       divisions: (Office & { cccs: Office[] })[];
     }>('/api/hierarchy'),
+  substations: () =>
+    request<{
+      rows: Substation[];
+      total: number;
+      by_division: { division_code: string; division_name: string; count: number; capacity_mva: number }[];
+      can_edit: boolean;
+    }>('/api/substations'),
+  createSubstation: (body: Partial<Substation>) =>
+    request<{ row: Substation }>('/api/substations', { method: 'POST', body: JSON.stringify(body) }),
+  patchSubstation: (id: number | string, body: Partial<Substation>) =>
+    request<{ row: Substation }>(`/api/substations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteSubstation: (id: number | string) =>
+    request<{ ok: boolean }>(`/api/substations/${id}`, { method: 'DELETE' }),
   offices: (type?: string) =>
     request<{ offices: Office[] }>(`/api/offices${type ? `?type=${type}` : ''}`),
   nsc: (q = '') =>
-    request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean; can_upload?: boolean }>(`/api/nsc${q}`),
-  nscSummary: () => request<{ byStatus: Record<string, number>; byDivision: DivSum[]; total: number }>('/api/nsc/summary'),
+    request<{
+      rows: Record<string, unknown>[];
+      total: number;
+      limit?: number;
+      offset?: number;
+      report_date?: string | null;
+      can_edit?: boolean;
+      can_upload?: boolean;
+    }>(`/api/nsc${q}`),
+  nscDesk: (q = '') =>
+    request<{
+      report_date: string | null;
+      pending: number;
+      withheld: number;
+      view: number;
+      avg_days: number;
+      gt_year: number;
+      divisions: { code: string; name: string }[];
+      cccs: { code: string; name: string }[];
+      classes: string[];
+      years: string[];
+      by_division: Record<string, string | number>[];
+      by_ccc: { name: string; count: number }[];
+      by_class: { name: string; count: number }[];
+      by_slab: { id: string; name: string; count: number }[];
+      timeline: Record<string, string | number>[];
+      timeline_divisions: string[];
+      reasons: { name: string; count: number }[];
+    }>(`/api/nsc/desk${q}`),
+  nscExport: async (q = '') => {
+    const res = await fetch(`/api/nsc/export${q}`, { credentials: 'include' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw newError((data as { error?: string }).error || res.statusText, res.status);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="([^"]+)"/);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = match?.[1] || 'nsc.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+  nscSummary: () =>
+    request<{
+      byStatus: Record<string, number>;
+      byDivision: DivSum[];
+      total: number;
+      pending?: number;
+      withheld?: number;
+      report_date?: string | null;
+    }>('/api/nsc/summary'),
+  nscParse: async (file: File, reportDate: string) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('report_date', reportDate);
+    const res = await fetch('/api/nsc/parse', { method: 'POST', credentials: 'include', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw newError(data.error || res.statusText, res.status);
+    return data as {
+      ok: boolean;
+      parse_id: string;
+      preview: {
+        filename: string;
+        report_date: string;
+        remapped: boolean;
+        source_offices: number;
+        skipped: number;
+        total: number;
+        ccc_count: number;
+        by_status: Record<string, number>;
+        by_queue: Record<string, number>;
+        by_division: { key: string; count: number }[];
+        by_class: { key: string; count: number }[];
+        by_quotation_slab: { key: string; count: number }[];
+        by_processing_slab: { key: string; count: number }[];
+      };
+    };
+  },
+  nscCommit: (parseId: string) =>
+    request<{
+      ok: boolean;
+      upserted: number;
+      report_date?: string;
+      cloud?: { persisted?: boolean; host?: string; error?: string };
+      batch?: Record<string, unknown>;
+    }>('/api/nsc/commit', { method: 'POST', body: JSON.stringify({ parse_id: parseId }) }),
   disco: (q = '') =>
     request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean }>(`/api/disco${q}`),
   discoSummary: () =>
     request<{ byDivision: DivSum[]; total: number; totalDue: number; pending: number }>('/api/disco/summary'),
   grievances: (q = '') =>
-    request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean }>(`/api/grievances${q}`),
+    request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean; can_upload?: boolean }>(
+      `/api/grievances${q}`
+    ),
+  createGrievance: (body: Record<string, unknown>) =>
+    request<{ row: Record<string, unknown> }>('/api/grievances', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   techWorks: (q = '') =>
     request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean }>(`/api/tech-works${q}`),
   spotBilling: (q = '') => request<{ rows: Record<string, unknown>[]; total: number }>(`/api/spot-billing${q}`),
@@ -155,10 +261,32 @@ export const api = {
     request(`/api/nsc/${encodeURIComponent(applicationNo)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   patchDisco: (id: number | string, body: Record<string, unknown>) =>
     request(`/api/disco/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  patchGrievance: (docketNo: string, body: Record<string, unknown>) =>
-    request(`/api/grievances/${encodeURIComponent(docketNo)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  patchGrievance: (id: string, body: Record<string, unknown>) =>
+    request<{ row: Record<string, unknown> }>(`/api/grievances/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   patchTech: (workId: string, body: Record<string, unknown>) =>
     request(`/api/tech-works/${encodeURIComponent(workId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+};
+
+export type Substation = {
+  id: number;
+  name: string;
+  voltage_kv: string;
+  capacity_mva: number | null;
+  division_code: string;
+  division_name?: string;
+  ccc_code?: string;
+  ccc_name?: string;
+  district?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  feeder_count?: number | null;
+  status?: string;
+  commissioned_on?: string;
+  remarks?: string;
+  source?: string;
 };
 
 export type Office = {
@@ -194,7 +322,7 @@ const MODULE_ROUTE: Record<string, string> = {
   '/upload': '__upload__',
 };
 
-function isAdminRole(user: User | null): boolean {
+export function isAdminRole(user: User | null): boolean {
   return String(user?.role || '').toLowerCase() === 'admin';
 }
 
@@ -220,7 +348,7 @@ export function canEdit(user: User | null, moduleId: string): boolean {
 export function canAccessPath(user: User | null, path: string): boolean {
   if (!user) return false;
   if (isAdminRole(user)) return true;
-  if (path === '/' || path === '/hierarchy' || path === '/login') return true;
+  if (path === '/' || path === '/hierarchy' || path === '/powermap' || path === '/login') return true;
   if (path === '/upload') {
     return Object.values(user.permissions || {}).some((p) => p.upload);
   }

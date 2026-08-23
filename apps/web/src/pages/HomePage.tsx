@@ -18,7 +18,8 @@ export function HomePage() {
   if (!pulse) return <p className="muted">Loading region pulse…</p>;
 
   const kpis = [
-    { label: 'Pending NSC', value: pulse.pending_nsc },
+    { label: 'Pending NSC', value: Number(pulse.pending_nsc || 0).toLocaleString('en-IN') },
+    { label: 'Withheld NSC', value: Number(pulse.withheld_nsc || 0).toLocaleString('en-IN') },
     { label: 'Pending Disco', value: pulse.pending_disco },
     { label: 'Open Grievances', value: pulse.open_grievances },
     { label: 'Open Tech Works', value: pulse.open_tech_works },
@@ -74,6 +75,9 @@ export function HomePage() {
             </Link>
             <Link className="btn secondary" to="/hierarchy">
               Explore CCC hierarchy
+            </Link>
+            <Link className="btn secondary" to="/powermap">
+              Open Power Map
             </Link>
           </div>
           <p className="muted" style={{ marginTop: '1rem', fontSize: '0.82rem' }}>

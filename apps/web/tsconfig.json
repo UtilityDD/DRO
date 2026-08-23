@@ -14,7 +14,13 @@
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/lib/supabase": ["./src/powermap/supabase.ts"],
+      "@/*": ["../../vendor/PowerMapV2/src/*"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../../vendor/PowerMapV2/src"]
 }

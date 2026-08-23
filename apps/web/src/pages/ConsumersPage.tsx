@@ -1,7 +1,9 @@
 import { FormEvent, useState } from 'react';
 import { api } from '../api';
+import { ConsumerBubbleMap } from './ConsumerBubbleMap';
 
 export function ConsumersPage() {
+  const [tab, setTab] = useState<'map' | 'lookup'>('map');
   const [q, setQ] = useState('');
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [total, setTotal] = useState(0);
@@ -32,62 +34,87 @@ export function ConsumersPage() {
     a.click();
   };
 
+  if (tab === 'map') {
+    return (
+      <div className="cons-shell">
+        <div className="hier-tabs cons-tabs" role="tablist" aria-label="Consumer views">
+          <button type="button" role="tab" aria-selected className="hier-tab on" onClick={() => setTab('map')}>
+            Map
+          </button>
+          <button type="button" role="tab" aria-selected={false} className="hier-tab" onClick={() => setTab('lookup')}>
+            Lookup
+          </button>
+        </div>
+        <ConsumerBubbleMap />
+      </div>
+    );
+  }
+
   return (
-    <div className="panel stack">
-      <h2>Consumer master lookup</h2>
-      <p className="muted">Lean ~5L master — search within your office scope. Upload via Upload Center.</p>
-      <form className="filters" onSubmit={search}>
-        <input
-          placeholder="Consumer ID or name"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          style={{ minWidth: 220 }}
-        />
-        <button className="btn" type="submit">
-          Search
+    <div className="stack">
+      <div className="hier-tabs cons-tabs" role="tablist" aria-label="Consumer views">
+        <button type="button" role="tab" aria-selected={false} className="hier-tab" onClick={() => setTab('map')}>
+          Map
         </button>
-        <button type="button" className="btn secondary" onClick={exportCsv} disabled={!rows.length}>
-          Export CSV
+        <button type="button" role="tab" aria-selected className="hier-tab on" onClick={() => setTab('lookup')}>
+          Lookup
         </button>
-        <span className="muted">{total ? `${total} in scope (showing ${rows.length})` : ''}</span>
-      </form>
-      {error && <p className="error">{error}</p>}
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Consumer ID</th>
-              <th>Name</th>
-              <th>CCC</th>
-              <th>Division</th>
-              <th>Class</th>
-              <th>Status</th>
-              <th>Meter</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={String(r.consumer_id)}>
-                <td>{String(r.consumer_id)}</td>
-                <td>{String(r.name || '')}</td>
-                <td>{String(r.ccc_code || '')}</td>
-                <td>{String(r.division_code || '')}</td>
-                <td>{String(r.consumer_class || '')}</td>
-                <td>
-                  <span className={`badge ${String(r.status || '')}`}>{String(r.status || '')}</span>
-                </td>
-                <td>{String(r.meter_no || '')}</td>
-              </tr>
-            ))}
-            {!rows.length && (
+      </div>
+      <div className="panel stack">
+        <h2>Consumer master lookup</h2>
+        <form className="filters" onSubmit={search}>
+          <input
+            placeholder="Consumer ID or name"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            style={{ minWidth: 220 }}
+          />
+          <button className="btn" type="submit">
+            Search
+          </button>
+          <button type="button" className="btn secondary" onClick={exportCsv} disabled={!rows.length}>
+            Export CSV
+          </button>
+          <span className="muted">{total ? `${total} in scope (showing ${rows.length})` : ''}</span>
+        </form>
+        {error && <p className="error">{error}</p>}
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={7} className="muted">
-                  No rows — upload consumer master or search
-                </td>
+                <th>Consumer ID</th>
+                <th>Name</th>
+                <th>CCC</th>
+                <th>Division</th>
+                <th>Class</th>
+                <th>Status</th>
+                <th>Meter</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={String(r.consumer_id)}>
+                  <td>{String(r.consumer_id)}</td>
+                  <td>{String(r.name || '')}</td>
+                  <td>{String(r.ccc_code || '')}</td>
+                  <td>{String(r.division_code || '')}</td>
+                  <td>{String(r.consumer_class || '')}</td>
+                  <td>
+                    <span className={`badge ${String(r.status || '')}`}>{String(r.status || '')}</span>
+                  </td>
+                  <td>{String(r.meter_no || '')}</td>
+                </tr>
+              ))}
+              {!rows.length && (
+                <tr>
+                  <td colSpan={7} className="muted">
+                    No rows — upload consumer master or search
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -1,0 +1,10 @@
+server/data/*.json
+.env
+.env.local
+.env.*.local
+node_modules
+apps/web/node_modules
+server/node_modules
+apps/web/dev-dist
+.vscode
+*.log

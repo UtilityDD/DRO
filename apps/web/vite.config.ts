@@ -1,3 +1,4 @@
+import path from 'path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -26,6 +27,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -36,12 +38,28 @@ export default defineConfig({
       },
     }),
   ],
+  resolve: {
+    alias: [
+      {
+        find: '@/lib/supabase',
+        replacement: path.resolve(__dirname, 'src/powermap/supabase.ts'),
+      },
+      {
+        find: '@',
+        replacement: path.resolve(__dirname, '../../vendor/PowerMapV2/src'),
+      },
+    ],
+  },
+  optimizeDeps: {
+    include: ['leaflet', '@geoman-io/leaflet-geoman-free'],
+  },
   server: {
     port: 5173,
     proxy: {
       '/api': {
         target: 'http://localhost:8787',
         changeOrigin: true,
+        timeout: 180000,
       },
     },
   },

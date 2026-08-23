@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalizeUser } = require('./permissions');
 const sb = require('./supabase');
+const { hydrateNscRows, packNscCloudRow, slimNscCloudRow } = require('./nsc_parse');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const READONLY_FS = Boolean(process.env.VERCEL || process.env.NOW_REGION);
@@ -22,7 +23,7 @@ const TABLES = {
 };
 
 /** Never fall back to local JSON for these when Supabase is configured. */
-const CLOUD_ONLY = new Set();
+const CLOUD_ONLY = new Set(['atc_snapshots']);
 
 /** In-memory cache when Supabase is active */
 const cache = Object.create(null);
@@ -50,7 +51,7 @@ function readLocal(name, fallback = []) {
   const p = filePath(name);
   if (!fs.existsSync(p)) {
     writeLocal(name, fallback);
-    return structuredClone(fallback);
+    return cloneRows(name, fallback);
   }
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -63,10 +64,16 @@ function writeLocal(name, data) {
   if (READONLY_FS) return;
   try {
     ensureDir();
-    fs.writeFileSync(filePath(name), JSON.stringify(data, null, 2), 'utf8');
+    const pretty = name === 'nsc_cases' ? undefined : 2;
+    fs.writeFileSync(filePath(name), JSON.stringify(data, null, pretty), 'utf8');
   } catch (e) {
     console.warn('[store] local write skipped:', e.message);
   }
+}
+
+function cloneRows(name, rows) {
+  if (name === 'nsc_cases' && Array.isArray(rows) && rows.length > 5000) return rows;
+  return structuredClone(rows);
 }
 
 function sanitizeRow(row) {
@@ -77,6 +84,76 @@ function sanitizeRow(row) {
     'upload_consumer_master', 'upload_bulk',
   ].forEach((k) => delete r[k]);
   return r;
+}
+
+const GRIEV_META = '\n||DRO||\n';
+const GRIEV_EXTRA_KEYS = [
+  'complaint_id',
+  'followup_users',
+  'followups',
+  'created_by',
+  'assigned_username',
+  'target_resolve_on',
+  'last_followup_on',
+  'last_followup_by',
+  'resolved_on',
+  'resolved_by',
+  'complainant_type',
+  'complainant_phone',
+  'office_code',
+  'office_name',
+  'office_type',
+  'created_at',
+];
+
+function hydrateGrievance(row) {
+  if (!row || typeof row !== 'object') return row;
+  const raw = String(row.remarks || '');
+  const i = raw.indexOf(GRIEV_META);
+  const out = { ...row };
+  if (i >= 0) {
+    out.remarks = raw.slice(0, i);
+    try {
+      Object.assign(out, JSON.parse(raw.slice(i + GRIEV_META.length)) || {});
+    } catch {
+      /* keep text only */
+    }
+  }
+  if (!out.complaint_id && out.docket_no) out.complaint_id = out.docket_no;
+  if (!Array.isArray(out.followup_users)) {
+    out.followup_users = out.assigned_username ? [String(out.assigned_username)] : [];
+  }
+  if (!Array.isArray(out.followups)) out.followups = [];
+  return out;
+}
+
+function packGrievanceCloudRow(row) {
+  const clean = sanitizeRow(row);
+  const text = String(clean.remarks || '').split(GRIEV_META)[0];
+  const extra = {};
+  for (const k of GRIEV_EXTRA_KEYS) {
+    if (clean[k] !== undefined) extra[k] = clean[k];
+  }
+  const keep = [
+    'id',
+    'docket_no',
+    'consumer_id',
+    'consumer_name',
+    'ccc_code',
+    'division_code',
+    'region_code',
+    'category',
+    'lodged_on',
+    'status',
+    'aging_days',
+    'priority',
+    'remarks',
+    'batch_id',
+    'updated_at',
+  ];
+  const out = {};
+  for (const k of keep) out[k] = k === 'remarks' ? `${text}${GRIEV_META}${JSON.stringify(extra)}` : clean[k] ?? null;
+  return out;
 }
 
 /**
@@ -90,11 +167,23 @@ async function initStore() {
     return { mode: 'local' };
   }
   console.log('[store] Mode: supabase →', sb.status().host);
+  try {
+    await sb.resolveAtcSchema();
+  } catch (e) {
+    console.warn('[store] schema probe failed:', e.message);
+  }
   for (const [name, table] of Object.entries(TABLES)) {
     try {
+      const local = name === 'nsc_cases' ? readLocal(name, []) : null;
+      // 71k NSC rows: boot from local JSON so login is not blocked on a full Supabase pull + 68MB rewrite.
+      if (name === 'nsc_cases' && local && local.length > 500) {
+        cache[name] = hydrateNscRows(local);
+        console.log(`[store] loaded ${table} from local: ${cache[name].length} rows (skipped supabase pull)`);
+        continue;
+      }
       const rows = await sb.selectAll(table);
       const remote = Array.isArray(rows) ? rows : [];
-      const local = readLocal(name, []);
+      const localRows = local || readLocal(name, []);
       if (CLOUD_ONLY.has(name)) {
         cache[name] = remote;
         writeLocal(name, cache[name]);
@@ -102,14 +191,18 @@ async function initStore() {
         continue;
       }
       // Never wipe a populated local mirror with an empty remote (schema lag / failed push).
-      if (remote.length === 0 && local.length > 0) {
-        cache[name] = local;
+      if (remote.length === 0 && localRows.length > 0) {
+        cache[name] =
+          name === 'grievances' ? localRows.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(localRows) : localRows;
         console.warn(
-          `[store] ${table}: supabase empty, keeping local mirror (${local.length} rows)`
+          `[store] ${table}: supabase empty, keeping local mirror (${localRows.length} rows)`
         );
       } else {
-        cache[name] = remote;
-        writeLocal(name, cache[name]);
+        cache[name] =
+          name === 'grievances' ? remote.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(remote) : remote;
+        if (!(name === 'nsc_cases' && localRows.length === cache[name].length)) {
+          writeLocal(name, cache[name]);
+        }
         console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
       }
     } catch (e) {
@@ -118,7 +211,13 @@ async function initStore() {
         console.error(`[store] ${table} cloud load failed (no local fallback):`, e.message);
       } else {
         console.warn(`[store] ${table} load failed, using local mirror:`, e.message);
-        cache[name] = readLocal(name, []);
+        const fallback = readLocal(name, []);
+        cache[name] =
+          name === 'grievances'
+            ? fallback.map(hydrateGrievance)
+            : name === 'nsc_cases'
+              ? hydrateNscRows(fallback)
+              : fallback;
       }
     }
   }
@@ -138,23 +237,28 @@ async function refreshFromSupabase(name) {
   if (!table) throw new Error(`Unknown collection ${name}`);
   const rows = await sb.selectAll(table);
   const remote = Array.isArray(rows) ? rows : [];
-  cache[name] = remote;
-  writeLocal(name, remote);
-  return structuredClone(remote);
+  cache[name] =
+    name === 'grievances' ? remote.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(remote) : remote;
+  writeLocal(name, cache[name]);
+  return cloneRows(name, cache[name]);
 }
 
 function readCollection(name, fallback = []) {
+  let rows;
   if (useSupabase() && cache[name]) {
-    return structuredClone(cache[name]);
+    rows = cloneRows(name, cache[name]);
+  } else if (useSupabase() && CLOUD_ONLY.has(name)) {
+    rows = cloneRows(name, fallback);
+  } else {
+    rows = readLocal(name, fallback);
   }
-  if (useSupabase() && CLOUD_ONLY.has(name)) {
-    return structuredClone(fallback);
-  }
-  return readLocal(name, fallback);
+  if (name === 'grievances') return rows.map(hydrateGrievance);
+  if (name === 'nsc_cases') return hydrateNscRows(rows);
+  return rows;
 }
 
 function writeCollection(name, data) {
-  const copy = structuredClone(data);
+  const copy = cloneRows(name, data);
   if (useSupabase()) cache[name] = copy;
   writeLocal(name, copy);
 
@@ -169,7 +273,7 @@ function writeCollection(name, data) {
 }
 
 async function writeCollectionAndPersist(name, data) {
-  const copy = structuredClone(data);
+  const copy = cloneRows(name, data);
   if (useSupabase()) cache[name] = copy;
   writeLocal(name, copy);
 
@@ -212,7 +316,26 @@ async function persistCollection(name, copy) {
     }
     return;
   }
-  await sb.replaceTable(table, copy.map(sanitizeRow));
+  if (name === 'nsc_cases') {
+    let useFull = true;
+    try {
+      await sb.querySupabase('nsc_cases?select=consumer_id,phone,report_date&limit=1');
+    } catch {
+      useFull = false;
+    }
+    const packed = copy.map((row) => sanitizeRow(useFull ? packNscCloudRow(row) : slimNscCloudRow(row)));
+    await sb.replaceTable(table, packed, { chunk: 400, silent: true });
+    return;
+  }
+  const mapped = copy.map((row) => {
+    if (name === 'grievances') return packGrievanceCloudRow(row);
+    return sanitizeRow(row);
+  });
+  if (name === 'grievances') {
+    await sb.upsertRows(table, mapped, 'id');
+    return;
+  }
+  await sb.replaceTable(table, mapped);
 }
 
 const readCollectionSync = readCollection;
@@ -289,6 +412,11 @@ async function pushAllLocalToSupabase() {
   if (!useSupabase()) throw new Error('Supabase not configured');
   const report = [];
   for (const [name, table] of Object.entries(TABLES)) {
+    if (CLOUD_ONLY.has(name) || name === 'atc_snapshots') {
+      console.warn(`[supabase:push] skipped ${table} (refusing to replace AT&C / cloud-only data)`);
+      report.push({ table, rows: 0, skipped: true });
+      continue;
+    }
     const rows = readLocal(name, []);
     await sb.replaceTable(table, rows.map(sanitizeRow));
     cache[name] = structuredClone(rows);

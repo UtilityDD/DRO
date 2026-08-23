@@ -3,54 +3,7 @@ import { api, canEdit } from '../api';
 import { useAuth } from '../auth';
 import { DataPage } from '../components/DataPage';
 
-export function NscPage() {
-  const { user } = useAuth();
-  const editable = canEdit(user, 'nsc');
-  const [summary, setSummary] = useState('');
-  const load = useCallback((q: string) => api.nsc(q), []);
-
-  useEffect(() => {
-    api.nscSummary().then((r) => {
-      setSummary(`Total ${r.total} · ` + Object.entries(r.byStatus).map(([k, v]) => `${k}: ${v}`).join(' · '));
-    });
-  }, []);
-
-  return (
-    <DataPage
-      title="New Connection (NSC)"
-      subtitle={summary}
-      exportName="nsc_cases"
-      load={load}
-      columns={[
-        { key: 'application_no', label: 'Application' },
-        { key: 'consumer_name', label: 'Name' },
-        { key: 'division_name', label: 'Division' },
-        { key: 'ccc_name', label: 'CCC' },
-        { key: 'status', label: 'Status' },
-        { key: 'stage', label: 'Stage' },
-        { key: 'delay_days', label: 'Delay (d)' },
-        { key: 'category', label: 'Category' },
-      ]}
-      onRowAction={
-        editable
-          ? (row) =>
-              row.status !== 'completed' ? (
-                <button
-                  type="button"
-                  className="btn secondary"
-                  onClick={async () => {
-                    await api.patchNsc(String(row.application_no), { status: 'completed' });
-                    (row.__reload as (() => void) | undefined)?.();
-                  }}
-                >
-                  Mark done
-                </button>
-              ) : null
-          : undefined
-      }
-    />
-  );
-}
+export { NscDeskPage as NscPage } from './NscDeskPage';
 
 export function DiscoPage() {
   const { user } = useAuth();
@@ -103,45 +56,7 @@ export function DiscoPage() {
   );
 }
 
-export function GrievancePage() {
-  const { user } = useAuth();
-  const editable = canEdit(user, 'grievance');
-  const load = useCallback((q: string) => api.grievances(q), []);
-  return (
-    <DataPage
-      title="Consumer Grievances"
-      exportName="grievances"
-      load={load}
-      columns={[
-        { key: 'docket_no', label: 'Docket' },
-        { key: 'consumer_name', label: 'Name' },
-        { key: 'ccc_name', label: 'CCC' },
-        { key: 'category', label: 'Category' },
-        { key: 'lodged_on', label: 'Lodged' },
-        { key: 'aging_days', label: 'Aging' },
-        { key: 'priority', label: 'Priority' },
-        { key: 'status', label: 'Status' },
-      ]}
-      onRowAction={
-        editable
-          ? (row) =>
-              row.status === 'open' ? (
-                <button
-                  type="button"
-                  className="btn secondary"
-                  onClick={async () => {
-                    await api.patchGrievance(String(row.docket_no), { status: 'closed' });
-                    (row.__reload as (() => void) | undefined)?.();
-                  }}
-                >
-                  Close
-                </button>
-              ) : null
-          : undefined
-      }
-    />
-  );
-}
+export { GrievanceDeskPage as GrievancePage } from './GrievanceDeskPage';
 
 export function TechWorksPage() {
   const { user } = useAuth();

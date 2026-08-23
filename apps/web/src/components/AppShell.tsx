@@ -16,9 +16,10 @@ type LinkItem = {
 const links: LinkItem[] = [
   { to: '/', label: 'Home', short: 'Home', end: true, icon: 'home' },
   { to: '/hierarchy', label: 'Hierarchy', short: 'Offices', icon: 'tree' },
+  { to: '/powermap', label: 'Power Map', short: 'Map', icon: 'map' },
   { to: '/nsc', label: 'New Connection', short: 'NSC', moduleId: 'nsc', icon: 'plug' },
   { to: '/disco', label: 'Disconnection', short: 'Disco', moduleId: 'disco', icon: 'bolt' },
-  { to: '/grievances', label: 'Grievances', short: 'Docket', moduleId: 'grievance', icon: 'chat' },
+  { to: '/grievances', label: 'Grievances', short: 'Griev', moduleId: 'grievance', icon: 'chat' },
   { to: '/tech-works', label: 'Tech Works', short: 'Works', moduleId: 'tech_works', icon: 'wrench' },
   { to: '/spot-billing', label: 'Spot Billing', short: 'Spot', moduleId: 'spot_billing', icon: 'bill' },
   { to: '/bulk', label: 'Bulk Consumers', short: 'Bulk', moduleId: 'bulk', icon: 'bulk' },
@@ -78,6 +79,12 @@ function Icon({ name }: { name: string }) {
       return (
         <svg {...common}>
           <path d="M12 3v18M12 8h6M12 14h6M12 8H8M12 14H7" />
+        </svg>
+      );
+    case 'map':
+      return (
+        <svg {...common}>
+          <path d="M9 4 4 6v14l5-2 6 2 5-2V4l-5 2-6-2zM9 4v14M15 6v14" />
         </svg>
       );
     case 'chat':
@@ -164,6 +171,7 @@ export function AppShell() {
     return (
       <div className="login-page">
         <div className="loading-spinner" aria-label="Loading" />
+        <p className="muted" style={{ marginTop: 16 }}>Starting DRO…</p>
       </div>
     );
   }
@@ -221,8 +229,10 @@ export function AppShell() {
     </div>
   );
 
+  const mapMode = location.pathname.startsWith('/powermap');
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${mapMode ? ' mode-powermap' : ''}`}>
       <header className="app-bar">
         <div className="brand desktop-only">
           <div className="brand-mark">DRO</div>
@@ -253,7 +263,7 @@ export function AppShell() {
         </aside>
 
         <div className="main">
-          <div className="page-content">
+          <div className={`page-content${mapMode ? ' page-content-flush' : ''}`}>
             <Outlet />
           </div>
         </div>
