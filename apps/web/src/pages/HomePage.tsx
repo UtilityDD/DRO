@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { api } from '../api';
+import { api, canView } from '../api';
+import { useAuth } from '../auth';
 
 export function HomePage() {
-  const [pulse, setPulse] = useState<Record<string, number> | null>(null);
+  const { user } = useAuth();
+  const [pulse, setPulse] = useState<{ [k: string]: number } | null>(null);
   const [nscDiv, setNscDiv] = useState<{ division_name: string; pending: number }[]>([]);
 
   useEffect(() => {
@@ -76,6 +78,11 @@ export function HomePage() {
             <Link className="btn secondary" to="/hierarchy">
               Explore CCC hierarchy
             </Link>
+            {canView(user, 'field_notes') && (
+              <Link className="btn secondary" to="/field">
+                Field notes — sites & follow-ups
+              </Link>
+            )}
             <Link className="btn secondary" to="/powermap">
               Open Power Map
             </Link>

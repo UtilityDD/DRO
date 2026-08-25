@@ -37,6 +37,7 @@ const {
   isAdmin,
 } = require('./permissions');
 const { seedAll, sampleSubstations } = require('./seed_lib');
+const fieldNotes = require('./field_notes');
 
 const PORT = process.env.PORT || 8787;
 const app = express();
@@ -143,6 +144,10 @@ function ensureSeeded() {
   if (!Array.isArray(substations) || !substations.length) {
     writeCollection('substations', sampleSubstations());
     console.log('[DRO] Seeded 33/11 kV substations under DRO divisions');
+  }
+  const fieldNotes = readCollection('field_notes', []);
+  if (!Array.isArray(fieldNotes)) {
+    writeCollection('field_notes', []);
   }
 }
 
@@ -578,6 +583,282 @@ app.delete('/api/substations/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+function fieldNotePayload(rows, user) {
+  const scoped = rows.filter((r) => scopeFilter(user, r)).map(fieldNotes.hydrateFieldNote);
+  return {
+    rows: fieldNotes.sortItems(scoped),
+    total: scoped.length,
+    counts: fieldNotes.countsOf(scoped),
+    can_edit: canEdit(user, 'field_notes'),
+    staff: fieldNotes.staffForUser(user),
+  };
+}
+
+app.get('/api/field-notes', requireAuth, requirePerm('field_notes', 'view'), (req, res) => {
+  const rows = readCollection('field_notes', []);
+  res.json(fieldNotePayload(rows, req.user));
+});
+
+app.get('/api/field-notes/sites', requireAuth, requirePerm('field_notes', 'view'), (req, res) => {
+  const notes = readCollection('field_notes', []).filter((r) => scopeFilter(req.user, r)).map(fieldNotes.hydrateFieldNote);
+  res.json({
+    sites: fieldNotes.buildSiteSummaries(req.user, notes),
+    counts: fieldNotes.countsOf(notes),
+    can_edit: canEdit(req.user, 'field_notes'),
+    staff: fieldNotes.staffForUser(req.user),
+  });
+});
+
+app.post('/api/field-notes', requireAuth, requirePerm('field_notes', 'edit'), (req, res) => {
+  const site = fieldNotes.resolveSite(req.body?.site_type, req.body?.site_code, {
+    site_name: req.body?.site_name,
+    parent_code: req.body?.parent_code,
+    user: req.user,
+  });
+  if (site.error) return res.status(400).json({ error: site.error });
+  if (!fieldNotes.canSeeSite(req.user, site)) return res.status(403).json({ error: 'Site out of scope' });
+
+  const kind = String(req.body?.kind || 'note').trim().toLowerCase();
+  if (!fieldNotes.KINDS.has(kind)) return res.status(400).json({ error: 'Invalid kind' });
+  const priority = String(req.body?.priority || 'normal').trim().toLowerCase();
+  if (!fieldNotes.PRIORITIES.has(priority)) return res.status(400).json({ error: 'Invalid priority' });
+  const status = String(req.body?.status || 'open').trim().toLowerCase();
+  if (!fieldNotes.STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status' });
+
+  const title = fieldNotes.cleanText(req.body?.title, 120).trim();
+  const body = fieldNotes.cleanText(req.body?.body, 8000).trim();
+  if (kind !== 'note' && title.length < 2) return res.status(400).json({ error: 'Title is required' });
+  const assigned = fieldNotes.parseAssigned(req.body?.assigned_to);
+  if (assigned.error) return res.status(400).json({ error: assigned.error });
+  const when = fieldNotes.parseFollowupAt(req.body?.followup_at);
+  if (when.error) return res.status(400).json({ error: when.error });
+  const visit = fieldNotes.parseWhen(req.body?.visited_at, 'visit date/time');
+  if (visit.error) return res.status(400).json({ error: visit.error });
+  const accompanied = fieldNotes.parseNames(req.body?.accompanied);
+
+  const rows = readCollection('field_notes', []);
+  if (kind === 'note' && req.body?.standing) {
+    const existing = rows.find(
+      (r) =>
+        r.kind === 'note' &&
+        String(r.site_type) === site.site_type &&
+        String(r.site_code) === site.site_code
+    );
+    if (existing && scopeFilter(req.user, existing)) {
+      const prev = existing.body;
+      existing.body = body;
+      existing.title = title || existing.title || 'Site notes';
+      existing.updated_at = new Date().toISOString();
+      if (prev !== body) fieldNotes.appendUpdate(existing, req.user, 'edit', 'Updated site notes');
+      writeCollection('field_notes', rows);
+      return res.json({ row: fieldNotes.hydrateFieldNote(existing) });
+    }
+  }
+
+  const now = new Date().toISOString();
+  const visitedAt = visit.value || (req.body?.visited ? now : null);
+  const row = {
+    id: nextId(rows),
+    ...site,
+    kind,
+    title: title || (kind === 'note' ? 'Site notes' : ''),
+    body,
+    priority,
+    status,
+    assigned_to: assigned.names,
+    accompanied,
+    followup_at: when.value,
+    last_visited_at: visitedAt,
+    updates: [],
+    created_by: req.user.username,
+    created_at: now,
+    updated_at: now,
+  };
+  fieldNotes.appendUpdate(row, req.user, 'edit', 'Created');
+  if (visitedAt) fieldNotes.appendUpdate(row, req.user, 'visit', fieldNotes.visitLabel(visitedAt, accompanied));
+  rows.push(row);
+  writeCollection('field_notes', rows);
+  logActivity(req.user.username, 'field_note_create', `${row.kind}: ${row.title} @ ${row.site_name}`);
+  res.json({ row: fieldNotes.hydrateFieldNote(row) });
+});
+
+app.post('/api/field-notes/visit', requireAuth, requirePerm('field_notes', 'edit'), (req, res) => {
+  const now = new Date().toISOString();
+  const visit = fieldNotes.parseWhen(req.body?.visited_at, 'visit date/time');
+  if (visit.error) return res.status(400).json({ error: visit.error });
+  const at = visit.value || now;
+  const accompaniedIn = req.body?.accompanied !== undefined ? fieldNotes.parseNames(req.body.accompanied) : null;
+  const rows = readCollection('field_notes', []);
+
+  const stamp = (row) => {
+    if (accompaniedIn) row.accompanied = accompaniedIn;
+    row.last_visited_at = at;
+    row.updated_at = now;
+    fieldNotes.appendUpdate(
+      row,
+      req.user,
+      'visit',
+      fieldNotes.cleanText(req.body?.note, 240) || fieldNotes.visitLabel(at, row.accompanied)
+    );
+  };
+
+  const id = req.body?.id != null ? String(req.body.id) : '';
+  if (id) {
+    const row = rows.find((r) => String(r.id) === id);
+    if (!row || !scopeFilter(req.user, row)) return res.status(404).json({ error: 'Not found' });
+    stamp(row);
+    writeCollection('field_notes', rows);
+    return res.json({ row: fieldNotes.hydrateFieldNote(row) });
+  }
+
+  let site = null;
+  if (String(req.body?.site_type) === 'custom') {
+    const code = String(req.body?.site_code || '').trim();
+    const hit = rows.find((r) => String(r.site_type) === 'custom' && String(r.site_code) === code);
+    if (!hit) {
+      site = fieldNotes.resolveSite('custom', code, {
+        site_name: req.body?.site_name,
+        parent_code: req.body?.parent_code,
+        user: req.user,
+      });
+    } else {
+      site = {
+        site_type: 'custom',
+        site_code: hit.site_code,
+        site_name: hit.site_name,
+        office_code: hit.office_code,
+        office_type: hit.office_type,
+        office_name: hit.office_name,
+        division_code: hit.division_code,
+        ccc_code: hit.ccc_code,
+        region_code: hit.region_code || '341',
+      };
+    }
+  } else {
+    site = fieldNotes.resolveSite(req.body?.site_type, req.body?.site_code);
+  }
+  if (!site || site.error) return res.status(400).json({ error: site?.error || 'Pick a site' });
+  if (!fieldNotes.canSeeSite(req.user, site)) return res.status(403).json({ error: 'Site out of scope' });
+
+  const atSite = rows.filter(
+    (r) => String(r.site_type) === site.site_type && String(r.site_code) === site.site_code && scopeFilter(req.user, r)
+  );
+  const open = atSite.filter((r) => !fieldNotes.isDone(r.status));
+  const targets = open.length ? open : atSite;
+  if (!targets.length) {
+    const row = {
+      id: nextId(rows),
+      ...site,
+      kind: 'note',
+      title: 'Site notes',
+      body: '',
+      priority: 'normal',
+      status: 'open',
+      assigned_to: [],
+      accompanied: accompaniedIn || [],
+      followup_at: null,
+      last_visited_at: at,
+      updates: [],
+      created_by: req.user.username,
+      created_at: now,
+      updated_at: now,
+    };
+    fieldNotes.appendUpdate(row, req.user, 'visit', fieldNotes.visitLabel(at, row.accompanied));
+    rows.push(row);
+    writeCollection('field_notes', rows);
+    return res.json({ row: fieldNotes.hydrateFieldNote(row), stamped: 1 });
+  }
+  for (const row of targets) stamp(row);
+  writeCollection('field_notes', rows);
+  res.json({
+    row: fieldNotes.hydrateFieldNote(targets[0]),
+    stamped: targets.length,
+  });
+});
+
+app.patch('/api/field-notes/:id', requireAuth, requirePerm('field_notes', 'view'), (req, res) => {
+  const rows = readCollection('field_notes', []);
+  const row = rows.find((r) => String(r.id) === String(req.params.id));
+  if (!row || !scopeFilter(req.user, row)) return res.status(404).json({ error: 'Not found' });
+
+  const editable = canEdit(req.user, 'field_notes');
+  const editFields = ['title', 'body', 'priority', 'status', 'kind', 'followup_at', 'assigned_to', 'accompanied', 'last_visited_at', 'site_name'];
+  const wantsEdit = editFields.some((k) => req.body[k] !== undefined);
+  if ((wantsEdit || req.body.visited || req.body.followup || req.body.visited_at) && !editable) {
+    return res.status(403).json({ error: 'No edit permission for field_notes' });
+  }
+
+  if (req.body.kind !== undefined) {
+    const kind = String(req.body.kind).trim().toLowerCase();
+    if (!fieldNotes.KINDS.has(kind)) return res.status(400).json({ error: 'Invalid kind' });
+    row.kind = kind;
+  }
+  if (req.body.priority !== undefined) {
+    const priority = String(req.body.priority).trim().toLowerCase();
+    if (!fieldNotes.PRIORITIES.has(priority)) return res.status(400).json({ error: 'Invalid priority' });
+    row.priority = priority;
+  }
+  if (req.body.status !== undefined) {
+    const status = String(req.body.status).trim().toLowerCase();
+    if (!fieldNotes.STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (status !== row.status) {
+      fieldNotes.appendUpdate(row, req.user, 'status', status === 'done' ? 'Marked done' : `Status → ${status}`);
+    }
+    row.status = status;
+  }
+  if (req.body.title !== undefined) {
+    const title = fieldNotes.cleanText(req.body.title, 120).trim();
+    if (row.kind !== 'note' && title.length < 2) return res.status(400).json({ error: 'Title is required' });
+    row.title = title || row.title;
+  }
+  if (req.body.body !== undefined) {
+    const body = fieldNotes.cleanText(req.body.body, 8000);
+    if (body !== String(row.body || '')) {
+      fieldNotes.appendUpdate(row, req.user, 'edit', 'Updated notes');
+    }
+    row.body = body;
+  }
+  if (req.body.followup_at !== undefined) {
+    const when = fieldNotes.parseFollowupAt(req.body.followup_at);
+    if (when.error) return res.status(400).json({ error: when.error });
+    row.followup_at = when.value;
+  }
+  if (req.body.assigned_to !== undefined) {
+    const assigned = fieldNotes.parseAssigned(req.body.assigned_to);
+    if (assigned.error) return res.status(400).json({ error: assigned.error });
+    row.assigned_to = assigned.names;
+  }
+  if (req.body.accompanied !== undefined) {
+    row.accompanied = fieldNotes.parseNames(req.body.accompanied);
+  }
+  if (req.body.last_visited_at !== undefined || req.body.visited_at !== undefined) {
+    const visit = fieldNotes.parseWhen(req.body.last_visited_at ?? req.body.visited_at, 'visit date/time');
+    if (visit.error) return res.status(400).json({ error: visit.error });
+    row.last_visited_at = visit.value;
+  }
+  if (req.body.site_name !== undefined && String(row.site_type) === 'custom') {
+    const name = fieldNotes.cleanText(req.body.site_name, 80).trim();
+    if (name.length < 2) return res.status(400).json({ error: 'Enter a site name' });
+    row.site_name = name;
+  }
+
+  const followup = fieldNotes.cleanText(req.body?.followup, 240).trim();
+  if (followup) {
+    if (followup.length < 2) return res.status(400).json({ error: 'Follow-up is too short' });
+    fieldNotes.appendUpdate(row, req.user, 'followup', followup);
+  }
+  const now = new Date().toISOString();
+  if (req.body.visited) {
+    const visit = fieldNotes.parseWhen(req.body.visited_at, 'visit date/time');
+    if (visit.error) return res.status(400).json({ error: visit.error });
+    row.last_visited_at = visit.value || now;
+    fieldNotes.appendUpdate(row, req.user, 'visit', followup || fieldNotes.visitLabel(row.last_visited_at, row.accompanied));
+  }
+  row.updated_at = now;
+  writeCollection('field_notes', rows);
+  res.json({ row: fieldNotes.hydrateFieldNote(row) });
+});
+
 function listModule(collection, moduleId) {
   return (req, res) => {
     if (!canView(req.user, moduleId)) {
@@ -608,6 +889,13 @@ function nscQueryFromReq(req) {
     ccc: req.query.ccc,
     class: req.query.class,
     slab: req.query.slab,
+    delay_min: req.query.delay_min,
+    delay_max: req.query.delay_max,
+    cuts: req.query.cuts,
+    pole: req.query.pole,
+    pole_min: req.query.pole_min,
+    pole_max: req.query.pole_max,
+    procedure: req.query.procedure, // Promoter/Developer = Procedure B
     time: req.query.time,
     q: req.query.q,
     status: req.query.status,

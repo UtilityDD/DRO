@@ -3,6 +3,7 @@ const path = require('path');
 const { normalizeUser } = require('./permissions');
 const sb = require('./supabase');
 const { hydrateNscRows, packNscCloudRow, slimNscCloudRow } = require('./nsc_parse');
+const { hydrateFieldNote, packFieldNoteCloudRow } = require('./field_notes');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const READONLY_FS = Boolean(process.env.VERCEL || process.env.NOW_REGION);
@@ -20,6 +21,7 @@ const TABLES = {
   spot_billing: 'spot_billing',
   atc_snapshots: 'atc_snapshots',
   activity_logs: 'activity_logs',
+  field_notes: 'field_notes',
 };
 
 /** Never fall back to local JSON for these when Supabase is configured. */
@@ -188,11 +190,23 @@ async function loadTable(name) {
     }
     if (remote.length === 0 && localRows.length > 0) {
       cache[name] =
-        name === 'grievances' ? localRows.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(localRows) : localRows;
+        name === 'grievances'
+          ? localRows.map(hydrateGrievance)
+          : name === 'nsc_cases'
+            ? hydrateNscRows(localRows)
+            : name === 'field_notes'
+              ? localRows.map(hydrateFieldNote)
+              : localRows;
       console.warn(`[store] ${table}: supabase empty, keeping local mirror (${localRows.length} rows)`);
     } else {
       cache[name] =
-        name === 'grievances' ? remote.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(remote) : remote;
+        name === 'grievances'
+          ? remote.map(hydrateGrievance)
+          : name === 'nsc_cases'
+            ? hydrateNscRows(remote)
+            : name === 'field_notes'
+              ? remote.map(hydrateFieldNote)
+              : remote;
       if (!(name === 'nsc_cases' && localRows.length === cache[name].length)) {
         writeLocal(name, cache[name]);
       }
@@ -210,7 +224,9 @@ async function loadTable(name) {
           ? fallback.map(hydrateGrievance)
           : name === 'nsc_cases'
             ? hydrateNscRows(fallback)
-            : fallback;
+            : name === 'field_notes'
+              ? fallback.map(hydrateFieldNote)
+              : fallback;
     }
   }
 }
@@ -286,7 +302,13 @@ async function refreshFromSupabase(name) {
   const rows = await sb.selectAll(table);
   const remote = Array.isArray(rows) ? rows : [];
   cache[name] =
-    name === 'grievances' ? remote.map(hydrateGrievance) : name === 'nsc_cases' ? hydrateNscRows(remote) : remote;
+    name === 'grievances'
+      ? remote.map(hydrateGrievance)
+      : name === 'nsc_cases'
+        ? hydrateNscRows(remote)
+        : name === 'field_notes'
+          ? remote.map(hydrateFieldNote)
+          : remote;
   writeLocal(name, cache[name]);
   return cloneRows(name, cache[name]);
 }
@@ -302,6 +324,7 @@ function readCollection(name, fallback = []) {
   }
   if (name === 'grievances') return rows.map(hydrateGrievance);
   if (name === 'nsc_cases') return hydrateNscRows(rows);
+  if (name === 'field_notes') return rows.map(hydrateFieldNote);
   return rows;
 }
 
@@ -377,9 +400,10 @@ async function persistCollection(name, copy) {
   }
   const mapped = copy.map((row) => {
     if (name === 'grievances') return packGrievanceCloudRow(row);
+    if (name === 'field_notes') return packFieldNoteCloudRow(row);
     return sanitizeRow(row);
   });
-  if (name === 'grievances') {
+  if (name === 'grievances' || name === 'field_notes') {
     await sb.upsertRows(table, mapped, 'id');
     return;
   }

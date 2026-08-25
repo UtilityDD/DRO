@@ -17,6 +17,7 @@ import { AdminPage } from './pages/AdminPage';
 import { AtcPage } from './pages/AtcPage';
 import { ConsumersPage } from './pages/ConsumersPage';
 import { PowerMapPage } from './pages/PowerMapPage';
+import { FieldDeskPage } from './pages/FieldDeskPage';
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/bulk" element={<BulkPage />} />
             <Route path="/consumers" element={<ConsumersPage />} />
             <Route path="/atc" element={<AtcPage />} />
+            <Route path="/field" element={<FieldDeskPage />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Route>

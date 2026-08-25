@@ -88,6 +88,16 @@ function fmtDay(iso: string) {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
+function fmtWhen(iso: string) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return fmtDay(iso);
+  const day = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  if (iso.length <= 10 || /T00:00:00/.test(iso)) return day;
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${day} · ${time}`;
+}
+
 function maskName(v: string) {
   return v.replace(/[^\p{L} .'-]/gu, '').replace(/\s+/g, ' ').slice(0, 60);
 }
@@ -227,19 +237,6 @@ function staffName(username: string, staff: User[] = []) {
     if (short) map[u.username] = short;
   }
   return map[username] || username;
-}
-
-function usersLabel(list: string[], staff: User[] = []) {
-  const names = list.map((u) => staffName(u, staff));
-  if (!names.length) return '—';
-  if (names.length <= 2) return names.join(', ');
-  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
-}
-
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return '—';
-  return ((parts[0][0] || '') + (parts[1]?.[0] || '')).toUpperCase();
 }
 
 function canLogFollowup(user: { username?: string } | null, row: CaseRow, isAdmin: boolean) {
@@ -494,24 +491,23 @@ export function GrievanceDeskPage() {
         </div>
       </header>
 
-      <nav className="crm-queues" aria-label="Case queues">
-        {QUEUES.map((qItem) => (
-          <button
-            key={qItem.id}
-            type="button"
-            className={`crm-queue ${filter === qItem.id ? 'on' : ''}`}
-            onClick={() => setFilter(qItem.id)}
-          >
-            {qItem.label}
-            <b>{counts[qItem.id]}</b>
-          </button>
-        ))}
-      </nav>
-
       {error && !adding && <p className="error crm-banner">{error}</p>}
 
       <div className="crm-split">
         <section className="crm-list" aria-label="Case list">
+          <nav className="crm-queues" aria-label="Case queues">
+            {QUEUES.map((qItem) => (
+              <button
+                key={qItem.id}
+                type="button"
+                className={`crm-queue ${filter === qItem.id ? 'on' : ''}`}
+                onClick={() => setFilter(qItem.id)}
+              >
+                {qItem.label}
+                <b>{counts[qItem.id]}</b>
+              </button>
+            ))}
+          </nav>
           {rows.map((d) => (
             <button
               key={d.id}
@@ -519,20 +515,17 @@ export function GrievanceDeskPage() {
               className={`crm-item ${delayClass(d)}${open?.id === d.id ? ' is-selected' : ''}`}
               onClick={() => selectCase(d)}
             >
-              <span className="crm-avatar" aria-hidden>
-                {initials(d.complainant_name)}
-              </span>
               <span className="crm-item-body">
                 <span className="crm-item-top">
                   <strong>{d.complainant_name || '—'}</strong>
-                  <span className={`badge ${delayClass(d)}`}>{delayLabel(d)}</span>
+                  <span className="crm-delay">{delayLabel(d)}</span>
                 </span>
                 <span className="crm-item-mid">
-                  {d.complaint_id} · {typeLabel(d.type)}
-                </span>
-                <span className="crm-item-bot">
-                  {d.office_name}
-                  {d.complainant_type === 'consumer' && d.consumer_id ? ` · ${d.consumer_id}` : ''}
+                  <span className="crm-ref">{d.complaint_id}</span>
+                  <span aria-hidden> · </span>
+                  {typeLabel(d.type)}
+                  <span aria-hidden> · </span>
+                  {d.office_name.replace(/\s+CCC$/i, '')}
                 </span>
               </span>
             </button>
@@ -596,45 +589,81 @@ export function GrievanceDeskPage() {
                 </div>
               )}
 
-              <div className="crm-block">
+              <section className="crm-card">
                 <h4>Issue</h4>
-                <p>{open.description || '—'}</p>
-              </div>
+                <div className="crm-card-body">
+                  <p>{open.description || '—'}</p>
+                </div>
+              </section>
 
-              <div className="crm-block">
+              <section className="crm-card">
                 <h4>Assigned</h4>
-                <p className="muted tight">{usersLabel(open.followup_users, staff)}</p>
-                {isAdmin && staff.length > 0 && (
-                  <div className="griev-users">
-                    {staff.map((u) => {
-                      const on = open.followup_users.includes(u.username);
-                      return (
-                        <label key={u.username} className={`griev-user ${on ? 'on' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={on}
-                            disabled={busy}
-                            onChange={() => void saveAssignees(open, u.username, on)}
-                          />
-                          {u.name || u.username}
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                <div className="crm-card-body">
+                  {isAdmin && staff.length > 0 ? (
+                    <div className="griev-users">
+                      {staff.map((u) => {
+                        const on = open.followup_users.includes(u.username);
+                        return (
+                          <label key={u.username} className={`griev-user ${on ? 'on' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              disabled={busy}
+                              onChange={() => void saveAssignees(open, u.username, on)}
+                            />
+                            {u.name || u.username}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : open.followup_users.length ? (
+                    <div className="griev-users">
+                      {open.followup_users.map((u) => (
+                        <span key={u} className="griev-user on">
+                          {staffName(u, staff)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted tight">No one assigned</p>
+                  )}
+                </div>
+              </section>
 
-              <div className="crm-block crm-activity">
-                <h4>Activity</h4>
-                {staleFollowup && <p className="crm-stale">Follow-up overdue — last log {open.last_followup}</p>}
+              <section className="crm-card crm-activity">
+                <h4>Follow-up</h4>
+                <div className="crm-card-body">
+                  {staleFollowup && <p className="crm-stale">Follow-up overdue — last log {open.last_followup}</p>}
+                  {open.timeline.length > 0 ? (
+                    <ol className="crm-timeline">
+                      {[...open.timeline].reverse().map((t, i) => (
+                        <li key={`${t.at}-${i}`}>
+                          <span className="crm-tl-rail" aria-hidden>
+                            <span className="crm-tl-dot" />
+                          </span>
+                          <div className="crm-tl-body">
+                            <span className="crm-time">
+                              {fmtWhen(t.at)} · {staffName(t.by, staff)}
+                            </span>
+                            <p>{t.remark}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="muted tight">No follow-up logged yet.</p>
+                  )}
+                </div>
                 {isDone(open.status) ? (
-                  <p className="muted tight">
-                    This case is {statusLabel(open.status).toLowerCase()}. Follow-up is locked.
-                  </p>
+                  <div className="crm-card-foot">
+                    <p className="muted tight">
+                      This case is {statusLabel(open.status).toLowerCase()}. Follow-up is locked.
+                    </p>
+                  </div>
                 ) : canLogFollowup(user, open, isAdmin) ? (
-                  <div className="crm-composer">
+                  <div className="crm-card-foot crm-composer">
                     <textarea
-                      rows={3}
+                      rows={2}
                       maxLength={240}
                       value={remark}
                       placeholder="Add a follow-up note"
@@ -645,23 +674,11 @@ export function GrievanceDeskPage() {
                     </button>
                   </div>
                 ) : (
-                  <p className="muted tight">You are not assigned to log follow-up on this case.</p>
+                  <div className="crm-card-foot">
+                    <p className="muted tight">You are not assigned to log follow-up on this case.</p>
+                  </div>
                 )}
-                {open.timeline.length > 0 ? (
-                  <ol className="crm-timeline">
-                    {open.timeline.map((t, i) => (
-                      <li key={`${t.at}-${i}`}>
-                        <span className="crm-time">
-                          {fmtDay(t.at)} · {staffName(t.by, staff)}
-                        </span>
-                        <span>{t.remark}</span>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="muted tight">No follow-up logged yet.</p>
-                )}
-              </div>
+              </section>
             </>
           ) : (
             <p className="crm-empty">Select a case from the queue.</p>

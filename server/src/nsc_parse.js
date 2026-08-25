@@ -12,14 +12,25 @@ const XLSX = require('xlsx');
 const NSC_META = '\n||NSC||\n';
 
 const SLABS = [
-  { id: 'd0_3', label: 'Within 3 days', min: 0, max: 3 },
-  { id: 'd3_7', label: '3–7 days', min: 4, max: 7 },
-  { id: 'd7_15', label: '7–15 days', min: 8, max: 15 },
-  { id: 'd15_30', label: '15–30 days', min: 16, max: 30 },
-  { id: 'm1_3', label: '1–3 months', min: 31, max: 90 },
-  { id: 'm3_6', label: '3–6 months', min: 91, max: 180 },
-  { id: 'm6_12', label: '6–12 months', min: 181, max: 365 },
-  { id: 'y1', label: 'More than 1 year', min: 366, max: Infinity },
+  { id: 'd0_3', label: '≤3d', min: 0, max: 3 },
+  { id: 'd3_7', label: '3–7d', min: 4, max: 7 },
+  { id: 'd7_15', label: '7–15d', min: 8, max: 15 },
+  { id: 'd15_30', label: '15–30d', min: 16, max: 30 },
+  { id: 'm1_3', label: '1–3m', min: 31, max: 90 },
+  { id: 'm3_6', label: '3–6m', min: 91, max: 180 },
+  { id: 'm6_12', label: '6–12m', min: 181, max: 365 },
+  { id: 'y1', label: '>1y', min: 366, max: Infinity },
+];
+
+const CUMULATIVE = [
+  { id: 'le3', label: '≤3d', op: 'le', days: 3 },
+  { id: 'le7', label: '≤7d', op: 'le', days: 7 },
+  { id: 'gt7', label: '>7d', op: 'gt', days: 7 },
+  { id: 'gt15', label: '>15d', op: 'gt', days: 15 },
+  { id: 'gt30', label: '>30d', op: 'gt', days: 30 },
+  { id: 'gt90', label: '>90d', op: 'gt', days: 90 },
+  { id: 'gt180', label: '>6m', op: 'gt', days: 180 },
+  { id: 'gt365', label: '>1y', op: 'gt', days: 365 },
 ];
 
 const CLASS_FROM_CODE = {
@@ -82,6 +93,15 @@ const HEADER_ALIASES = {
   WITHHELD_REASON: 'withheld_reason',
   LOAD_WATTS: 'load_watts',
   LOAD_KW: 'load_kw',
+  NO_OF_POLES: 'no_of_poles',
+  NO_OF_POLE: 'no_of_poles',
+  N_POLE: 'no_of_poles',
+  POLES: 'no_of_poles',
+  POLE: 'no_of_poles',
+  APPLICANT_TYPE: 'applicant_type',
+  APPLICANTTYPE: 'applicant_type',
+  COMPLEX_NAME: 'complex_name',
+  COMPLEX_ID: 'complex_id',
 };
 
 function normHeader(h) {
@@ -155,7 +175,7 @@ function slabFor(days) {
   for (const s of SLABS) {
     if (days >= s.min && days <= s.max) return { id: s.id, label: s.label };
   }
-  return { id: 'y1', label: 'More than 1 year' };
+  return { id: 'y1', label: '>1y' };
 }
 
 function cleanId(v) {
@@ -209,6 +229,60 @@ function queueOf(sapStatus) {
   if (sapStatus === 'withheld') return 'withheld';
   if (sapStatus === 'completed') return 'completed';
   return 'pending';
+}
+
+function parsePoleCount(v) {
+  if (v == null || v === '' || v === '(null)') return 0;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n);
+}
+
+function poleCountOf(row) {
+  if (!row || typeof row !== 'object') return null;
+  if (row.pole_count != null && row.pole_count !== '') return parsePoleCount(row.pole_count);
+  if (row.no_of_poles != null && row.no_of_poles !== '') return parsePoleCount(row.no_of_poles);
+  if (Object.prototype.hasOwnProperty.call(row, 'pole_count') || Object.prototype.hasOwnProperty.call(row, 'no_of_poles')) {
+    return 0;
+  }
+  return null;
+}
+
+function poleKindOf(row) {
+  const n = poleCountOf(row);
+  if (n == null) return 'unknown';
+  return n > 0 ? 'pole' : 'non_pole';
+}
+
+function mapProcedure(raw) {
+  const s = String(raw || '').trim();
+  if (!s || s === '(null)' || s.toLowerCase() === 'null') {
+    return { applicant_type: '', procedure: 'unknown', procedure_label: '—' };
+  }
+  const u = s.toUpperCase().replace(/\s+/g, ' ');
+  if (/PROMOTER|DEVELOPER|HOUSING|COMPLEX/.test(u)) {
+    return { applicant_type: s, procedure: 'proc_b', procedure_label: 'Proc. B' };
+  }
+  return { applicant_type: s, procedure: 'proc_a', procedure_label: 'Individual' };
+}
+
+function procedureOf(row) {
+  if (!row || typeof row !== 'object') return 'unknown';
+  if (row.procedure === 'proc_a' || row.procedure === 'proc_b' || row.procedure === 'unknown') return row.procedure;
+  return mapProcedure(row.applicant_type).procedure;
+}
+
+const POLE_BINS = [
+  { id: 'p0', label: 'Non-pole', min: 0, max: 0 },
+  { id: 'p1_2', label: '1–2', min: 1, max: 2 },
+  { id: 'p3_5', label: '3–5', min: 3, max: 5 },
+  { id: 'p6_10', label: '6–10', min: 6, max: 10 },
+  { id: 'p11', label: '>10', min: 11, max: Infinity },
+];
+
+function poleBinOf(count) {
+  const n = Number(count) || 0;
+  return POLE_BINS.find((b) => n >= b.min && n <= b.max) || POLE_BINS[0];
 }
 
 function isBlankReason(v) {
@@ -418,6 +492,9 @@ function parseNscWorkbook({ filePath, filename, reportDate, droCccs }) {
       : Number.isFinite(loadWatts)
         ? Math.round((loadWatts / 1000) * 1000) / 1000
         : 0;
+    const pole_count = parsePoleCount(raw.no_of_poles);
+    const pole_kind = pole_count > 0 ? 'pole' : 'non_pole';
+    const proc = mapProcedure(raw.applicant_type);
 
     rows.push({
       application_no,
@@ -444,6 +521,13 @@ function parseNscWorkbook({ filePath, filename, reportDate, droCccs }) {
       withheld_on,
       withheld_reason: withheld_reason.slice(0, 240),
       load_kw,
+      pole_count,
+      pole_kind,
+      applicant_type: proc.applicant_type,
+      procedure: proc.procedure,
+      procedure_label: proc.procedure_label,
+      complex_name: String(raw.complex_name || '').trim().slice(0, 160),
+      complex_id: cleanId(raw.complex_id),
       category: consumer_class,
       delay_days: quotation_age_days == null || quotation_age_days < 0 ? 0 : quotation_age_days,
       quotation_age_days,
@@ -552,6 +636,13 @@ function extraPayload(row) {
     processing_label: row.processing_label || '',
     ccc_name: row.ccc_name || '',
     division_name: row.division_name || '',
+    pole_count: poleCountOf(row) ?? 0,
+    pole_kind: poleKindOf(row) === 'unknown' ? (Number(row.pole_count) > 0 ? 'pole' : 'non_pole') : poleKindOf(row),
+    applicant_type: row.applicant_type || mapProcedure(row.applicant_type).applicant_type,
+    procedure: procedureOf(row),
+    procedure_label: row.procedure_label || mapProcedure(row.applicant_type).procedure_label,
+    complex_name: row.complex_name || '',
+    complex_id: row.complex_id || '',
   };
 }
 
@@ -655,6 +746,17 @@ function hydrateNsc(row) {
     out.processing_slab = s.id;
     out.processing_label = s.label;
   }
+  if (out.pole_count == null && out.no_of_poles != null) out.pole_count = parsePoleCount(out.no_of_poles);
+  if (out.pole_count == null) out.pole_kind = 'unknown';
+  else {
+    out.pole_count = parsePoleCount(out.pole_count);
+    out.pole_kind = out.pole_count > 0 ? 'pole' : 'non_pole';
+  }
+  const proc = mapProcedure(out.applicant_type);
+  out.applicant_type = out.applicant_type || proc.applicant_type;
+  out.procedure = procedureOf(out);
+  out.procedure_label = out.procedure_label || proc.procedure_label;
+  out.complex_name = String(out.complex_name || '').trim();
   return out;
 }
 
@@ -692,6 +794,74 @@ function daysOf(row, clock) {
   return clock === 'processing' ? row.processing_days : row.quotation_age_days;
 }
 
+function matchesCut(days, cut) {
+  if (days == null || !Number.isFinite(Number(days)) || Number(days) < 0) return false;
+  const d = Number(days);
+  if (cut.op === 'le') return d <= cut.days;
+  if (cut.op === 'ge') return d >= cut.days;
+  if (cut.op === 'gt') return d > cut.days;
+  if (cut.op === 'bt') {
+    const max = cut.daysMax != null ? cut.daysMax : cut.days;
+    return d >= cut.days && d <= max;
+  }
+  return false;
+}
+
+function parseExtraCuts(raw) {
+  const parts = String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  const out = [];
+  const seen = new Set();
+  for (const part of parts) {
+    const m = part.match(/^(le|gt|bt):(\d+)(?:-(\d+))?$/i);
+    if (!m) continue;
+    const op = m[1].toLowerCase();
+    const a = Number(m[2]);
+    const b = m[3] != null ? Number(m[3]) : NaN;
+    if (!Number.isFinite(a) || a < 0 || a > 20000) continue;
+    let days = a;
+    let daysMax;
+    let id;
+    let label;
+    if (op === 'bt') {
+      if (!Number.isFinite(b) || b < 0 || b > 20000) continue;
+      days = Math.min(a, b);
+      daysMax = Math.max(a, b);
+      if (days === daysMax) continue;
+      id = `c_bt_${days}_${daysMax}`;
+      label = `${days}–${daysMax}d`;
+    } else if (op === 'le') {
+      id = `c_le_${a}`;
+      label = a === 180 ? '≤6m' : a === 365 ? '≤1y' : `≤${a}d`;
+    } else {
+      id = `c_gt_${a}`;
+      label = a === 180 ? '>6m' : a === 365 ? '>1y' : `>${a}d`;
+    }
+    if (seen.has(id)) continue;
+    if (CUMULATIVE.some((c) => c.op === op && c.days === a && op !== 'bt')) continue;
+    seen.add(id);
+    out.push({ id, label, op, days, daysMax });
+  }
+  return out;
+}
+
+function numOrNull(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function daysInRange(days, min, max) {
+  if (days == null || !Number.isFinite(Number(days)) || Number(days) < 0) return false;
+  const d = Number(days);
+  if (min != null && d < min) return false;
+  if (max != null && d > max) return false;
+  return true;
+}
+
 function filterNscRows(rows, q = {}) {
   const queue = String(q.queue || '').toLowerCase();
   const division = String(q.division || '');
@@ -702,6 +872,12 @@ function filterNscRows(rows, q = {}) {
   const timeKey = String(q.time || '');
   const search = String(q.q || '').trim().toLowerCase();
   const applyTime = String(q.apply_time || '1') !== '0';
+  const delayMin = numOrNull(q.delay_min);
+  const delayMax = numOrNull(q.delay_max);
+  const pole = String(q.pole || '').toLowerCase();
+  const poleMin = numOrNull(q.pole_min);
+  const poleMax = numOrNull(q.pole_max);
+  const procedure = String(q.procedure || '').toLowerCase();
   return rows.filter((r) => {
     if (queue === 'pending' && !isPendingQueue(r)) return false;
     if (queue === 'withheld' && String(r.status) !== 'withheld') return false;
@@ -709,6 +885,19 @@ function filterNscRows(rows, q = {}) {
     if (ccc && String(r.ccc_code) !== ccc) return false;
     if (klass && String(r.consumer_class || r.category) !== klass) return false;
     if (slab && slabIdOf(r, clock) !== slab) return false;
+    if (delayMin != null || delayMax != null) {
+      if (!daysInRange(daysOf(r, clock), delayMin, delayMax)) return false;
+    }
+    if (pole === 'pole' || pole === 'non_pole' || pole === 'unknown') {
+      if (poleKindOf(r) !== pole) return false;
+    }
+    if (poleMin != null || poleMax != null) {
+      const n = poleCountOf(r);
+      if (n == null || !daysInRange(n, poleMin, poleMax)) return false;
+    }
+    if (procedure === 'proc_a' || procedure === 'proc_b' || procedure === 'unknown') {
+      if (procedureOf(r) !== procedure) return false;
+    }
     if (applyTime && timeKey) {
       const iso = eventOn(r);
       if (timeKey.length === 7 && monthOfIso(iso) !== timeKey) return false;
@@ -730,6 +919,17 @@ function buildNscDesk(allRows, q = {}) {
   const withheldRows = allRows.filter((r) => String(r.status) === 'withheld');
   const scoped = filterNscRows(allRows, { ...q, apply_time: '0', queue });
   const view = filterNscRows(allRows, { ...q, queue });
+  const chartRows = filterNscRows(allRows, {
+    ...q,
+    queue,
+    slab: '',
+    delay_min: '',
+    delay_max: '',
+    pole: '',
+    pole_min: '',
+    pole_max: '',
+    procedure: '',
+  });
 
   const divisions = new Map();
   const cccs = new Map();
@@ -749,32 +949,168 @@ function buildNscDesk(allRows, q = {}) {
     if (y) years.add(y);
   }
 
+  const extraCuts = parseExtraCuts(q.cuts);
+  const allCuts = CUMULATIVE.concat(extraCuts);
+  const HOT_SLABS = new Set(['m1_3', 'm3_6', 'm6_12', 'y1']);
+  const CRITICAL_SLABS = new Set(['m6_12', 'y1']);
   const byDivision = new Map();
   const byCcc = new Map();
   const byClass = new Map();
   const bySlab = new Map();
+  const byCum = new Map();
   const reasons = new Map();
   const ages = [];
   let gtYear = 0;
-  for (const r of view) {
+  let stuck30 = 0;
+  let stuck180 = 0;
+  for (const cut of allCuts) byCum.set(cut.id, 0);
+
+  function ensureDiv(r) {
     const divName = r.division_name || r.division_code || 'Unknown';
     if (!byDivision.has(divName)) {
-      const rec = { name: divName, total: 0 };
+      const rec = {
+        name: divName,
+        code: r.division_code || '',
+        total: 0,
+        hot: 0,
+        critical: 0,
+        delay_sum: 0,
+        delay_n: 0,
+        non_pole: 0,
+        pole: 0,
+        poles_sum: 0,
+        proc_a: 0,
+        proc_b: 0,
+        hot_proc_b: 0,
+      };
       for (const s of SLABS) rec[s.id] = 0;
       rec.unknown = 0;
+      for (const cut of allCuts) rec[cut.id] = 0;
       byDivision.set(divName, rec);
     }
-    const rec = byDivision.get(divName);
+    return byDivision.get(divName);
+  }
+
+  const byPoleBin = new Map();
+  for (const b of POLE_BINS) byPoleBin.set(b.id, 0);
+  let mixNonPole = 0;
+  let mixPole = 0;
+  let mixUnknown = 0;
+  let mixPolesSum = 0;
+  let mixHotNonPole = 0;
+  let mixHotPole = 0;
+  let mixProcA = 0;
+  let mixProcB = 0;
+  let mixProcUnknown = 0;
+  let mixHotProcA = 0;
+  let mixHotProcB = 0;
+
+  for (const r of chartRows) {
+    const rec = ensureDiv(r);
     const sid = slabIdOf(r, clock) || 'unknown';
     rec[sid] = (rec[sid] || 0) + 1;
     rec.total += 1;
-    const cccName = r.ccc_name || r.ccc_code || 'Unknown';
-    byCcc.set(cccName, (byCcc.get(cccName) || 0) + 1);
-    const cls = r.consumer_class || 'Others';
-    byClass.set(cls, (byClass.get(cls) || 0) + 1);
     bySlab.set(sid, (bySlab.get(sid) || 0) + 1);
     const d = Number(daysOf(r, clock));
-    if (Number.isFinite(d) && d >= 0) ages.push(d);
+    if (Number.isFinite(d) && d >= 0) {
+      rec.delay_sum += d;
+      rec.delay_n += 1;
+    }
+    if (HOT_SLABS.has(sid)) rec.hot += 1;
+    if (CRITICAL_SLABS.has(sid)) rec.critical += 1;
+    for (const cut of allCuts) {
+      if (matchesCut(d, cut)) {
+        rec[cut.id] = (rec[cut.id] || 0) + 1;
+        byCum.set(cut.id, (byCum.get(cut.id) || 0) + 1);
+      }
+    }
+    const kind = poleKindOf(r);
+    const poles = poleCountOf(r) || 0;
+    if (kind === 'pole') {
+      mixPole += 1;
+      rec.pole += 1;
+      rec.poles_sum += poles;
+      mixPolesSum += poles;
+      if (HOT_SLABS.has(sid)) mixHotPole += 1;
+    } else if (kind === 'non_pole') {
+      mixNonPole += 1;
+      rec.non_pole += 1;
+      if (HOT_SLABS.has(sid)) mixHotNonPole += 1;
+    } else {
+      mixUnknown += 1;
+    }
+    const bin = poleBinOf(kind === 'unknown' ? 0 : poles);
+    if (kind !== 'unknown') byPoleBin.set(bin.id, (byPoleBin.get(bin.id) || 0) + 1);
+    const proc = procedureOf(r);
+    if (proc === 'proc_b') {
+      mixProcB += 1;
+      rec.proc_b += 1;
+      if (HOT_SLABS.has(sid)) {
+        mixHotProcB += 1;
+        rec.hot_proc_b += 1;
+      }
+    } else if (proc === 'proc_a') {
+      mixProcA += 1;
+      rec.proc_a += 1;
+      if (HOT_SLABS.has(sid)) mixHotProcA += 1;
+    } else mixProcUnknown += 1;
+  }
+
+  for (const r of view) {
+    const cccName = r.ccc_name || r.ccc_code || 'Unknown';
+    if (!byCcc.has(cccName)) {
+      byCcc.set(cccName, {
+        code: r.ccc_code || '',
+        name: cccName,
+        count: 0,
+        hot: 0,
+        critical: 0,
+        delay_sum: 0,
+        delay_n: 0,
+        non_pole: 0,
+        pole: 0,
+        hot_non_pole: 0,
+        hot_pole: 0,
+        poles_sum: 0,
+        proc_a: 0,
+        proc_b: 0,
+        hot_proc_b: 0,
+      });
+    }
+    const cccRec = byCcc.get(cccName);
+    cccRec.count += 1;
+    const cls = r.consumer_class || 'Others';
+    byClass.set(cls, (byClass.get(cls) || 0) + 1);
+    const sid = slabIdOf(r, clock) || 'unknown';
+    const d = Number(daysOf(r, clock));
+    if (Number.isFinite(d) && d >= 0) {
+      ages.push(d);
+      cccRec.delay_sum += d;
+      cccRec.delay_n += 1;
+    }
+    if (HOT_SLABS.has(sid)) {
+      cccRec.hot += 1;
+      stuck30 += 1;
+    }
+    if (CRITICAL_SLABS.has(sid)) {
+      cccRec.critical += 1;
+      stuck180 += 1;
+    }
+    const kind = poleKindOf(r);
+    const poles = poleCountOf(r) || 0;
+    if (kind === 'pole') {
+      cccRec.pole += 1;
+      cccRec.poles_sum += poles;
+      if (HOT_SLABS.has(sid)) cccRec.hot_pole += 1;
+    } else if (kind === 'non_pole') {
+      cccRec.non_pole += 1;
+      if (HOT_SLABS.has(sid)) cccRec.hot_non_pole += 1;
+    }
+    const proc = procedureOf(r);
+    if (proc === 'proc_b') {
+      cccRec.proc_b += 1;
+      if (HOT_SLABS.has(sid)) cccRec.hot_proc_b += 1;
+    } else if (proc === 'proc_a') cccRec.proc_a += 1;
     if (sid === 'y1') gtYear += 1;
     if (queue === 'withheld') {
       const reason = String(r.withheld_reason || '').trim() || 'Not recorded';
@@ -790,19 +1126,79 @@ function buildNscDesk(allRows, q = {}) {
     pending: pendingRows.length,
     withheld: withheldRows.length,
     view: view.length,
+    mix_total: chartRows.length,
     avg_days: ages.length ? Math.round(ages.reduce((s, n) => s + n, 0) / ages.length) : 0,
     gt_year: gtYear,
+    stuck_30: stuck30,
+    stuck_180: stuck180,
+    pole: {
+      non_pole: mixNonPole,
+      pole: mixPole,
+      unknown: mixUnknown,
+      poles_sum: mixPolesSum,
+      hot_non_pole: mixHotNonPole,
+      hot_pole: mixHotPole,
+      avg_poles: mixPole ? Math.round((10 * mixPolesSum) / mixPole) / 10 : 0,
+    },
+    by_pole_bin: POLE_BINS.map((b) => ({
+      id: b.id,
+      name: b.label,
+      min: b.min,
+      max: b.max === Infinity ? null : b.max,
+      count: byPoleBin.get(b.id) || 0,
+    })),
+    procedure: {
+      proc_a: mixProcA,
+      proc_b: mixProcB,
+      unknown: mixProcUnknown,
+      hot_proc_a: mixHotProcA,
+      hot_proc_b: mixHotProcB,
+    },
     divisions: [...divisions.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]))).map(([code, name]) => ({ code, name })),
     cccs: [...cccs.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]))).map(([code, name]) => ({ code, name })),
     classes: [...classes].sort(),
     years: [...years].sort(),
-    by_division: [...byDivision.values()].sort((a, b) => b.total - a.total),
-    by_ccc: [...byCcc.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 21),
+    by_division: [...byDivision.values()]
+      .map((d) => ({
+        ...d,
+        avg_days: d.delay_n ? Math.round(d.delay_sum / d.delay_n) : 0,
+        hot_pct: d.total ? Math.round((1000 * d.hot) / d.total) / 10 : 0,
+      }))
+      .sort((a, b) => b.hot - a.hot || b.total - a.total),
+    by_ccc: [...byCcc.values()]
+      .map((c) => ({
+        code: c.code,
+        name: c.name,
+        count: c.count,
+        hot: c.hot,
+        critical: c.critical,
+        avg_days: c.delay_n ? Math.round(c.delay_sum / c.delay_n) : 0,
+        hot_pct: c.count ? Math.round((1000 * c.hot) / c.count) / 10 : 0,
+        non_pole: c.non_pole || 0,
+        pole: c.pole || 0,
+        hot_non_pole: c.hot_non_pole || 0,
+        hot_pole: c.hot_pole || 0,
+        poles_sum: c.poles_sum || 0,
+        proc_a: c.proc_a || 0,
+        proc_b: c.proc_b || 0,
+        hot_proc_b: c.hot_proc_b || 0,
+      }))
+      .sort((a, b) => b.hot - a.hot || b.hot_pct - a.hot_pct)
+      .slice(0, 21),
     by_class: [...byClass.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-    by_slab: SLABS.concat([{ id: 'unknown', label: 'Unknown' }]).map((s) => ({
+    by_slab: SLABS.map((s) => ({
       id: s.id,
       name: s.label,
       count: bySlab.get(s.id) || 0,
+    })),
+    by_cumulative: allCuts.map((c) => ({
+      id: c.id,
+      name: c.label,
+      op: c.op,
+      days: c.days,
+      days_max: c.daysMax,
+      count: byCum.get(c.id) || 0,
+      custom: !!c.id && String(c.id).startsWith('c_'),
     })),
     timeline,
     timeline_divisions: divNames,
@@ -882,6 +1278,12 @@ function nscExportRow(r) {
     withheld_reason: r.withheld_reason || '',
     quotation_age_days: r.quotation_age_days ?? '',
     processing_days: r.processing_days ?? '',
+    pole_count: poleCountOf(r) ?? '',
+    pole_kind: poleKindOf(r),
+    applicant_type: r.applicant_type || '',
+    procedure: procedureOf(r),
+    procedure_label: r.procedure_label || mapProcedure(r.applicant_type).procedure_label,
+    complex_name: r.complex_name || '',
   };
 }
 
@@ -889,11 +1291,18 @@ function nscListRow(r) {
   const out = nscExportRow(r);
   out.quotation_age_days = r.quotation_age_days ?? null;
   out.processing_days = r.processing_days ?? null;
+  out.pole_count = poleCountOf(r);
+  out.pole_kind = poleKindOf(r);
+  out.applicant_type = r.applicant_type || '';
+  out.procedure = procedureOf(r);
+  out.procedure_label = r.procedure_label || mapProcedure(r.applicant_type).procedure_label;
+  out.complex_name = r.complex_name || '';
   return out;
 }
 
 module.exports = {
   SLABS,
+  CUMULATIVE,
   NSC_META,
   parseNscWorkbook,
   packNscCloudRow,

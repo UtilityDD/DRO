@@ -25,6 +25,7 @@ const links: LinkItem[] = [
   { to: '/bulk', label: 'Bulk Consumers', short: 'Bulk', moduleId: 'bulk', icon: 'bulk' },
   { to: '/consumers', label: 'Consumers', short: 'Master', moduleId: 'consumers', icon: 'users' },
   { to: '/atc', label: 'AT&C', short: 'AT&C', moduleId: 'atc', icon: 'chart' },
+  { to: '/field', label: 'Field Desk', short: 'Field', moduleId: 'field_notes', icon: 'pin' },
   { to: '/upload', label: 'Upload Center', short: 'Upload', icon: 'upload' },
   { to: '/admin', label: 'Users & Auth', short: 'Users', admin: true, icon: 'admin' },
 ];
@@ -122,6 +123,13 @@ function Icon({ name }: { name: string }) {
       return (
         <svg {...common}>
           <path d="M4 19h16M7 16V9M12 16V5M17 16v-5" />
+        </svg>
+      );
+    case 'pin':
+      return (
+        <svg {...common}>
+          <path d="M12 21s7-6.4 7-11.2A7 7 0 0 0 5 9.8C5 14.6 12 21 12 21z" />
+          <circle cx="12" cy="9.8" r="2.2" />
         </svg>
       );
     case 'admin':

@@ -188,10 +188,39 @@ create table if not exists dro.activity_logs (
   created_at timestamptz default now()
 );
 
+create table if not exists dro.field_notes (
+  id bigserial primary key,
+  site_type text not null check (site_type in ('office', 'ss', 'custom')),
+  site_code text not null,
+  site_name text not null default '',
+  office_code text default '',
+  office_type text default '',
+  office_name text default '',
+  division_code text default '',
+  ccc_code text default '',
+  region_code text default '341',
+  kind text not null default 'note' check (kind in ('work', 'assignment', 'note')),
+  title text not null default '',
+  body text not null default '',
+  priority text not null default 'normal' check (priority in ('high', 'normal', 'low')),
+  status text not null default 'open' check (status in ('open', 'waiting', 'done')),
+  assigned_to jsonb not null default '[]'::jsonb,
+  accompanied jsonb not null default '[]'::jsonb,
+  followup_at timestamptz,
+  last_visited_at timestamptz,
+  updates jsonb not null default '[]'::jsonb,
+  created_by text default '',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
 create index if not exists idx_offices_type on dro.offices(office_type);
 create index if not exists idx_consumer_ccc on dro.consumer_master(ccc_code);
 create index if not exists idx_nsc_ccc on dro.nsc_cases(ccc_code);
 create index if not exists idx_disco_ccc on dro.disconnections(ccc_code);
+create index if not exists idx_field_notes_followup on dro.field_notes(followup_at);
+create index if not exists idx_field_notes_status on dro.field_notes(status);
+create index if not exists idx_field_notes_site on dro.field_notes(site_type, site_code);
 
 grant all on all tables in schema dro to service_role;
 grant all on all sequences in schema dro to service_role;

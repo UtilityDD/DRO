@@ -281,6 +281,7 @@ function seedAll(seedMapOrNull) {
   writeCollectionSync('spot_billing', sampleSpot(offices));
   writeCollectionSync('atc_snapshots', sampleAtc(offices));
   writeCollectionSync('activity_logs', []);
+  writeCollectionSync('field_notes', []);
   writeCollectionSync('substations', sampleSubstations());
   return { offices: offices.length, users: 4, cccs: offices.filter((o) => o.office_type === 'ccc').length };
 }

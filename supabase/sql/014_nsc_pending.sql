@@ -22,6 +22,9 @@ begin
     alter table public.nsc_cases add column if not exists processing_days integer;
     alter table public.nsc_cases add column if not exists quotation_age_slab text;
     alter table public.nsc_cases add column if not exists processing_slab text;
+    alter table public.nsc_cases add column if not exists pole_count integer;
+    alter table public.nsc_cases add column if not exists applicant_type text;
+    alter table public.nsc_cases add column if not exists procedure text;
   end if;
 end $$;
 

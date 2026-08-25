@@ -31,19 +31,191 @@ export type NscRow = {
   processing_label: string;
   report_date: string | null;
   load_kw?: number;
+  pole_count?: number | null;
+  pole_kind?: 'pole' | 'non_pole' | 'unknown';
+  applicant_type?: string;
+  procedure?: 'proc_a' | 'proc_b' | 'unknown';
+  procedure_label?: string;
+  complex_name?: string;
 };
 
 export const NSC_SLABS = [
-  { id: 'd0_3', label: 'Within 3 days' },
-  { id: 'd3_7', label: '3–7 days' },
-  { id: 'd7_15', label: '7–15 days' },
-  { id: 'd15_30', label: '15–30 days' },
-  { id: 'm1_3', label: '1–3 months' },
-  { id: 'm3_6', label: '3–6 months' },
-  { id: 'm6_12', label: '6–12 months' },
-  { id: 'y1', label: 'More than 1 year' },
-  { id: 'unknown', label: 'Unknown' },
+  { id: 'd0_3', label: '≤3d' },
+  { id: 'd3_7', label: '3–7d' },
+  { id: 'd7_15', label: '7–15d' },
+  { id: 'd15_30', label: '15–30d' },
+  { id: 'm1_3', label: '1–3m' },
+  { id: 'm3_6', label: '3–6m' },
+  { id: 'm6_12', label: '6–12m' },
+  { id: 'y1', label: '>1y' },
 ] as const;
+
+export type DelayOp = 'le' | 'gt' | 'bt';
+
+export type DelayCut = {
+  id: string;
+  label: string;
+  op: DelayOp;
+  days: number;
+  daysMax?: number;
+  custom?: boolean;
+};
+
+export const NSC_CUMULATIVE: DelayCut[] = [
+  { id: 'le3', label: '≤3d', op: 'le', days: 3 },
+  { id: 'le7', label: '≤7d', op: 'le', days: 7 },
+  { id: 'gt7', label: '>7d', op: 'gt', days: 7 },
+  { id: 'gt15', label: '>15d', op: 'gt', days: 15 },
+  { id: 'gt30', label: '>30d', op: 'gt', days: 30 },
+  { id: 'gt90', label: '>90d', op: 'gt', days: 90 },
+  { id: 'gt180', label: '>6m', op: 'gt', days: 180 },
+  { id: 'gt365', label: '>1y', op: 'gt', days: 365 },
+];
+
+const SLAB_POS: Record<string, number> = {
+  d0_3: 3,
+  d3_7: 7,
+  d7_15: 15,
+  d15_30: 30,
+  m1_3: 90,
+  m3_6: 180,
+  m6_12: 365,
+  y1: 400,
+};
+
+export function delayCutId(op: DelayOp, days: number, daysMax?: number) {
+  if (op === 'bt') return `c_bt_${days}_${daysMax ?? days}`;
+  return `c_${op}_${days}`;
+}
+
+function delayDaysShort(days: number) {
+  if (days === 180) return '6m';
+  if (days === 365) return '1y';
+  return `${days}d`;
+}
+
+export function delayCutLabel(op: DelayOp, days: number, daysMax?: number) {
+  if (op === 'le') return `≤${delayDaysShort(days)}`;
+  if (op === 'gt') return `>${delayDaysShort(days)}`;
+  return `${days}–${daysMax ?? days}d`;
+}
+
+export function makeCustomCut(op: DelayOp, a: number, b?: number): DelayCut | null {
+  const x = Math.max(0, Math.round(Number(a) || 0));
+  const y = Math.max(0, Math.round(Number(b) || 0));
+  if (x > 20000 || y > 20000) return null;
+  const days = op === 'bt' ? Math.min(x, y) : x;
+  const daysMax = op === 'bt' ? Math.max(x, y) : undefined;
+  if (op === 'bt' && days === daysMax) return null;
+  return {
+    id: delayCutId(op, days, daysMax),
+    label: delayCutLabel(op, days, daysMax),
+    op,
+    days,
+    daysMax,
+    custom: true,
+  };
+}
+
+export function encodeCutsParam(cuts: DelayCut[]) {
+  return cuts
+    .filter((c) => c.custom)
+    .map((c) => (c.op === 'bt' ? `bt:${c.days}-${c.daysMax}` : `${c.op}:${c.days}`))
+    .join(',');
+}
+
+export function cutSortKey(cut: Pick<DelayCut, 'op' | 'days' | 'daysMax'>, exclusive = false) {
+  if (exclusive) {
+    if (cut.op === 'bt') return cut.daysMax ?? cut.days;
+    return cut.days;
+  }
+  if (cut.op === 'le') return cut.days;
+  if (cut.op === 'bt') return 5000 + cut.days;
+  return 10000 + cut.days;
+}
+
+export function mergeDelayCuts(custom: DelayCut[], exclusive: boolean) {
+  if (exclusive) {
+    const slabs = NSC_SLABS.map((s) => ({
+      id: s.id,
+      label: s.label,
+      sort: SLAB_POS[s.id] ?? 99,
+      custom: false as boolean,
+    }));
+    const extra = custom.map((c) => ({
+      id: c.id,
+      label: c.label,
+      sort: cutSortKey(c, true),
+      custom: true,
+      cut: c,
+    }));
+    return [...slabs.map((s) => ({ ...s, cut: undefined as DelayCut | undefined })), ...extra]
+      .sort((a, b) => a.sort - b.sort || Number(a.custom) - Number(b.custom))
+      .map((row) => ({
+        id: row.id,
+        label: row.label,
+        custom: row.custom,
+        cut: row.cut,
+      }));
+  }
+  return [...NSC_CUMULATIVE, ...custom]
+    .sort((a, b) => cutSortKey(a) - cutSortKey(b) || Number(!!a.custom) - Number(!!b.custom))
+    .map((c) => ({ id: c.id, label: c.label, custom: !!c.custom, cut: c }));
+}
+
+export function customCutFill(cut: DelayCut) {
+  if (cut.op === 'le') return '#0f766e';
+  if (cut.op === 'bt') return '#6366f1';
+  if (cut.days >= 180) return '#7f1d1d';
+  if (cut.days >= 90) return '#b91c1c';
+  if (cut.days >= 30) return '#ea580c';
+  return '#7c3aed';
+}
+
+export function isSameBuiltInCut(cut: DelayCut) {
+  return NSC_CUMULATIVE.some((c) => c.op === cut.op && c.days === cut.days && cut.op !== 'bt');
+}
+
+export function loadCustomDelayCuts(storageKey: string): DelayCut[] {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: DelayCut[] = [];
+    const seen = new Set<string>();
+    for (const row of parsed) {
+      const op = row?.op === 'le' || row?.op === 'gt' || row?.op === 'bt' ? row.op : null;
+      if (!op) continue;
+      const cut = makeCustomCut(op, Number(row.days), row.daysMax != null ? Number(row.daysMax) : undefined);
+      if (!cut || seen.has(cut.id) || isSameBuiltInCut(cut)) continue;
+      seen.add(cut.id);
+      out.push(cut);
+    }
+    return out.slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+export function saveCustomDelayCuts(storageKey: string, cuts: DelayCut[]) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(cuts.filter((c) => c.custom).slice(0, 12)));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export const CUM_COLORS: Record<string, string> = {
+  le3: '#059669',
+  le7: '#10b981',
+  gt7: '#eab308',
+  gt15: '#f59e0b',
+  gt30: '#f97316',
+  gt90: '#ef4444',
+  gt180: '#dc2626',
+  gt365: '#991b1b',
+};
 
 export const SLAB_COLORS: Record<string, string> = {
   d0_3: '#059669',
@@ -54,7 +226,6 @@ export const SLAB_COLORS: Record<string, string> = {
   m3_6: '#f97316',
   m6_12: '#ef4444',
   y1: '#b91c1c',
-  unknown: '#94a3b8',
 };
 
 export function isPendingQueue(row: Pick<NscRow, 'status' | 'sap_status'>) {
@@ -96,6 +267,26 @@ export function asNscRow(raw: Record<string, unknown>): NscRow {
     processing_label: String(raw.processing_label || ''),
     report_date: raw.report_date ? String(raw.report_date).slice(0, 10) : null,
     load_kw: Number(raw.load_kw || 0) || 0,
+    pole_count: raw.pole_count == null || raw.pole_count === '' ? null : Number(raw.pole_count),
+    pole_kind:
+      raw.pole_kind === 'pole' || raw.pole_kind === 'non_pole' || raw.pole_kind === 'unknown'
+        ? raw.pole_kind
+        : raw.pole_count == null
+          ? 'unknown'
+          : Number(raw.pole_count) > 0
+            ? 'pole'
+            : 'non_pole',
+    applicant_type: String(raw.applicant_type || ''),
+    procedure:
+      raw.procedure === 'proc_a' || raw.procedure === 'proc_b' || raw.procedure === 'unknown'
+        ? raw.procedure
+        : /promoter|developer|housing|complex/i.test(String(raw.applicant_type || ''))
+          ? 'proc_b'
+          : raw.applicant_type
+            ? 'proc_a'
+            : 'unknown',
+    procedure_label: String(raw.procedure_label || ''),
+    complex_name: String(raw.complex_name || ''),
   };
 }
 
@@ -115,6 +306,19 @@ export function fmtDay(iso: string | null) {
   const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
   if (!Number.isFinite(d.getTime())) return iso;
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+export function procedureLabel(procedure?: string | null, applicantType?: string | null) {
+  if (procedure === 'proc_b') return 'Proc. B';
+  if (procedure === 'proc_a') return 'Individual';
+  if (applicantType) return applicantType;
+  return '—';
+}
+
+export function poleLabel(kind?: string | null, count?: number | null) {
+  if (kind === 'pole') return count && count > 0 ? `${count} poles` : 'Pole';
+  if (kind === 'non_pole') return 'Non-pole';
+  return '—';
 }
 
 export function fmtInt(n: number) {

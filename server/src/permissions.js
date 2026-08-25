@@ -9,6 +9,7 @@ const MODULES = [
   { id: 'bulk', label: 'Bulk Consumers', uploadKey: 'bulk' },
   { id: 'consumers', label: 'Consumer Master', uploadKey: 'consumers' },
   { id: 'atc', label: 'AT&C / T&D Losses', uploadKey: 'atc' },
+  { id: 'field_notes', label: 'Field Desk', uploadKey: 'field-notes' },
 ];
 
 const ACTIONS = ['view', 'upload', 'edit'];

@@ -102,13 +102,49 @@ export const api = {
       view: number;
       avg_days: number;
       gt_year: number;
+      stuck_30?: number;
+      stuck_180?: number;
       divisions: { code: string; name: string }[];
       cccs: { code: string; name: string }[];
       classes: string[];
       years: string[];
       by_division: Record<string, string | number>[];
-      by_ccc: { name: string; count: number }[];
-      by_class: { name: string; count: number }[];
+      by_ccc: {
+        code?: string;
+        name: string;
+        count: number;
+        hot?: number;
+        critical?: number;
+        avg_days?: number;
+        hot_pct?: number;
+        non_pole?: number;
+        pole?: number;
+        hot_non_pole?: number;
+        hot_pole?: number;
+        poles_sum?: number;
+        proc_a?: number;
+        proc_b?: number;
+        hot_proc_b?: number;
+      }[];
+      mix_total?: number;
+      pole?: {
+        non_pole: number;
+        pole: number;
+        unknown?: number;
+        poles_sum?: number;
+        hot_non_pole?: number;
+        hot_pole?: number;
+        avg_poles?: number;
+      };
+      by_pole_bin?: { id: string; name: string; min?: number; max?: number | null; count: number }[];
+      procedure?: {
+        proc_a: number;
+        proc_b: number;
+        unknown?: number;
+        hot_proc_a?: number;
+        hot_proc_b?: number;
+      };
+      by_cumulative?: { id: string; name: string; op?: string; days?: number; count: number }[];
       by_slab: { id: string; name: string; count: number }[];
       timeline: Record<string, string | number>[];
       timeline_divisions: string[];
@@ -268,6 +304,85 @@ export const api = {
     }),
   patchTech: (workId: string, body: Record<string, unknown>) =>
     request(`/api/tech-works/${encodeURIComponent(workId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  fieldNotes: () =>
+    request<{
+      rows: FieldNote[];
+      total: number;
+      counts: FieldNoteCounts;
+      can_edit?: boolean;
+      staff: FieldStaff[];
+    }>('/api/field-notes'),
+  fieldNoteSites: () =>
+    request<{
+      sites: FieldSite[];
+      counts: FieldNoteCounts;
+      can_edit?: boolean;
+      staff: FieldStaff[];
+    }>('/api/field-notes/sites'),
+  createFieldNote: (body: Record<string, unknown>) =>
+    request<{ row: FieldNote }>('/api/field-notes', { method: 'POST', body: JSON.stringify(body) }),
+  patchFieldNote: (id: number | string, body: Record<string, unknown>) =>
+    request<{ row: FieldNote }>(`/api/field-notes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  visitFieldNote: (body: Record<string, unknown>) =>
+    request<{ row: FieldNote; stamped?: number }>('/api/field-notes/visit', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+};
+
+export type FieldStaff = { username: string; name: string; role: string };
+
+export type FieldUpdate = { at: string; by: string; kind: string; text: string };
+
+export type FieldNote = {
+  id: number;
+  site_type: 'office' | 'ss' | string;
+  site_code: string;
+  site_name: string;
+  office_code?: string;
+  office_type?: string;
+  office_name?: string;
+  division_code?: string;
+  ccc_code?: string;
+  kind: 'work' | 'assignment' | 'note' | string;
+  title: string;
+  body: string;
+  priority: 'high' | 'normal' | 'low' | string;
+  status: 'open' | 'waiting' | 'done' | string;
+  assigned_to: string[];
+  accompanied?: string[];
+  followup_at: string | null;
+  last_visited_at: string | null;
+  updates: FieldUpdate[];
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type FieldNoteCounts = {
+  open: number;
+  overdue: number;
+  today: number;
+  waiting: number;
+  done: number;
+  total: number;
+};
+
+export type FieldSite = {
+  site_type: 'office' | 'ss' | string;
+  site_code: string;
+  site_name: string;
+  office_type?: string;
+  office_name?: string;
+  division_code?: string;
+  ccc_code?: string;
+  open_count: number;
+  overdue_count: number;
+  item_count: number;
+  next_followup_at: string | null;
+  last_visited_at: string | null;
+  standing_id: number | null;
+  standing_body: string;
 };
 
 export type Substation = {
@@ -319,6 +434,7 @@ const MODULE_ROUTE: Record<string, string> = {
   '/bulk': 'bulk',
   '/consumers': 'consumers',
   '/atc': 'atc',
+  '/field': 'field_notes',
   '/upload': '__upload__',
 };
 
@@ -381,6 +497,7 @@ export const AUTH_MODULES = [
   { id: 'bulk', label: 'Bulk Consumers', uploadKey: 'bulk' },
   { id: 'consumers', label: 'Consumer Master', uploadKey: 'consumers' },
   { id: 'atc', label: 'AT&C / T&D Losses', uploadKey: 'atc' },
+  { id: 'field_notes', label: 'Field Desk', uploadKey: 'field-notes' },
 ] as const;
 
 export function emptyPermissions(): Permissions {
