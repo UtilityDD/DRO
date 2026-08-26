@@ -169,7 +169,7 @@ function defaultUsers() {
         nsc: { view: true, upload: false, edit: false },
         disco: { view: true, upload: false, edit: true },
         grievance: { view: true, upload: true, edit: true },
-        tech_works: { view: false, upload: false, edit: false },
+        tech_works: { view: true, upload: false, edit: false },
         spot_billing: { view: true, upload: false, edit: false },
         bulk: { view: false, upload: false, edit: false },
         consumers: { view: true, upload: false, edit: false },
@@ -277,6 +277,7 @@ function seedAll(seedMapOrNull) {
   writeCollectionSync('nsc_cases', sampleNsc(offices));
   writeCollectionSync('disconnections', sampleDisco(offices));
   writeCollectionSync('grievances', sampleGrievances(offices));
+  writeCollectionSync('tech_work_categories', require('./tech_works').defaultCategories());
   writeCollectionSync('tech_works', sampleTech(offices));
   writeCollectionSync('spot_billing', sampleSpot(offices));
   writeCollectionSync('atc_snapshots', sampleAtc(offices));
@@ -558,24 +559,7 @@ function sampleGrievances(offices) {
 }
 
 function sampleTech(offices) {
-  const divs = offices.filter((o) => o.office_type === 'division');
-  return divs.map((d, i) => ({
-    id: i + 1,
-    work_id: `TW-341-${300 + i}`,
-    title: `Priority feeder work ${i + 1}`,
-    ccc_code: '',
-    division_code: d.code,
-    region_code: '341',
-    priority: i === 0 ? 'high' : 'medium',
-    status: i % 2 ? 'open' : 'in_progress',
-    vendor_name: ['ABC Infra', 'Hill Power', 'Siliguri Elec', 'North Tech'][i % 4],
-    billing_status: i % 2 ? 'pending' : 'submitted',
-    target_date: '2026-09-30',
-    completed_on: null,
-    remarks: '',
-    batch_id: null,
-    updated_at: new Date().toISOString(),
-  }));
+  return require('./tech_works').sampleWorks(offices);
 }
 
 function sampleSpot(offices) {

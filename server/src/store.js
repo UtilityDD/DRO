@@ -4,6 +4,7 @@ const { normalizeUser } = require('./permissions');
 const sb = require('./supabase');
 const { hydrateNscRows, packNscCloudRow, slimNscCloudRow } = require('./nsc_parse');
 const { hydrateFieldNote, packFieldNoteCloudRow } = require('./field_notes');
+const { hydrateTechWork, packTechWorkCloudRow, resolveLoadedWorks } = require('./tech_works');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const READONLY_FS = Boolean(process.env.VERCEL || process.env.NOW_REGION);
@@ -18,6 +19,8 @@ const TABLES = {
   disconnections: 'disconnections',
   grievances: 'grievances',
   tech_works: 'tech_works',
+  tech_work_categories: 'tech_work_categories',
+  tech_work_settings: 'tech_work_settings',
   spot_billing: 'spot_billing',
   atc_snapshots: 'atc_snapshots',
   activity_logs: 'activity_logs',
@@ -173,22 +176,20 @@ async function loadTable(name) {
   const table = TABLES[name];
   if (!table) return;
   try {
-    const local = name === 'nsc_cases' ? readLocal(name, []) : null;
-    if (name === 'nsc_cases' && local && local.length > 500) {
-      cache[name] = hydrateNscRows(local);
-      console.log(`[store] loaded ${table} from local: ${cache[name].length} rows (skipped supabase pull)`);
+    if (name === 'nsc_cases') {
+      console.log('[store] nsc_cases: SQL-backed (no full pull)');
       return;
     }
     const rows = await sb.selectAll(table);
     const remote = Array.isArray(rows) ? rows : [];
-    const localRows = local || readLocal(name, []);
+    const localRows = readLocal(name, []);
     if (CLOUD_ONLY.has(name)) {
       cache[name] = remote;
       writeLocal(name, cache[name]);
       console.log(`[store] loaded ${table} (cloud-only): ${cache[name].length} rows`);
       return;
     }
-    if (remote.length === 0 && localRows.length > 0) {
+    if (remote.length === 0 && localRows.length > 0 && name !== 'tech_works') {
       cache[name] =
         name === 'grievances'
           ? localRows.map(hydrateGrievance)
@@ -198,6 +199,21 @@ async function loadTable(name) {
               ? localRows.map(hydrateFieldNote)
               : localRows;
       console.warn(`[store] ${table}: supabase empty, keeping local mirror (${localRows.length} rows)`);
+    } else if (name === 'tech_works') {
+      const picked = resolveLoadedWorks(remote, localRows, cache.offices || readLocal('offices', []));
+      cache[name] = picked.rows;
+      writeLocal(name, cache[name]);
+      if (picked.source !== 'remote') {
+        console.warn(`[store] tech_works: cloud old/empty format, using ${picked.source} scheme records (${picked.rows.length})`);
+      } else {
+        console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
+      }
+      if (picked.persist) {
+        console.log('[store] tech_works: writing scheme fields to cloud columns');
+        persistCollection('tech_works', picked.rows).catch((e) =>
+          console.warn('[store] tech_works push of scheme records:', e.message)
+        );
+      }
     } else {
       cache[name] =
         name === 'grievances'
@@ -226,7 +242,9 @@ async function loadTable(name) {
             ? hydrateNscRows(fallback)
             : name === 'field_notes'
               ? fallback.map(hydrateFieldNote)
-              : fallback;
+              : name === 'tech_works'
+                ? resolveLoadedWorks([], fallback, cache.offices || readLocal('offices', [])).rows
+                : fallback;
     }
   }
 }
@@ -257,13 +275,6 @@ async function initStore(opts = {}) {
       if (AUTH_TABLES.includes(name) || DEFER_TABLES.has(name)) continue;
       await loadTable(name);
     }
-    if (!READONLY_FS) {
-      const localNsc = readLocal('nsc_cases', []);
-      if (localNsc.length > 500) {
-        cache.nsc_cases = hydrateNscRows(localNsc);
-        console.log(`[store] warmed nsc_cases from local: ${cache.nsc_cases.length} rows`);
-      }
-    }
   } catch (e) {
     authReady = true;
     if (onAuthReady) onAuthReady();
@@ -286,7 +297,7 @@ async function ensureCollection(name) {
 }
 
 function isNscLoaded() {
-  return Array.isArray(cache.nsc_cases);
+  return !useSupabase() && Array.isArray(cache.nsc_cases) && cache.nsc_cases.length > 0;
 }
 
 /**
@@ -301,6 +312,17 @@ async function refreshFromSupabase(name) {
   if (!table) throw new Error(`Unknown collection ${name}`);
   const rows = await sb.selectAll(table);
   const remote = Array.isArray(rows) ? rows : [];
+  if (name === 'tech_works') {
+    const picked = resolveLoadedWorks(remote, readLocal(name, []), cache.offices || readLocal('offices', []));
+    cache[name] = picked.rows;
+    writeLocal(name, cache[name]);
+    if (picked.persist) {
+      persistCollection('tech_works', picked.rows).catch((e) =>
+        console.warn('[store] tech_works refresh persist:', e.message)
+      );
+    }
+    return cloneRows(name, cache[name]);
+  }
   cache[name] =
     name === 'grievances'
       ? remote.map(hydrateGrievance)
@@ -325,6 +347,7 @@ function readCollection(name, fallback = []) {
   if (name === 'grievances') return rows.map(hydrateGrievance);
   if (name === 'nsc_cases') return hydrateNscRows(rows);
   if (name === 'field_notes') return rows.map(hydrateFieldNote);
+  if (name === 'tech_works') return rows.map(hydrateTechWork);
   return rows;
 }
 
@@ -390,20 +413,44 @@ async function persistCollection(name, copy) {
   if (name === 'nsc_cases') {
     let useFull = true;
     try {
-      await sb.querySupabase('nsc_cases?select=consumer_id,phone,report_date&limit=1');
+      await sb.querySupabase('nsc_cases?select=consumer_id,phone,report_date,pole_count,procedure&limit=1');
     } catch {
       useFull = false;
     }
     const packed = copy.map((row) => sanitizeRow(useFull ? packNscCloudRow(row) : slimNscCloudRow(row)));
-    await sb.replaceTable(table, packed, { chunk: 400, silent: true });
+    const chunk = 400;
+    for (let i = 0; i < packed.length; i += chunk) {
+      await sb.upsertRows(table, packed.slice(i, i + chunk), 'application_no', { silent: true });
+    }
+    const rd = packed.find((r) => r.report_date)?.report_date;
+    if (rd) {
+      try {
+        await sb.deleteByFilter(table, `report_date=neq.${rd}`);
+      } catch (e) {
+        console.warn('[store] nsc stale delete:', e.message);
+      }
+    }
     return;
   }
   const mapped = copy.map((row) => {
     if (name === 'grievances') return packGrievanceCloudRow(row);
     if (name === 'field_notes') return packFieldNoteCloudRow(row);
+    if (name === 'tech_works') return packTechWorkCloudRow(row);
     return sanitizeRow(row);
   });
-  if (name === 'grievances' || name === 'field_notes') {
+  if (name === 'tech_works') {
+    try {
+      await sb.replaceTable(table, mapped);
+    } catch (e) {
+      console.warn('[store] tech_works native extras persist failed, remarks sidecar only:', e.message);
+      await sb.replaceTable(
+        table,
+        copy.map((row) => packTechWorkCloudRow(row, { extras: false }))
+      );
+    }
+    return;
+  }
+  if (name === 'grievances' || name === 'field_notes' || name === 'tech_work_categories' || name === 'tech_work_settings') {
     await sb.upsertRows(table, mapped, 'id');
     return;
   }

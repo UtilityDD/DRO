@@ -458,7 +458,7 @@ export function FieldDeskPage() {
             aria-label="Search field desk"
           />
           {editable && (
-            <button type="button" className="btn field-new-btn" onClick={() => startAdd(openSite)}>
+            <button type="button" className="btn field-new-btn present-hide" onClick={() => startAdd(openSite)}>
               New
             </button>
           )}
@@ -509,7 +509,7 @@ export function FieldDeskPage() {
                       {shortSite(row.site_name)}
                       {row.site_type === 'ss' ? ' SS' : row.site_type === 'custom' ? ' · custom' : ''}
                       {row.last_visited_at ? ` · visited ${fmtWhen(row.last_visited_at)}` : ''}
-                      {(row.accompanied || []).length ? ` · with ${row.accompanied.slice(0, 3).join(', ')}` : ''}
+                      {(row.accompanied ?? []).length ? ` · with ${(row.accompanied ?? []).slice(0, 3).join(', ')}` : ''}
                     </span>
                     <span className={`crm-delay ${isOverdue(row) ? '' : ''}`}>{followLabel(row)}</span>
                   </span>

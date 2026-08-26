@@ -58,47 +58,7 @@ export function DiscoPage() {
 
 export { GrievanceDeskPage as GrievancePage } from './GrievanceDeskPage';
 
-export function TechWorksPage() {
-  const { user } = useAuth();
-  const editable = canEdit(user, 'tech_works');
-  const load = useCallback((q: string) => api.techWorks(q), []);
-  return (
-    <DataPage
-      title="Priority Technical Works"
-      exportName="tech_works"
-      load={load}
-      columns={[
-        { key: 'work_id', label: 'Work ID' },
-        { key: 'title', label: 'Title' },
-        { key: 'division_name', label: 'Division' },
-        { key: 'priority', label: 'Priority' },
-        { key: 'vendor_name', label: 'Vendor' },
-        { key: 'billing_status', label: 'Billing' },
-        { key: 'status', label: 'Status' },
-        { key: 'target_date', label: 'Target' },
-      ]}
-      onRowAction={
-        editable
-          ? (row) => (
-              <button
-                type="button"
-                className="btn secondary"
-                onClick={async () => {
-                  await api.patchTech(String(row.work_id), {
-                    billing_status: 'submitted',
-                    status: row.status === 'open' ? 'in_progress' : row.status,
-                  });
-                  (row.__reload as (() => void) | undefined)?.();
-                }}
-              >
-                Bill submitted
-              </button>
-            )
-          : undefined
-      }
-    />
-  );
-}
+export { TechWorksDeskPage as TechWorksPage } from './TechWorksDeskPage';
 
 export function SpotBillingPage() {
   const load = useCallback((q: string) => api.spotBilling(q), []);

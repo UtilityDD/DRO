@@ -146,15 +146,35 @@ export const api = {
       };
       by_cumulative?: { id: string; name: string; op?: string; days?: number; count: number }[];
       by_slab: { id: string; name: string; count: number }[];
+      by_class?: { name: string; count: number }[];
       timeline: Record<string, string | number>[];
       timeline_divisions: string[];
       reasons: { name: string; count: number }[];
     }>(`/api/nsc/desk${q}`),
+  nscQueue: (queue: 'pending' | 'withheld' = 'pending') =>
+    request<{
+      queue: 'pending' | 'withheld';
+      report_date: string | null;
+      count: number;
+      rows: import('./lib/nscDesk').NscChartRow[];
+      divisions: { code: string; name: string }[];
+      cccs: { code: string; name: string; division_code?: string }[];
+    }>(`/api/nsc/queue?queue=${queue}`),
   nscExport: async (q = '') => {
     const res = await fetch(`/api/nsc/export${q}`, { credentials: 'include' });
+    const type = res.headers.get('content-type') || '';
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw newError((data as { error?: string }).error || res.statusText, res.status);
+    }
+    if (type.includes('application/json')) {
+      const data = (await res.json()) as { url?: string; filename?: string };
+      if (!data.url) throw newError('No download URL', 500);
+      const a = document.createElement('a');
+      a.href = data.url;
+      a.download = data.filename || 'nsc.csv';
+      a.click();
+      return;
     }
     const blob = await res.blob();
     const cd = res.headers.get('Content-Disposition') || '';
@@ -174,6 +194,14 @@ export const api = {
       withheld?: number;
       report_date?: string | null;
     }>('/api/nsc/summary'),
+  nscStatus: () =>
+    request<{
+      report_date: string | null;
+      updated_at: string | null;
+      pending: number;
+      withheld: number;
+      total: number;
+    }>('/api/nsc/status'),
   nscParse: async (file: File, reportDate: string) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -209,6 +237,23 @@ export const api = {
       cloud?: { persisted?: boolean; host?: string; error?: string };
       batch?: Record<string, unknown>;
     }>('/api/nsc/commit', { method: 'POST', body: JSON.stringify({ parse_id: parseId }) }),
+  nscUploadUrl: (filename: string, reportDate: string) =>
+    request<{ ok: boolean; job_id: string; url: string; token?: string; path: string }>('/api/nsc/upload-url', {
+      method: 'POST',
+      body: JSON.stringify({ filename, report_date: reportDate }),
+    }),
+  nscImportParse: (jobId: string) =>
+    request<{
+      ok: boolean;
+      parse_id: string;
+      preview: Record<string, unknown>;
+      job: { id: string; total: number; part_count: number; status: string };
+    }>('/api/nsc/import/parse', { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
+  nscImportTick: (jobId: string) =>
+    request<{
+      ok: boolean;
+      job: { status: string; upserted: number; total: number; part_index: number; part_count: number; error?: string };
+    }>('/api/nsc/import/tick', { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
   disco: (q = '') =>
     request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean }>(`/api/disco${q}`),
   discoSummary: () =>
@@ -223,7 +268,18 @@ export const api = {
       body: JSON.stringify(body),
     }),
   techWorks: (q = '') =>
-    request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean }>(`/api/tech-works${q}`),
+    request<{
+      rows: TechWork[];
+      total: number;
+      categories: TechWorkCategory[];
+      staff: TechWorkStaff[];
+      author_users?: string[];
+      can_edit?: boolean;
+      can_create?: boolean;
+      can_assign?: boolean;
+      can_upload?: boolean;
+      can_manage_categories?: boolean;
+    }>(`/api/tech-works${q}`),
   spotBilling: (q = '') => request<{ rows: Record<string, unknown>[]; total: number }>(`/api/spot-billing${q}`),
   bulk: (q = '') => request<{ rows: Record<string, unknown>[]; total: number; can_edit?: boolean }>(`/api/bulk${q}`),
   consumers: (q = '') =>
@@ -303,7 +359,27 @@ export const api = {
       body: JSON.stringify(body),
     }),
   patchTech: (workId: string, body: Record<string, unknown>) =>
-    request(`/api/tech-works/${encodeURIComponent(workId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    request<{ row: TechWork }>(`/api/tech-works/${encodeURIComponent(workId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  createTechWork: (body: Record<string, unknown>) =>
+    request<{ row: TechWork }>('/api/tech-works', { method: 'POST', body: JSON.stringify(body) }),
+  createTechCategory: (body: Record<string, unknown>) =>
+    request<{ row: TechWorkCategory }>('/api/tech-works/categories', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  patchTechCategory: (id: number | string, body: Record<string, unknown>) =>
+    request<{ row: TechWorkCategory }>(`/api/tech-works/categories/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  patchTechSettings: (body: { author_users: string[] }) =>
+    request<{ author_users: string[] }>('/api/tech-works/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   fieldNotes: () =>
     request<{
       rows: FieldNote[];
@@ -328,6 +404,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+};
+
+export type TechWorkPo = { po_no: string; po_date: string; agency_name: string };
+export type TechWorkFollowup = { at: string; by: string; remark: string };
+export type TechWorkCategory = {
+  id: number;
+  name: string;
+  parameter_unit: string;
+  sort_order: number;
+  active: boolean;
+};
+export type TechWorkStaff = { username: string; name: string; role: string };
+export type TechWork = {
+  id: number;
+  work_id: string;
+  category_id: number | null;
+  category_name: string;
+  description: string;
+  title: string;
+  division_code: string;
+  division_name?: string;
+  related_ss_name: string;
+  existing_parameter: number | null;
+  proposed_parameter: number | null;
+  parameter_unit: string;
+  proposal_enote_no: string;
+  proposal_enote_date: string;
+  taa_no: string;
+  taa_date: string;
+  scheme_value: number | null;
+  billing_progress: number | null;
+  major_material: string;
+  pos: TechWorkPo[];
+  work_start_date: string;
+  material_issue_status: string;
+  work_progress: number;
+  status: string;
+  remarks: string;
+  followups: TechWorkFollowup[];
+  followup_users: string[];
+  can_update?: boolean;
+  can_plan?: boolean;
+  can_assign?: boolean;
 };
 
 export type FieldStaff = { username: string; name: string; role: string };
@@ -492,7 +611,7 @@ export const AUTH_MODULES = [
   { id: 'nsc', label: 'New Connection (NSC)', uploadKey: 'nsc' },
   { id: 'disco', label: 'Disconnection', uploadKey: 'disco' },
   { id: 'grievance', label: 'Grievances', uploadKey: 'grievance' },
-  { id: 'tech_works', label: 'Tech Works', uploadKey: 'tech-works' },
+  { id: 'tech_works', label: 'Priority Works', uploadKey: 'tech-works' },
   { id: 'spot_billing', label: 'Spot Billing', uploadKey: 'spot-billing' },
   { id: 'bulk', label: 'Bulk Consumers', uploadKey: 'bulk' },
   { id: 'consumers', label: 'Consumer Master', uploadKey: 'consumers' },

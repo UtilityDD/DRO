@@ -226,4 +226,7 @@ grant all on all tables in schema dro to service_role;
 grant all on all sequences in schema dro to service_role;
 grant select on all tables in schema dro to anon, authenticated;
 
+-- After first setup, also run 017_nsc_exchange.sql (jobs table, indexes, storage bucket).
+-- For Tech Works follow-up desk, also run 018_tech_works.sql.
+
 notify pgrst, 'reload schema';

@@ -66,6 +66,11 @@ function status() {
  * Prefer service_role key on the server (bypasses RLS for portal ops).
  */
 async function querySupabase(apiPath, options = {}) {
+  const { body } = await querySupabaseMeta(apiPath, options);
+  return body;
+}
+
+async function querySupabaseMeta(apiPath, options = {}) {
   if (!isConfigured()) {
     throw new Error('Supabase not configured. Copy server/data/supabase_config.example.json → supabase_config.json');
   }
@@ -96,12 +101,15 @@ async function querySupabase(apiPath, options = {}) {
   }
 
   const text = await response.text();
-  if (!text || !text.trim()) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
+  let parsed = null;
+  if (text && text.trim()) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
   }
+  return { body: parsed, headers: response.headers, status: response.status };
 }
 
 async function countRows(table, query = '') {
@@ -179,20 +187,51 @@ async function resolveAtcSchema() {
   return { schema: SCHEMA, count: Math.max(bestCount, 0) };
 }
 
-async function upsertRows(table, rows, onConflict) {
+function missingPgColumn(err) {
+  const raw = String(err?.message || err || '');
+  let msg = raw;
+  const brace = raw.indexOf('{');
+  if (brace >= 0) {
+    try {
+      const j = JSON.parse(raw.slice(brace));
+      msg = j.message || j.hint || raw;
+    } catch {
+      /* keep */
+    }
+  }
+  const m = String(msg).match(/column (?:[\w.]+\.)?(\w+) does not exist/i)
+    || String(msg).match(/column "(\w+)" of relation/i)
+    || String(msg).match(/Could not find the '(\w+)' column/i);
+  return m ? m[1] : '';
+}
+
+async function upsertRows(table, rows, onConflict, opts = {}) {
   if (!rows.length) return [];
+  const silent = !!opts.silent;
   const prefer = onConflict
-    ? `resolution=merge-duplicates,return=representation`
-    : 'return=representation';
-  const headers = onConflict ? { Prefer: prefer } : undefined;
-  // PostgREST upsert via Prefer + on_conflict query
+    ? `resolution=merge-duplicates,return=${silent ? 'minimal' : 'representation'}`
+    : `return=${silent ? 'minimal' : 'representation'}`;
   const path = onConflict ? `${table}?on_conflict=${encodeURIComponent(onConflict)}` : table;
-  return querySupabase(path, {
-    method: 'POST',
-    body: alignObjectKeys(rows),
-    prefer: onConflict ? 'resolution=merge-duplicates,return=representation' : 'return=representation',
-    headers,
-  });
+  let payload = alignObjectKeys(rows);
+  for (let i = 0; i < 24; i += 1) {
+    try {
+      return await querySupabase(path, {
+        method: 'POST',
+        body: payload,
+        prefer,
+      });
+    } catch (e) {
+      const col = missingPgColumn(e);
+      if (!col || !payload.some((r) => r && Object.prototype.hasOwnProperty.call(r, col))) throw e;
+      payload = payload.map((r) => {
+        if (!r || typeof r !== 'object') return r;
+        const next = { ...r };
+        delete next[col];
+        return next;
+      });
+    }
+  }
+  return querySupabase(path, { method: 'POST', body: payload, prefer });
 }
 
 /** PostgREST PGRST102: every object in a JSON array must have the same keys. */
@@ -289,6 +328,101 @@ async function probePowerMap() {
   return { ok: false, reason: last };
 }
 
+function storageUrl(path) {
+  return `${String(SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/${path.replace(/^\//, '')}`;
+}
+
+async function storageSignedUpload(bucket, objectPath) {
+  const response = await fetch(storageUrl(`object/upload/sign/${bucket}/${objectPath}`), {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ expiresIn: 900 }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `Storage sign HTTP ${response.status}`);
+  }
+  const signed = data.url || data.signedUrl || data.signedURL;
+  const token = data.token || '';
+  const abs = String(signed || '').startsWith('http')
+    ? signed
+    : `${String(SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1${String(signed).startsWith('/') ? signed : `/${signed}`}`;
+  return { url: abs, token, path: objectPath };
+}
+
+async function storagePutJson(bucket, objectPath, value) {
+  const response = await fetch(storageUrl(`object/${bucket}/${objectPath}`), {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'x-upsert': 'true',
+    },
+    body: JSON.stringify(value),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Storage put HTTP ${response.status}: ${errText.slice(0, 240)}`);
+  }
+}
+
+async function storagePutText(bucket, objectPath, text, contentType = 'text/csv') {
+  const response = await fetch(storageUrl(`object/${bucket}/${objectPath}`), {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': contentType,
+      'x-upsert': 'true',
+    },
+    body: text,
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Storage put HTTP ${response.status}: ${errText.slice(0, 240)}`);
+  }
+}
+
+async function storageDownload(bucket, objectPath) {
+  const response = await fetch(storageUrl(`object/${bucket}/${objectPath}`), {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+    },
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Storage get HTTP ${response.status}: ${errText.slice(0, 240)}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function storageSignedDownload(bucket, objectPath, expiresIn = 300) {
+  const response = await fetch(storageUrl(`object/sign/${bucket}/${objectPath}`), {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ expiresIn }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `Storage sign-get HTTP ${response.status}`);
+  }
+  const signed = data.signedURL || data.signedUrl || data.url;
+  const abs = String(signed || '').startsWith('http')
+    ? signed
+    : `${String(SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1${String(signed).startsWith('/') ? signed : `/${signed}`}`;
+  return abs;
+}
+
 function publicPowerMapConfig() {
   const url = POWERMAP_URL || (isConfigured() ? SUPABASE_URL : null);
   const anonKey = POWERMAP_ANON_KEY || SUPABASE_ANON_KEY || null;
@@ -317,5 +451,12 @@ module.exports = {
   deleteByFilter,
   probePowerMap,
   publicPowerMapConfig,
+  querySupabaseMeta,
+  storageSignedUpload,
+  storagePutJson,
+  storagePutText,
+  storageDownload,
+  storageSignedDownload,
   getUrl: () => SUPABASE_URL,
+  getKey: () => SUPABASE_KEY,
 };

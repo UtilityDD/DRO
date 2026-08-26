@@ -242,9 +242,6 @@ function poleCountOf(row) {
   if (!row || typeof row !== 'object') return null;
   if (row.pole_count != null && row.pole_count !== '') return parsePoleCount(row.pole_count);
   if (row.no_of_poles != null && row.no_of_poles !== '') return parsePoleCount(row.no_of_poles);
-  if (Object.prototype.hasOwnProperty.call(row, 'pole_count') || Object.prototype.hasOwnProperty.call(row, 'no_of_poles')) {
-    return 0;
-  }
   return null;
 }
 
@@ -669,7 +666,6 @@ function packNscCloudRow(row) {
     consumer_class: extra.consumer_class,
     class_code: extra.class_code,
     sap_status: extra.sap_status,
-    created_on: extra.created_on,
     quotation_issue_on: extra.quotation_issue_on,
     collected_on: extra.collected_on,
     wo_no: extra.wo_no,
@@ -682,6 +678,9 @@ function packNscCloudRow(row) {
     processing_days: extra.processing_days,
     quotation_age_slab: extra.quotation_age_slab,
     processing_slab: extra.processing_slab,
+    pole_count: extra.pole_count ?? 0,
+    applicant_type: extra.applicant_type || '',
+    procedure: extra.procedure || 'proc_a',
   };
 }
 
@@ -747,14 +746,18 @@ function hydrateNsc(row) {
     out.processing_label = s.label;
   }
   if (out.pole_count == null && out.no_of_poles != null) out.pole_count = parsePoleCount(out.no_of_poles);
-  if (out.pole_count == null) out.pole_kind = 'unknown';
-  else {
+  if (out.pole_count == null || out.pole_count === '') {
+    out.pole_count = null;
+    out.pole_kind = 'unknown';
+  } else {
     out.pole_count = parsePoleCount(out.pole_count);
     out.pole_kind = out.pole_count > 0 ? 'pole' : 'non_pole';
   }
   const proc = mapProcedure(out.applicant_type);
   out.applicant_type = out.applicant_type || proc.applicant_type;
-  out.procedure = procedureOf(out);
+  if (out.procedure !== 'proc_a' && out.procedure !== 'proc_b' && out.procedure !== 'unknown') {
+    out.procedure = proc.procedure;
+  }
   out.procedure_label = out.procedure_label || proc.procedure_label;
   out.complex_name = String(out.complex_name || '').trim();
   return out;
@@ -1206,57 +1209,68 @@ function buildNscDesk(allRows, q = {}) {
   };
 }
 
+function monthYearLabel(ym) {
+  if (!ym || String(ym).length < 7) return ym;
+  const month = Number(String(ym).slice(5, 7));
+  const yy = String(ym).slice(2, 4);
+  if (!Number.isFinite(month) || month < 1 || month > 12) return ym;
+  return `${month}/${yy}`;
+}
+
+function eachMonth(fromYm, toYm) {
+  const out = [];
+  let y = Number(fromYm.slice(0, 4));
+  let m = Number(fromYm.slice(5, 7));
+  const y2 = Number(toYm.slice(0, 4));
+  const m2 = Number(toYm.slice(5, 7));
+  if (![y, m, y2, m2].every(Number.isFinite)) return out;
+  while (y < y2 || (y === y2 && m <= m2)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    if (out.length > 240) break;
+  }
+  return out;
+}
+
 function buildTimeline(rows, timeKey, divNames) {
-  const grain = timeKey ? 'month' : 'year';
-  const year = String(timeKey || '').slice(0, 4);
+  const year = String(timeKey || '').length === 4 ? String(timeKey) : '';
   const empty = () => {
     const rec = { added: 0 };
     for (const d of divNames) rec[d] = 0;
     return rec;
   };
-  const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  if (grain === 'month') {
-    const buckets = new Map();
-    for (let m = 1; m <= 12; m += 1) buckets.set(`${year}-${String(m).padStart(2, '0')}`, empty());
-    for (const r of rows) {
-      const ym = monthOfIso(eventOn(r));
-      if (!ym || ym.slice(0, 4) !== year) continue;
-      const rec = buckets.get(ym) || empty();
-      rec.added += 1;
-      const div = r.division_name || r.division_code || 'Unknown';
-      rec[div] = (rec[div] || 0) + 1;
-      buckets.set(ym, rec);
-    }
-    let run = 0;
-    return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([key, rec]) => {
-      run += rec.added;
-      const month = Number(key.slice(5, 7));
-      return { key, label: MONTH[month - 1] || key, added: rec.added, cumulative: run, ...rec };
-    });
-  }
   const buckets = new Map();
-  const years = new Set();
+  const seen = [];
   for (const r of rows) {
-    const y = yearOfIso(eventOn(r));
-    if (!y) continue;
-    years.add(y);
-    const rec = buckets.get(y) || empty();
+    const ym = monthOfIso(eventOn(r));
+    if (!ym) continue;
+    if (year && ym.slice(0, 4) !== year) continue;
+    const rec = buckets.get(ym) || empty();
     rec.added += 1;
     const div = r.division_name || r.division_code || 'Unknown';
     rec[div] = (rec[div] || 0) + 1;
-    buckets.set(y, rec);
+    buckets.set(ym, rec);
+    seen.push(ym);
   }
-  if (!years.size) return [];
-  const sorted = [...years].sort();
+  let keys;
+  if (year) {
+    keys = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+  } else if (seen.length) {
+    const sortedSeen = [...new Set(seen)].sort();
+    keys = eachMonth(sortedSeen[0], sortedSeen[sortedSeen.length - 1]);
+  } else {
+    return [];
+  }
   let run = 0;
-  const out = [];
-  for (let y = Number(sorted[0]); y <= Number(sorted[sorted.length - 1]); y += 1) {
-    const key = String(y);
+  return keys.map((key) => {
     const rec = buckets.get(key) || empty();
     run += rec.added;
-    out.push({ key, label: key, added: rec.added, cumulative: run, ...rec });
-  }
-  return out;
+    return { key, label: monthYearLabel(key), added: rec.added, cumulative: run, ...rec };
+  });
 }
 
 function nscExportRow(r) {

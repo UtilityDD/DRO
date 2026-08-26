@@ -1,7 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth';
-import { canAccessPath, canView } from '../api';
+import { canAccessPath, canView, api, type Office } from '../api';
+import { PageHeadingProvider } from '../lib/pageHeading';
+
+type ThemeId =
+  | 'home'
+  | 'hierarchy'
+  | 'map'
+  | 'nsc'
+  | 'disco'
+  | 'griev'
+  | 'works'
+  | 'spot'
+  | 'bulk'
+  | 'consumers'
+  | 'atc'
+  | 'field'
+  | 'upload'
+  | 'admin';
+
+type GroupId = 'overview' | 'ops' | 'network' | 'system';
 
 type LinkItem = {
   to: string;
@@ -11,26 +30,68 @@ type LinkItem = {
   moduleId?: string;
   admin?: boolean;
   icon: string;
+  theme: ThemeId;
+  group: GroupId;
 };
 
+const GROUPS: { id: GroupId; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'ops', label: 'Operations' },
+  { id: 'network', label: 'Network' },
+  { id: 'system', label: 'System' },
+];
+
 const links: LinkItem[] = [
-  { to: '/', label: 'Home', short: 'Home', end: true, icon: 'home' },
-  { to: '/hierarchy', label: 'Hierarchy', short: 'Offices', icon: 'tree' },
-  { to: '/powermap', label: 'Power Map', short: 'Map', icon: 'map' },
-  { to: '/nsc', label: 'New Connection', short: 'NSC', moduleId: 'nsc', icon: 'plug' },
-  { to: '/disco', label: 'Disconnection', short: 'Disco', moduleId: 'disco', icon: 'bolt' },
-  { to: '/grievances', label: 'Grievances', short: 'Griev', moduleId: 'grievance', icon: 'chat' },
-  { to: '/tech-works', label: 'Tech Works', short: 'Works', moduleId: 'tech_works', icon: 'wrench' },
-  { to: '/spot-billing', label: 'Spot Billing', short: 'Spot', moduleId: 'spot_billing', icon: 'bill' },
-  { to: '/bulk', label: 'Bulk Consumers', short: 'Bulk', moduleId: 'bulk', icon: 'bulk' },
-  { to: '/consumers', label: 'Consumers', short: 'Master', moduleId: 'consumers', icon: 'users' },
-  { to: '/atc', label: 'AT&C', short: 'AT&C', moduleId: 'atc', icon: 'chart' },
-  { to: '/field', label: 'Field Desk', short: 'Field', moduleId: 'field_notes', icon: 'pin' },
-  { to: '/upload', label: 'Upload Center', short: 'Upload', icon: 'upload' },
-  { to: '/admin', label: 'Users & Auth', short: 'Users', admin: true, icon: 'admin' },
+  { to: '/', label: 'Home', short: 'Home', end: true, icon: 'home', theme: 'home', group: 'overview' },
+  { to: '/hierarchy', label: 'Hierarchy', short: 'Offices', icon: 'tree', theme: 'hierarchy', group: 'overview' },
+  { to: '/powermap', label: 'Power Map', short: 'Map', icon: 'map', theme: 'map', group: 'overview' },
+  { to: '/nsc', label: 'New Connection', short: 'NSC', moduleId: 'nsc', icon: 'plug', theme: 'nsc', group: 'ops' },
+  { to: '/disco', label: 'Disconnection', short: 'Disco', moduleId: 'disco', icon: 'bolt', theme: 'disco', group: 'ops' },
+  { to: '/grievances', label: 'Grievances', short: 'Griev', moduleId: 'grievance', icon: 'chat', theme: 'griev', group: 'ops' },
+  { to: '/tech-works', label: 'Priority Works', short: 'Priority', moduleId: 'tech_works', icon: 'wrench', theme: 'works', group: 'ops' },
+  { to: '/spot-billing', label: 'Spot Billing', short: 'Spot', moduleId: 'spot_billing', icon: 'bill', theme: 'spot', group: 'ops' },
+  { to: '/field', label: 'Field Desk', short: 'Field', moduleId: 'field_notes', icon: 'pin', theme: 'field', group: 'ops' },
+  { to: '/consumers', label: 'Consumers', short: 'Master', moduleId: 'consumers', icon: 'users', theme: 'consumers', group: 'network' },
+  { to: '/bulk', label: 'Bulk Consumers', short: 'Bulk', moduleId: 'bulk', icon: 'bulk', theme: 'bulk', group: 'network' },
+  { to: '/atc', label: 'AT&C', short: 'AT&C', moduleId: 'atc', icon: 'chart', theme: 'atc', group: 'network' },
+  { to: '/upload', label: 'Upload Center', short: 'Upload', icon: 'upload', theme: 'upload', group: 'system' },
+  { to: '/admin', label: 'Users & Auth', short: 'Users', admin: true, icon: 'admin', theme: 'admin', group: 'system' },
 ];
 
 const PRIMARY = ['/', '/nsc', '/disco', '/upload'];
+const PRESENT_KEY = 'dro.present';
+
+function readPresentFlag() {
+  try {
+    const q = new URLSearchParams(window.location.search).get('present');
+    if (q === '1' || q === 'true' || q === 'on') return true;
+    return window.localStorage.getItem(PRESENT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistPresent(on: boolean) {
+  try {
+    window.localStorage.setItem(PRESENT_KEY, on ? '1' : '0');
+    const url = new URL(window.location.href);
+    if (on) url.searchParams.set('present', '1');
+    else url.searchParams.delete('present');
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+      window.history.replaceState(window.history.state, '', next);
+    }
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function isTypingTarget(el: EventTarget | null) {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return el.isContentEditable;
+}
 
 function Icon({ name }: { name: string }) {
   const common = {
@@ -139,6 +200,13 @@ function Icon({ name }: { name: string }) {
           <path d="M5 19c1.5-3 4-4.5 7-4.5S17.5 16 19 19" />
         </svg>
       );
+    case 'present':
+      return (
+        <svg {...common} width={18} height={18}>
+          <rect x="3" y="5" width="18" height="12" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>
@@ -148,22 +216,128 @@ function Icon({ name }: { name: string }) {
   }
 }
 
+function matchLink(pathname: string, l: LinkItem) {
+  if (l.end) return pathname === l.to;
+  return pathname === l.to || (l.to !== '/' && pathname.startsWith(l.to));
+}
+
 export function AppShell() {
   const { user, loading, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [present, setPresent] = useState(readPresentFlag);
+  const [presentNav, setPresentNav] = useState(false);
+  const [idle, setIdle] = useState(false);
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [heading, setHeading] = useState('');
+
+  useEffect(() => {
+    api
+      .offices()
+      .then((r) => setOffices(r.offices || []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     setMoreOpen(false);
+    setPresentNav(false);
+    setHeading('');
   }, [location.pathname]);
 
   useEffect(() => {
-    document.body.style.overflow = moreOpen ? 'hidden' : '';
+    document.body.style.overflow = moreOpen || presentNav ? 'hidden' : '';
     return () => {
       document.body.style.overflow = '';
     };
-  }, [moreOpen]);
+  }, [moreOpen, presentNav]);
+
+  useEffect(() => {
+    persistPresent(present);
+    document.body.classList.toggle('is-presenting', present);
+    if (!present) {
+      setPresentNav(false);
+      setIdle(false);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+    return () => {
+      document.body.classList.remove('is-presenting');
+    };
+  }, [present]);
+
+  useEffect(() => {
+    if (!present) return;
+    let timer = 0;
+    const bump = () => {
+      setIdle(false);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setIdle(true), 3200);
+    };
+    bump();
+    window.addEventListener('mousemove', bump);
+    window.addEventListener('pointerdown', bump);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('mousemove', bump);
+      window.removeEventListener('pointerdown', bump);
+    };
+  }, [present]);
+
+  const enterFullscreen = useCallback(() => {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && el.requestFullscreen) {
+      el.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
+  const setPresentOn = useCallback(
+    (on: boolean, opts?: { fullscreen?: boolean }) => {
+      setPresent(on);
+      persistPresent(on);
+      if (on && opts?.fullscreen !== false) enterFullscreen();
+    },
+    [enterFullscreen]
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'escape') {
+        if (presentNav) {
+          e.preventDefault();
+          setPresentNav(false);
+          return;
+        }
+        if (document.querySelector('.crm-modal-back, .sheet-root')) return;
+        if (present) {
+          e.preventDefault();
+          setPresentOn(false);
+        }
+        return;
+      }
+      if (key === 'p') {
+        e.preventDefault();
+        setPresentOn(!present);
+        return;
+      }
+      if (key === 'n' && present) {
+        e.preventDefault();
+        setPresentNav((v) => !v);
+        return;
+      }
+      if (key === 'f' && present) {
+        e.preventDefault();
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        else enterFullscreen();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [present, presentNav, setPresentOn, enterFullscreen]);
 
   const visible = useMemo(() => {
     if (!user) return [];
@@ -190,23 +364,27 @@ export function AppShell() {
   }
 
   const primary = visible.filter((l) => PRIMARY.includes(l.to));
-  // ensure bottom nav always has 4 + more even if some modules hidden
   const bottomPrimary = PRIMARY.map((path) => visible.find((l) => l.to === path)).filter(Boolean) as LinkItem[];
   const moreLinks = visible.filter((l) => !PRIMARY.includes(l.to));
-  const moreActive = moreLinks.some((l) =>
-    l.end ? location.pathname === l.to : location.pathname === l.to || location.pathname.startsWith(`${l.to}/`)
-  );
+  const moreActive = moreLinks.some((l) => matchLink(location.pathname, l));
+  const current = visible.find((l) => matchLink(location.pathname, l));
+  const theme = current?.theme || 'home';
+  const groupLabel = GROUPS.find((g) => g.id === current?.group)?.label || 'DRO';
 
-  const current = visible.find((l) =>
-    l.end ? location.pathname === l.to : location.pathname === l.to || (l.to !== '/' && location.pathname.startsWith(l.to))
-  );
-
+  const officeName = (code?: string) => {
+    if (!code) return '';
+    return offices.find((o) => String(o.code) === String(code))?.name || '';
+  };
+  const regionName =
+    officeName(user.region_code) ||
+    offices.find((o) => o.office_type === 'region')?.name ||
+    'Darjeeling Region';
   const scope =
     user.role === 'ccc'
-      ? `CCC ${user.ccc_code}`
+      ? officeName(user.ccc_code) || regionName
       : user.role === 'division'
-        ? `Div ${user.division_code}`
-        : 'Region 341';
+        ? officeName(user.division_code) || regionName
+        : regionName;
 
   const initials = user.name
     .split(/\s+/)
@@ -221,6 +399,32 @@ export function AppShell() {
       <path d="M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2M14 12H4M7 9l-3 3 3 3" />
     </svg>
   );
+
+  const navList = (items: LinkItem[], onPick?: () => void) =>
+    GROUPS.map((g) => {
+      const chunk = items.filter((l) => l.group === g.id);
+      if (!chunk.length) return null;
+      return (
+        <div key={g.id} className="nav-group">
+          <div className="nav-group-label">{g.label}</div>
+          {chunk.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              end={l.end}
+              data-theme={l.theme}
+              className={({ isActive }) => (isActive ? 'active' : '')}
+              onClick={onPick}
+            >
+              <span className="nav-icon">
+                <Icon name={l.icon} />
+              </span>
+              {l.label}
+            </NavLink>
+          ))}
+        </div>
+      );
+    });
 
   const userCard = (
     <div className="sidebar-user">
@@ -237,45 +441,127 @@ export function AppShell() {
     </div>
   );
 
+  const presentBtn = (where: 'sidebar' | 'masthead' | 'fab') => (
+    <button
+      type="button"
+      className={`${where === 'sidebar' ? 'sidebar-present' : where === 'fab' ? 'present-fab' : 'present-btn'}${present ? ' on' : ''}`}
+      aria-pressed={present}
+      title={present ? 'Exit present (Esc)' : 'Present on a big screen (P)'}
+      onClick={() => setPresentOn(!present)}
+    >
+      <span className="nav-icon">
+        <Icon name="present" />
+      </span>
+      <span>{present ? 'Exit present' : 'Present'}</span>
+      {where === 'sidebar' && <kbd>P</kbd>}
+    </button>
+  );
+
   const mapMode = location.pathname.startsWith('/powermap');
 
   return (
-    <div className={`app-shell${mapMode ? ' mode-powermap' : ''}`}>
+    <div
+      className={`app-shell${mapMode ? ' mode-powermap' : ''}${idle && present && !presentNav ? ' present-idle' : ''}`}
+      data-theme={theme}
+      data-present={present ? 'on' : 'off'}
+    >
       <header className="app-bar">
-        <div className="brand desktop-only">
-          <div className="brand-mark">DRO</div>
-          <div className="brand-sub">Actionable Insight</div>
-        </div>
-        <div className="app-bar-text">
+        <div
+          className="app-bar-text"
+          role={present ? 'button' : undefined}
+          onClick={present ? () => setPresentNav(true) : undefined}
+        >
           <div className="app-bar-brand">DRO</div>
-          <h1>{current?.label || 'DRO Ops'}</h1>
+          <h1>{heading || current?.label || 'DRO Ops'}</h1>
         </div>
-        <button type="button" className="icon-btn mobile-only" aria-label="Sign out" onClick={() => logout()}>
+        <button
+          type="button"
+          className={`icon-btn ${present ? 'on' : ''}`}
+          aria-pressed={present}
+          aria-label={present ? 'Exit present mode' : 'Present mode'}
+          onClick={() => setPresentOn(!present)}
+        >
+          <Icon name="present" />
+        </button>
+        <button type="button" className="icon-btn present-hide" aria-label="Sign out" onClick={() => logout()}>
           {logoutIcon}
         </button>
       </header>
 
       <div className="app-body">
         <aside className="sidebar desktop-only">
-          <nav className="nav">
-            {visible.map((l) => (
-              <NavLink key={l.to} to={l.to} end={l.end} className={({ isActive }) => (isActive ? 'active' : '')}>
-                <span className="nav-icon">
-                  <Icon name={l.icon} />
-                </span>
-                {l.label}
-              </NavLink>
-            ))}
-          </nav>
-          {userCard}
+          <div className="sidebar-brand">
+            <div className="brand-mark">DRO</div>
+            <div className="brand-sub">Actionable Insight</div>
+          </div>
+          <nav className="nav">{navList(visible)}</nav>
+          <div className="sidebar-footer">
+            {presentBtn('sidebar')}
+            {userCard}
+          </div>
         </aside>
 
         <div className="main">
+          {!mapMode && (
+            <header className="page-masthead desktop-only">
+              <div className="page-masthead-copy">
+                <div className="page-masthead-kicker">{groupLabel}</div>
+                <h1>{heading || current?.label || 'DRO Ops'}</h1>
+                <p>{scope}</p>
+              </div>
+              <div className="page-masthead-actions">
+                {present && <span className="present-chip">Presenting</span>}
+                {presentBtn('masthead')}
+              </div>
+            </header>
+          )}
+
           <div className={`page-content${mapMode ? ' page-content-flush' : ''}`}>
-            <Outlet />
+            <PageHeadingProvider set={setHeading}>
+              <Outlet />
+            </PageHeadingProvider>
           </div>
         </div>
       </div>
+
+      {mapMode && !present && presentBtn('fab')}
+
+      {present && (
+        <>
+          <button
+            type="button"
+            className="present-hotzone desktop-only"
+            aria-label="Open modules"
+            title="Modules (N)"
+            onClick={() => setPresentNav(true)}
+          />
+          <div className="present-hud desktop-only">
+            <span>Presenting</span>
+            <span className="present-hud-meta">
+              {current?.label || 'DRO'} · {scope}
+            </span>
+            <button type="button" className="present-hud-btn" onClick={() => setPresentNav(true)}>
+              Modules <kbd>N</kbd>
+            </button>
+            <button type="button" className="present-hud-btn" onClick={() => setPresentOn(false)}>
+              Exit <kbd>Esc</kbd>
+            </button>
+          </div>
+        </>
+      )}
+
+      {presentNav && (
+        <div className="present-nav-root" role="dialog" aria-modal="true" aria-label="Modules">
+          <button type="button" className="present-nav-back" aria-label="Close" onClick={() => setPresentNav(false)} />
+          <aside className="present-nav-panel">
+            <div className="sidebar-brand">
+              <div className="brand-mark">DRO</div>
+              <div className="brand-sub">N to toggle · Esc to close</div>
+            </div>
+            <nav className="nav">{navList(visible, () => setPresentNav(false))}</nav>
+          </aside>
+        </div>
+      )}
 
       <nav className="bottom-nav mobile-only" aria-label="Primary">
         {(bottomPrimary.length ? bottomPrimary : primary).map((l) => (
@@ -311,6 +597,7 @@ export function AppShell() {
                   key={l.to}
                   type="button"
                   className={`sheet-item ${location.pathname === l.to ? 'active' : ''}`}
+                  data-theme={l.theme}
                   onClick={() => {
                     navigate(l.to);
                     setMoreOpen(false);

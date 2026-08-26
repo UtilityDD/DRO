@@ -10,7 +10,6 @@ import {
   GrievancePage,
   NscPage,
   SpotBillingPage,
-  TechWorksPage,
 } from './pages/ModulePages';
 import { UploadPage } from './pages/UploadPage';
 import { AdminPage } from './pages/AdminPage';
@@ -18,6 +17,7 @@ import { AtcPage } from './pages/AtcPage';
 import { ConsumersPage } from './pages/ConsumersPage';
 import { PowerMapPage } from './pages/PowerMapPage';
 import { FieldDeskPage } from './pages/FieldDeskPage';
+import { TechWorksDeskPage } from './pages/TechWorksDeskPage';
 
 export default function App() {
   return (
@@ -32,7 +32,7 @@ export default function App() {
             <Route path="/nsc" element={<NscPage />} />
             <Route path="/disco" element={<DiscoPage />} />
             <Route path="/grievances" element={<GrievancePage />} />
-            <Route path="/tech-works" element={<TechWorksPage />} />
+            <Route path="/tech-works" element={<TechWorksDeskPage />} />
             <Route path="/spot-billing" element={<SpotBillingPage />} />
             <Route path="/bulk" element={<BulkPage />} />
             <Route path="/consumers" element={<ConsumersPage />} />

@@ -71,10 +71,9 @@ export function DataPage({ title, subtitle, columns, load, summary, filters, onR
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2 style={{ marginBottom: 0 }}>{title}</h2>
             {subtitle && <p className="muted tight">{subtitle}</p>}
           </div>
-          <button type="button" className="btn secondary" onClick={exportCsv} disabled={!rows.length}>
+          <button type="button" className="btn secondary present-hide" onClick={exportCsv} disabled={!rows.length}>
             Export
           </button>
         </div>
@@ -109,7 +108,7 @@ export function DataPage({ title, subtitle, columns, load, summary, filters, onR
                 {columns.map((c) => (
                   <th key={c.key}>{c.label}</th>
                 ))}
-                {onRowAction && <th>Action</th>}
+                {onRowAction && <th className="present-hide">Action</th>}
               </tr>
             </thead>
             <tbody>
@@ -125,7 +124,7 @@ export function DataPage({ title, subtitle, columns, load, summary, filters, onR
                     </td>
                   ))}
                   {onRowAction && (
-                    <td>
+                    <td className="present-hide">
                       {onRowAction({
                         ...r,
                         __reload: () => setTick((t) => t + 1),
@@ -183,7 +182,7 @@ export function DataPage({ title, subtitle, columns, load, summary, filters, onR
                       </div>
                     ))}
                 </div>
-                {onRowAction && <div className="data-card-actions">{onRowAction(enriched)}</div>}
+                {onRowAction && <div className="data-card-actions present-hide">{onRowAction(enriched)}</div>}
               </article>
             );
           })}

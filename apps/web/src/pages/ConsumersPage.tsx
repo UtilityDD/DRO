@@ -61,7 +61,6 @@ export function ConsumersPage() {
         </button>
       </div>
       <div className="panel stack">
-        <h2>Consumer master lookup</h2>
         <form className="filters" onSubmit={search}>
           <input
             placeholder="Consumer ID or name"

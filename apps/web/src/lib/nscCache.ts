@@ -1,37 +1,104 @@
 import { openDB, type DBSchema } from 'idb';
-import type { NscRow } from './nsc';
+import type { NscQueue } from './nsc';
+import type { NscChartRow, NscOfficeOpt } from './nscDesk';
 
-type Snap = {
-  reportDate: string | null;
+export type NscStamp = {
+  report_date: string | null;
+  updated_at: string | null;
+  pending: number;
+  withheld: number;
+  total?: number;
+};
+
+export type NscQueueSnap = {
+  stamp: string;
+  queue: NscQueue;
+  rows: NscChartRow[];
+  divisions: NscOfficeOpt[];
+  cccs: NscOfficeOpt[];
+  pending: number;
+  withheld: number;
+  report_date: string | null;
   fetchedAt: number;
-  rows: NscRow[];
 };
 
 interface NscDB extends DBSchema {
-  nsc: {
-    key: string;
-    value: Snap;
-  };
+  meta: { key: string; value: NscStamp & { fetchedAt: number } };
+  queue: { key: string; value: NscQueueSnap };
+}
+
+const queueMem = new Map<string, NscQueueSnap>();
+let liveStamp = '';
+
+export function nscStampOf(s: NscStamp | null | undefined) {
+  if (!s) return '';
+  return `${s.report_date || ''}|${s.updated_at || ''}|${s.pending || 0}|${s.withheld || 0}`;
+}
+
+export function nscLiveStamp() {
+  return liveStamp;
+}
+
+export function nscSetLiveStamp(stamp: string) {
+  liveStamp = stamp;
 }
 
 async function db() {
-  return openDB<NscDB>('dro-ops-nsc', 1, {
-    upgrade(database) {
-      if (!database.objectStoreNames.contains('nsc')) database.createObjectStore('nsc');
+  return openDB<NscDB>('dro-ops-nsc', 3, {
+    upgrade(database, oldVersion) {
+      if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta');
+      if (!database.objectStoreNames.contains('queue')) database.createObjectStore('queue');
+      if (oldVersion < 2 && (database.objectStoreNames as unknown as DOMStringList).contains('nsc')) {
+        (database as unknown as { deleteObjectStore(name: string): void }).deleteObjectStore('nsc');
+      }
+      if (oldVersion < 3 && (database.objectStoreNames as unknown as DOMStringList).contains('desk')) {
+        (database as unknown as { deleteObjectStore(name: string): void }).deleteObjectStore('desk');
+      }
     },
   });
 }
 
-export async function nscCachePut(reportDate: string | null, rows: NscRow[]) {
-  const handle = await db();
-  await handle.put('nsc', { reportDate, fetchedAt: Date.now(), rows }, 'snapshot');
+export function nscQueueMemGet(queue: NscQueue) {
+  return queueMem.get(queue) || null;
 }
 
-export async function nscCacheGet(): Promise<Snap | null> {
+export async function nscCacheGetQueue(queue: NscQueue): Promise<NscQueueSnap | null> {
+  const mem = queueMem.get(queue);
+  if (mem) return mem;
   try {
     const handle = await db();
-    return (await handle.get('nsc', 'snapshot')) || null;
+    const row = (await handle.get('queue', queue)) || null;
+    if (row) queueMem.set(queue, row);
+    return row;
   } catch {
     return null;
+  }
+}
+
+export async function nscCachePutQueue(snap: NscQueueSnap) {
+  queueMem.set(snap.queue, snap);
+  try {
+    const handle = await db();
+    await handle.put('queue', snap, snap.queue);
+  } catch {
+    /* keep memory */
+  }
+}
+
+export async function nscCacheGetMeta(): Promise<(NscStamp & { fetchedAt: number }) | null> {
+  try {
+    const handle = await db();
+    return (await handle.get('meta', 'stamp')) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function nscCachePutMeta(stamp: NscStamp) {
+  try {
+    const handle = await db();
+    await handle.put('meta', { ...stamp, fetchedAt: Date.now() }, 'stamp');
+  } catch {
+    /* ignore */
   }
 }

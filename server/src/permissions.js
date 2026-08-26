@@ -4,7 +4,7 @@ const MODULES = [
   { id: 'nsc', label: 'New Connection (NSC)', uploadKey: 'nsc' },
   { id: 'disco', label: 'Disconnection', uploadKey: 'disco' },
   { id: 'grievance', label: 'Grievances', uploadKey: 'grievance' },
-  { id: 'tech_works', label: 'Tech Works', uploadKey: 'tech-works' },
+  { id: 'tech_works', label: 'Priority Works', uploadKey: 'tech-works' },
   { id: 'spot_billing', label: 'Spot Billing', uploadKey: 'spot-billing' },
   { id: 'bulk', label: 'Bulk Consumers', uploadKey: 'bulk' },
   { id: 'consumers', label: 'Consumer Master', uploadKey: 'consumers' },

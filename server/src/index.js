@@ -8,6 +8,8 @@ const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const multer = require('multer');
 const nscLib = require('./nsc_parse');
+const nscQuery = require('./nsc_query');
+const nscImport = require('./nsc_import');
 const {
   readCollection,
   writeCollection,
@@ -38,6 +40,7 @@ const {
 } = require('./permissions');
 const { seedAll, sampleSubstations } = require('./seed_lib');
 const fieldNotes = require('./field_notes');
+const techWorks = require('./tech_works');
 
 const PORT = process.env.PORT || 8787;
 const app = express();
@@ -149,6 +152,15 @@ function ensureSeeded() {
   if (!Array.isArray(fieldNotes)) {
     writeCollection('field_notes', []);
   }
+  techWorks.ensureCategories();
+  techWorks.ensureSettings();
+  const existingWorks = readCollection('tech_works', []);
+  const needsSchemeSeed =
+    !existingWorks.length || existingWorks.every((r) => !techWorks.hasSchemeShape(r) && techWorks.isLegacyTechRow(r));
+  if (needsSchemeSeed) {
+    writeCollection('tech_works', techWorks.sampleWorks(readCollection('offices', [])));
+    console.log('[DRO] Seeded tech works follow-up desk records');
+  }
 }
 
 app.get('/api/health', (req, res) => {
@@ -257,6 +269,54 @@ function enrichRows(rows) {
   });
 }
 
+function isoDay(v) {
+  return v ? String(v).slice(0, 10) : null;
+}
+
+function toNscChartRow(r) {
+  const row = {
+    application_no: r.application_no || '',
+    status: r.status || 'pending',
+    sap_status: r.sap_status || r.stage || '',
+    division_code: r.division_code || '',
+    division_name: r.division_name || r.division_code || '',
+    ccc_code: r.ccc_code || '',
+    ccc_name: r.ccc_name || r.ccc_code || '',
+    consumer_class: r.consumer_class || r.category || 'Others',
+    quotation_age_days: r.quotation_age_days ?? r.delay_days ?? null,
+    processing_days: r.processing_days ?? null,
+    quotation_age_slab: r.quotation_age_slab || '',
+    processing_slab: r.processing_slab || '',
+    pole_count: r.pole_count == null || r.pole_count === '' ? null : Number(r.pole_count),
+    procedure: r.procedure || 'unknown',
+    applicant_type: r.applicant_type || '',
+    withheld_on: isoDay(r.withheld_on),
+    withheld_reason: r.withheld_reason || '',
+    collected_on: isoDay(r.collected_on),
+    created_on: isoDay(r.created_on || r.applied_on),
+    quotation_issue_on: isoDay(r.quotation_issue_on),
+    report_date: isoDay(r.report_date),
+  };
+  for (const k of Object.keys(row)) {
+    if (row[k] == null || row[k] === '') delete row[k];
+  }
+  return row;
+}
+
+function nscOfficeOptions(user) {
+  const offices = readCollection('offices', []).filter((o) => scopeFilter(user, o));
+  return {
+    divisions: offices
+      .filter((o) => o.office_type === 'division')
+      .map((o) => ({ code: o.code, name: o.name }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name))),
+    cccs: offices
+      .filter((o) => o.office_type === 'ccc')
+      .map((o) => ({ code: o.code, name: o.name, division_code: o.division_code || '' }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name))),
+  };
+}
+
 function droCccList() {
   const offices = readCollection('offices', []);
   const divs = officeNameMap();
@@ -308,7 +368,7 @@ async function kpiPulse(user) {
   const nsc = await nscCounts(user);
   const disco = filterScoped(user, readCollection('disconnections', []));
   const griev = filterScoped(user, readCollection('grievances', [])).filter((r) => !isDemoGrievance(r));
-  const tech = filterScoped(user, readCollection('tech_works', []));
+  const tech = enrichRows(readCollection('tech_works', []).filter((r) => techWorks.inScope(user, r)));
   const spot = filterScoped(user, readCollection('spot_billing', []));
   const consumers = filterScoped(user, readCollection('consumer_master', []));
   const offices = readCollection('offices', []);
@@ -906,15 +966,41 @@ app.get('/api/nsc', requireAuth, async (req, res) => {
   if (!canView(req.user, 'nsc')) {
     return res.status(403).json({ error: 'No view permission for nsc' });
   }
+  const q = nscQueryFromReq(req);
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 80));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  try {
+    if (useSupabase()) {
+      const { rows, total } = await nscQuery.nscPage(q, req.user, { limit, offset });
+      const hydrated = enrichRows(nscLib.hydrateNscRows(rows));
+      let report_date = hydrated[0]?.report_date || null;
+      if (!report_date) {
+        try {
+          const latest = await sb.querySupabase('nsc_cases?select=report_date&order=report_date.desc.nullslast&limit=1');
+          report_date = Array.isArray(latest) ? latest[0]?.report_date || null : null;
+        } catch {
+          report_date = null;
+        }
+      }
+      return res.json({
+        rows: hydrated.map(nscLib.nscListRow),
+        total,
+        limit,
+        offset,
+        report_date,
+        can_edit: canEdit(req.user, 'nsc'),
+        can_upload: canUpload(req.user, 'nsc'),
+      });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'NSC list failed' });
+  }
   await ensureCollection('nsc_cases');
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
-  const q = nscQueryFromReq(req);
   let out = nscLib.filterNscRows(rows, q);
   if (q.status) {
     out = out.filter((r) => String(r.status) === String(q.status) || String(r.sap_status) === String(q.status));
   }
-  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 80));
-  const offset = Math.max(0, Number(req.query.offset) || 0);
   res.json({
     rows: out.slice(offset, offset + limit).map(nscLib.nscListRow),
     total: out.length,
@@ -926,18 +1012,138 @@ app.get('/api/nsc', requireAuth, async (req, res) => {
   });
 });
 
-app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+app.get('/api/nsc/status', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+  try {
+    if (useSupabase()) {
+      return res.json(await nscQuery.nscStatus(req.user));
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'NSC status failed' });
+  }
   await ensureCollection('nsc_cases');
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
-  res.json(nscLib.buildNscDesk(rows, nscQueryFromReq(req)));
+  const pending = rows.filter((r) => nscLib.isPendingQueue(r)).length;
+  const withheld = rows.filter((r) => String(r.status) === 'withheld').length;
+  res.json({
+    report_date: rows[0]?.report_date || null,
+    updated_at: rows[0]?.updated_at || null,
+    pending,
+    withheld,
+    total: rows.length,
+  });
+});
+
+app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+  const q = nscQueryFromReq(req);
+  try {
+    if (useSupabase()) {
+      const [pending, withheld, rows] = await Promise.all([
+        nscQuery.nscCount({ queue: 'pending' }, req.user),
+        nscQuery.nscCount({ queue: 'withheld' }, req.user),
+        nscQuery.nscFetchAll(
+          {
+            ...q,
+            slab: '',
+            delay_min: '',
+            delay_max: '',
+            pole: '',
+            pole_min: '',
+            pole_max: '',
+            procedure: '',
+          },
+          req.user,
+          { chart: true, select: nscQuery.CHART_SELECT }
+        ),
+      ]);
+      const desk = nscLib.buildNscDesk(enrichRows(rows), q);
+      desk.pending = pending;
+      desk.withheld = withheld;
+      const offices = readCollection('offices', []).filter((o) => scopeFilter(req.user, o));
+      desk.divisions = offices
+        .filter((o) => o.office_type === 'division')
+        .map((o) => ({ code: o.code, name: o.name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      desk.cccs = offices
+        .filter((o) => o.office_type === 'ccc' && (!q.division || String(o.division_code) === String(q.division)))
+        .map((o) => ({ code: o.code, name: o.name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return res.json(desk);
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'NSC desk failed' });
+  }
+  await ensureCollection('nsc_cases');
+  const rows = filterScoped(req.user, readCollection('nsc_cases', []));
+  res.json(nscLib.buildNscDesk(rows, q));
+});
+
+app.get('/api/nsc/queue', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+  const queue = String(req.query.queue || 'pending').toLowerCase() === 'withheld' ? 'withheld' : 'pending';
+  const offices = nscOfficeOptions(req.user);
+  try {
+    if (useSupabase()) {
+      const rows = await nscQuery.nscFetchAll({ queue }, req.user, {
+        chart: true,
+        select: nscQuery.CHART_SELECT,
+      });
+      const chartRows = enrichRows(rows).map(toNscChartRow);
+      return res.json({
+        queue,
+        report_date: chartRows[0]?.report_date || null,
+        count: chartRows.length,
+        rows: chartRows,
+        divisions: offices.divisions,
+        cccs: offices.cccs,
+      });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'NSC queue failed' });
+  }
+  await ensureCollection('nsc_cases');
+  const rows = nscLib
+    .filterNscRows(filterScoped(req.user, readCollection('nsc_cases', [])), { queue })
+    .map(toNscChartRow);
+  res.json({
+    queue,
+    report_date: rows[0]?.report_date || null,
+    count: rows.length,
+    rows,
+    divisions: offices.divisions,
+    cccs: offices.cccs,
+  });
 });
 
 app.get('/api/nsc/export', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
+  const q = nscQueryFromReq(req);
+  const queue = String(req.query.queue || 'all');
+  try {
+    if (useSupabase()) {
+      const signed = await nscImport.exportDownloadUrl(q, req.user);
+      if (signed && String(req.query.live || '') !== '1') {
+        return res.json(signed);
+      }
+      const count = await nscQuery.nscCount(q, req.user);
+      if (count > 8000) {
+        return res.status(413).json({
+          error: `Download is ${count.toLocaleString('en-IN')} rows. Filter by CCC or Pending first.`,
+        });
+      }
+      const chunks = [];
+      await nscQuery.nscExportCsv(q, req.user, async (chunk) => {
+        chunks.push(chunk);
+      });
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="nsc_${queue}.csv"`);
+      return res.send(chunks.join(''));
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'NSC export failed' });
+  }
   req.setTimeout(180000);
   res.setTimeout(180000);
   await ensureCollection('nsc_cases');
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
-  const filtered = nscLib.filterNscRows(rows, nscQueryFromReq(req));
+  const filtered = nscLib.filterNscRows(rows, q);
   const cols = Object.keys(nscLib.nscExportRow({}));
   const header = cols.join(',');
   const body = filtered
@@ -946,7 +1152,6 @@ app.get('/api/nsc/export', requireAuth, requirePerm('nsc', 'view'), async (req, 
       return cols.map((k) => `"${String(o[k] ?? '').replace(/"/g, '""')}"`).join(',');
     })
     .join('\n');
-  const queue = String(req.query.queue || 'all');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="nsc_${queue}.csv"`);
   res.send(`${header}\n${body}`);
@@ -983,7 +1188,238 @@ app.get('/api/grievances', requireAuth, requirePerm('grievance', 'view'), (req, 
     can_upload: canUpload(req.user, 'grievance'),
   });
 });
-app.get('/api/tech-works', requireAuth, listModule('tech_works', 'tech_works'));
+function techWorkPayload(row, user) {
+  const hydrated = techWorks.hydrateTechWork(row);
+  return {
+    ...hydrated,
+    can_update: techWorks.canUpdate(user, hydrated),
+    can_plan: techWorks.canPlan(user, hydrated),
+    can_assign: techWorks.canAssign(user),
+  };
+}
+
+function applyTechPlan(row, body, offices) {
+  const cat = body.category_id != null ? techWorks.categoryById(body.category_id) : null;
+  if (body.category_id != null) {
+    if (!cat || cat.active === false) return { error: 'Invalid category' };
+    row.category_id = cat.id;
+    row.category_name = cat.name;
+    row.parameter_unit = cat.parameter_unit || row.parameter_unit || '';
+  }
+  if (body.division_code !== undefined) {
+    const code = String(body.division_code || '').trim();
+    const div = offices.find((o) => o.office_type === 'division' && String(o.code) === code);
+    if (!div) return { error: 'Invalid division' };
+    row.division_code = code;
+  }
+  if (body.description !== undefined || body.title !== undefined) {
+    const description = techWorks.cleanText(body.description || body.title, 400);
+    if (description.length < 8) return { error: 'Brief description is required' };
+    row.description = description;
+    row.title = description;
+  }
+  if (body.related_ss_name !== undefined) row.related_ss_name = techWorks.cleanText(body.related_ss_name, 80);
+  if (body.related_ss_id !== undefined) row.related_ss_id = String(body.related_ss_id || '').trim().slice(0, 40);
+  if (body.existing_parameter !== undefined) row.existing_parameter = techWorks.numOrNull(body.existing_parameter);
+  if (body.proposed_parameter !== undefined) row.proposed_parameter = techWorks.numOrNull(body.proposed_parameter);
+  if (body.parameter_unit !== undefined) {
+    const unit = String(body.parameter_unit || '').trim();
+    row.parameter_unit = unit === 'CKT KM' || unit === 'MVA' ? unit : techWorks.cleanText(unit, 12);
+  }
+  if (body.proposal_enote_no !== undefined) row.proposal_enote_no = techWorks.cleanText(body.proposal_enote_no, 40);
+  if (body.proposal_enote_date !== undefined) row.proposal_enote_date = techWorks.isoDate(body.proposal_enote_date);
+  if (body.taa_no !== undefined) row.taa_no = techWorks.cleanText(body.taa_no, 40);
+  if (body.taa_date !== undefined) row.taa_date = techWorks.isoDate(body.taa_date);
+  if (body.scheme_value !== undefined) row.scheme_value = techWorks.moneyOrNull(body.scheme_value);
+  if (body.major_material !== undefined) {
+    row.major_material = String(body.major_material || '').replace(/[<>]/g, '').trim().slice(0, 800);
+  }
+  if (body.pos !== undefined) {
+    row.pos = techWorks.parsePos(body.pos);
+    row.vendor_name = row.pos[0]?.agency_name || '';
+  }
+  if (body.work_start_date !== undefined) row.work_start_date = techWorks.isoDate(body.work_start_date);
+  if (body.target_date !== undefined) row.target_date = techWorks.isoDate(body.target_date) || row.target_date || null;
+  return { row };
+}
+
+app.get('/api/tech-works/categories', requireAuth, requirePerm('tech_works', 'view'), (req, res) => {
+  res.json({
+    rows: techWorks.categoriesSorted(),
+    can_manage: isAdmin(req.user),
+  });
+});
+
+app.post('/api/tech-works/categories', requireAuth, requireAdmin, (req, res) => {
+  const name = techWorks.cleanText(req.body?.name, 80);
+  if (name.length < 3) return res.status(400).json({ error: 'Category name is required' });
+  let unit = String(req.body?.parameter_unit || '').trim();
+  if (unit.toUpperCase() === 'CKT KM') unit = 'CKT KM';
+  else if (unit.toUpperCase() === 'MVA') unit = 'MVA';
+  else unit = techWorks.cleanText(unit, 12);
+  const rows = techWorks.ensureCategories();
+  if (rows.some((c) => String(c.name).toLowerCase() === name.toLowerCase() && c.active !== false)) {
+    return res.status(400).json({ error: 'Category already exists' });
+  }
+  const now = new Date().toISOString();
+  const row = {
+    id: nextId(rows),
+    name,
+    parameter_unit: unit,
+    sort_order: Number(req.body?.sort_order) || (rows.reduce((m, c) => Math.max(m, Number(c.sort_order) || 0), 0) + 10),
+    active: true,
+    created_at: now,
+    updated_at: now,
+  };
+  rows.push(row);
+  writeCollection('tech_work_categories', rows);
+  res.json({ row });
+});
+
+app.patch('/api/tech-works/categories/:id', requireAuth, requireAdmin, (req, res) => {
+  const rows = techWorks.ensureCategories();
+  const row = rows.find((c) => String(c.id) === String(req.params.id));
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (req.body.name !== undefined) {
+    const name = techWorks.cleanText(req.body.name, 80);
+    if (name.length < 3) return res.status(400).json({ error: 'Category name is required' });
+    row.name = name;
+  }
+  if (req.body.parameter_unit !== undefined) {
+    let unit = String(req.body.parameter_unit || '').trim();
+    if (unit.toUpperCase() === 'CKT KM') unit = 'CKT KM';
+    else if (unit.toUpperCase() === 'MVA') unit = 'MVA';
+    else unit = techWorks.cleanText(unit, 12);
+    row.parameter_unit = unit;
+  }
+  if (req.body.sort_order !== undefined) row.sort_order = Number(req.body.sort_order) || 0;
+  if (req.body.active !== undefined) row.active = Boolean(req.body.active);
+  row.updated_at = new Date().toISOString();
+  writeCollection('tech_work_categories', rows);
+  if (row.name) {
+    const works = readCollection('tech_works', []);
+    let touched = false;
+    for (const w of works) {
+      if (Number(w.category_id) === Number(row.id)) {
+        w.category_name = row.name;
+        if (row.parameter_unit) w.parameter_unit = row.parameter_unit;
+        touched = true;
+      }
+    }
+    if (touched) writeCollection('tech_works', works);
+  }
+  res.json({ row });
+});
+
+app.get('/api/tech-works/settings', requireAuth, requirePerm('tech_works', 'view'), (req, res) => {
+  const settings = techWorks.ensureSettings();
+  res.json({
+    author_users: settings.author_users || [],
+    can_manage: isAdmin(req.user),
+  });
+});
+
+app.patch('/api/tech-works/settings', requireAuth, requireAdmin, (req, res) => {
+  const saved = techWorks.saveAuthors(req.body?.author_users);
+  if (saved.error) return res.status(400).json({ error: saved.error });
+  res.json({ author_users: saved.names });
+});
+
+app.get('/api/tech-works', requireAuth, requirePerm('tech_works', 'view'), (req, res) => {
+  techWorks.ensureCategories();
+  techWorks.ensureSettings();
+  const rows = enrichRows(readCollection('tech_works', []).filter((r) => techWorks.inScope(req.user, r))).map(
+    (r) => techWorkPayload(r, req.user)
+  );
+  const division = req.query.division;
+  const status = req.query.status;
+  const category = req.query.category;
+  let out = rows;
+  if (division) out = out.filter((r) => String(r.division_code) === String(division));
+  if (status) out = out.filter((r) => String(r.status) === String(status));
+  if (category) out = out.filter((r) => String(r.category_id) === String(category) || String(r.category_name) === String(category));
+  const settings = techWorks.ensureSettings();
+  res.json({
+    rows: out,
+    total: out.length,
+    categories: techWorks.categoriesSorted(),
+    staff: techWorks.staffForUser(req.user),
+    author_users: settings.author_users || [],
+    can_edit: canEdit(req.user, 'tech_works'),
+    can_create: techWorks.canCreate(req.user),
+    can_assign: techWorks.canAssign(req.user),
+    can_upload: canUpload(req.user, 'tech_works'),
+    can_manage_categories: isAdmin(req.user),
+  });
+});
+
+app.post('/api/tech-works', requireAuth, requirePerm('tech_works', 'view'), (req, res) => {
+  if (!techWorks.canCreate(req.user)) return res.status(403).json({ error: 'Not authorized to add tech works' });
+  const offices = readCollection('offices', []);
+  const role = String(req.user?.role || '').toLowerCase();
+  let division_code = String(req.body?.division_code || '').trim();
+  if (role === 'division' || role === 'ccc') division_code = String(req.user.division_code || division_code);
+  const body = { ...req.body, division_code };
+  const rows = readCollection('tech_works', []);
+  const now = new Date().toISOString();
+  const row = {
+    id: nextId(rows),
+    work_id: techWorks.nextWorkId(rows),
+    title: '',
+    description: '',
+    ccc_code: '',
+    division_code,
+    region_code: '341',
+    priority: 'medium',
+    status: 'planned',
+    vendor_name: '',
+    billing_status: 'pending',
+    target_date: null,
+    completed_on: null,
+    remarks: '',
+    pos: [],
+    followups: [],
+    followup_users: [],
+    material_issue_status: 'not_issued',
+    work_progress: 0,
+    scheme_value: null,
+    billing_progress: null,
+    batch_id: null,
+    created_by: req.user.username,
+    created_at: now,
+    updated_at: now,
+  };
+  const planned = applyTechPlan(row, body, offices);
+  if (planned.error) return res.status(400).json({ error: planned.error });
+  if (!row.category_id) return res.status(400).json({ error: 'Category is required' });
+  if (!row.division_code) return res.status(400).json({ error: 'Division is required' });
+  if (!techWorks.inScope(req.user, row)) return res.status(403).json({ error: 'Division out of scope' });
+  if (req.body.followup_users !== undefined && techWorks.canAssign(req.user)) {
+    const assigned = techWorks.parseFollowupUsers(req.body.followup_users);
+    if (assigned.error) return res.status(400).json({ error: assigned.error });
+    row.followup_users = assigned.names;
+  }
+  const creator = String(req.user.username || '');
+  if (creator && !isAdmin(req.user) && !row.followup_users.includes(creator)) {
+    row.followup_users = [...row.followup_users, creator];
+  }
+  if (req.body.status !== undefined) {
+    const status = techWorks.normalizeStatus(req.body.status);
+    if (!techWorks.STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status' });
+    row.status = status;
+  }
+  if (req.body.material_issue_status !== undefined) {
+    const mat = String(req.body.material_issue_status || '');
+    if (!techWorks.MATERIAL.has(mat)) return res.status(400).json({ error: 'Invalid material issue status' });
+    row.material_issue_status = mat;
+  }
+  if (req.body.work_progress !== undefined) row.work_progress = techWorks.clampProgress(req.body.work_progress);
+  if (req.body.billing_progress !== undefined) row.billing_progress = techWorks.moneyOrNull(req.body.billing_progress);
+  if (req.body.remarks !== undefined) row.remarks = String(req.body.remarks || '').replace(/[<>]/g, '').trim().slice(0, 800);
+  rows.push(row);
+  writeCollection('tech_works', rows);
+  res.json({ row: techWorkPayload(row, req.user) });
+});
 app.get('/api/spot-billing', requireAuth, listModule('spot_billing', 'spot_billing'));
 app.get('/api/bulk', requireAuth, listModule('bulk_consumers', 'bulk'));
 app.get('/api/consumers', requireAuth, requirePerm('consumers', 'view'), (req, res) => {
@@ -1329,6 +1765,41 @@ app.get('/api/nsc/summary', requireAuth, requirePerm('nsc', 'view'), async (req,
   }
 });
 
+app.post('/api/nsc/upload-url', requireAuth, requirePerm('nsc', 'upload'), async (req, res) => {
+  if (!useSupabase()) return res.status(400).json({ error: 'Supabase is required for live NSC upload' });
+  try {
+    const out = await nscImport.createUpload(req.user, {
+      filename: req.body.filename,
+      reportDate: req.body.report_date,
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Could not start upload' });
+  }
+});
+
+app.post('/api/nsc/import/parse', requireAuth, requirePerm('nsc', 'upload'), async (req, res) => {
+  req.setTimeout(180000);
+  res.setTimeout(180000);
+  try {
+    const job = await nscImport.parseJob(String(req.body.job_id || ''), droCccList());
+    res.json({ ok: true, job, preview: job.preview, parse_id: job.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Failed to parse NSC workbook' });
+  }
+});
+
+app.post('/api/nsc/import/tick', requireAuth, requirePerm('nsc', 'upload'), async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  try {
+    const job = await nscImport.tickJob(String(req.body.job_id || ''));
+    res.json({ ok: true, job });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Import tick failed' });
+  }
+});
+
 app.post('/api/nsc/parse', requireAuth, requirePerm('nsc', 'upload'), nscUpload.single('file'), (req, res) => {
   req.setTimeout(180000);
   res.setTimeout(180000);
@@ -1634,19 +2105,51 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
         const work_id = String(raw.work_id || raw.WorkID || raw['Work ID'] || '').trim();
         if (!work_id) return null;
         const ccc_code = String(raw.ccc_code || raw.CCC || '').trim();
+        const categoryName = String(raw.category_name || raw.Category || raw.Head || '').trim();
+        const cats = techWorks.categoriesSorted();
+        const cat =
+          cats.find((c) => String(c.name).toLowerCase() === categoryName.toLowerCase()) ||
+          cats.find((c) => String(c.id) === String(raw.category_id || '')) ||
+          null;
+        const pos = techWorks.parsePos(raw.pos);
+        const agency = String(raw.agency_name || raw.vendor_name || raw.Vendor || '').trim();
+        if (!pos.length && agency) pos.push({ po_no: String(raw.po_no || '').trim(), po_date: techWorks.isoDate(raw.po_date), agency_name: agency });
+        const description = String(raw.description || raw.title || raw.Title || work_id).trim();
         return {
           work_id,
-          title: raw.title || raw.Title || work_id,
+          title: description,
+          description,
+          category_id: cat?.id || null,
+          category_name: cat?.name || categoryName,
+          parameter_unit: cat?.parameter_unit || String(raw.parameter_unit || ''),
+          related_ss_name: String(raw.related_ss_name || raw.ss_name || raw['SS Name'] || '').trim(),
+          existing_parameter: techWorks.numOrNull(raw.existing_parameter || raw.Existing),
+          proposed_parameter: techWorks.numOrNull(raw.proposed_parameter || raw.Proposed),
+          proposal_enote_no: String(raw.proposal_enote_no || raw.enote_no || '').trim(),
+          proposal_enote_date: techWorks.isoDate(raw.proposal_enote_date || raw.enote_date),
+          taa_no: String(raw.taa_no || raw['TAA No'] || '').trim(),
+          taa_date: techWorks.isoDate(raw.taa_date || raw['TAA Date']),
+          scheme_value: techWorks.moneyOrNull(raw.scheme_value || raw['Value of Scheme'] || raw.scheme_value_rs),
+          billing_progress: techWorks.moneyOrNull(raw.billing_progress || raw['Billing Progress'] || raw.billing_progress_rs),
+          major_material: String(raw.major_material || '').trim(),
+          pos,
+          work_start_date: techWorks.isoDate(raw.work_start_date),
+          material_issue_status: techWorks.MATERIAL.has(String(raw.material_issue_status || ''))
+            ? String(raw.material_issue_status)
+            : 'not_issued',
+          work_progress: techWorks.clampProgress(raw.work_progress),
           ccc_code,
           division_code: raw.division_code || resolveDivision(ccc_code) || String(raw.Division || ''),
           region_code: '341',
           priority: raw.priority || 'medium',
-          status: String(raw.status || 'open').toLowerCase(),
-          vendor_name: raw.vendor_name || raw.Vendor || '',
+          status: techWorks.normalizeStatus(raw.status),
+          vendor_name: pos[0]?.agency_name || agency,
           billing_status: String(raw.billing_status || 'pending').toLowerCase(),
           target_date: raw.target_date || null,
           completed_on: raw.completed_on || null,
           remarks: raw.remarks || '',
+          followups: [],
+          followup_users: [],
           batch_id: batch.id,
           updated_at: new Date().toISOString(),
         };
@@ -1864,7 +2367,23 @@ app.delete('/api/users/:username', requireAuth, requireAdmin, (req, res) => {
 });
 
 // ——— Patch status helpers (edit permission) ———
-app.patch('/api/nsc/:application_no', requireAuth, requirePerm('nsc', 'edit'), (req, res) => {
+app.patch('/api/nsc/:application_no', requireAuth, requirePerm('nsc', 'edit'), async (req, res) => {
+  try {
+    if (useSupabase()) {
+      const found = await sb.querySupabase(
+        `nsc_cases?application_no=eq.${encodeURIComponent(req.params.application_no)}&select=application_no,ccc_code,division_code,status,remarks&limit=1`
+      );
+      const row = Array.isArray(found) ? found[0] : null;
+      if (!row || !scopeFilter(req.user, row)) return res.status(404).json({ error: 'Not found' });
+      const patch = { updated_at: new Date().toISOString() };
+      if (req.body.status) patch.status = req.body.status;
+      if (req.body.remarks !== undefined) patch.remarks = req.body.remarks;
+      await sb.updateByFilter('nsc_cases', `application_no=eq.${encodeURIComponent(req.params.application_no)}`, patch);
+      return res.json({ row: { ...row, ...patch } });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'Update failed' });
+  }
   const rows = readCollection('nsc_cases', []);
   const row = rows.find((r) => r.application_no === req.params.application_no);
   if (!row || !scopeFilter(req.user, row)) return res.status(404).json({ error: 'Not found' });
@@ -2100,16 +2619,90 @@ app.patch('/api/grievances/:id', requireAuth, requirePerm('grievance', 'view'), 
   res.json({ row });
 });
 
-app.patch('/api/tech-works/:work_id', requireAuth, requirePerm('tech_works', 'edit'), (req, res) => {
+app.patch('/api/tech-works/:work_id', requireAuth, requirePerm('tech_works', 'view'), (req, res) => {
   const rows = readCollection('tech_works', []);
-  const row = rows.find((r) => r.work_id === req.params.work_id);
-  if (!row || !scopeFilter(req.user, row)) return res.status(404).json({ error: 'Not found' });
-  ['status', 'billing_status', 'remarks', 'completed_on'].forEach((k) => {
-    if (req.body[k] !== undefined) row[k] = req.body[k];
-  });
-  row.updated_at = new Date().toISOString();
+  const row = rows.find(
+    (r) => String(r.work_id) === String(req.params.work_id) || String(r.id) === String(req.params.work_id)
+  );
+  if (!row || !techWorks.inScope(req.user, row)) return res.status(404).json({ error: 'Not found' });
+  const offices = readCollection('offices', []);
+  const planKeys = [
+    'category_id',
+    'division_code',
+    'description',
+    'title',
+    'related_ss_name',
+    'related_ss_id',
+    'existing_parameter',
+    'proposed_parameter',
+    'parameter_unit',
+    'proposal_enote_no',
+    'proposal_enote_date',
+    'taa_no',
+    'taa_date',
+    'scheme_value',
+    'major_material',
+    'pos',
+    'target_date',
+  ];
+  const execKeys = ['material_issue_status', 'work_progress', 'billing_progress', 'remarks', 'status', 'work_start_date', 'completed_on'];
+  const wantsPlan = planKeys.some((k) => req.body[k] !== undefined);
+  const wantsExec = execKeys.some((k) => req.body[k] !== undefined);
+  const wantsFollowup = req.body.followup !== undefined;
+  const wantsAssign = req.body.followup_users !== undefined;
+
+  if (wantsAssign && !techWorks.canAssign(req.user)) return res.status(403).json({ error: 'Not authorized to assign users' });
+  if (wantsPlan && !techWorks.canPlan(req.user, row)) return res.status(403).json({ error: 'No edit permission for tech works' });
+  if ((wantsExec || wantsFollowup) && !techWorks.canUpdate(req.user, row)) {
+    return res.status(403).json({ error: 'Not authorized to update this work' });
+  }
+
+  if (wantsPlan) {
+    const planned = applyTechPlan(row, req.body, offices);
+    if (planned.error) return res.status(400).json({ error: planned.error });
+  }
+  if (wantsAssign) {
+    const assigned = techWorks.parseFollowupUsers(req.body.followup_users);
+    if (assigned.error) return res.status(400).json({ error: assigned.error });
+    row.followup_users = assigned.names;
+  }
+  if (req.body.material_issue_status !== undefined) {
+    const mat = String(req.body.material_issue_status || '');
+    if (!techWorks.MATERIAL.has(mat)) return res.status(400).json({ error: 'Invalid material issue status' });
+    row.material_issue_status = mat;
+    row.billing_status = mat === 'issued' ? 'submitted' : 'pending';
+  }
+  if (req.body.work_progress !== undefined) row.work_progress = techWorks.clampProgress(req.body.work_progress);
+  if (req.body.billing_progress !== undefined) row.billing_progress = techWorks.moneyOrNull(req.body.billing_progress);
+  if (req.body.work_start_date !== undefined) row.work_start_date = techWorks.isoDate(req.body.work_start_date);
+  if (req.body.remarks !== undefined) {
+    row.remarks = String(req.body.remarks || '').replace(/[<>]/g, '').trim().slice(0, 800);
+  }
+  const prevStatus = techWorks.normalizeStatus(row.status);
+  if (req.body.status !== undefined) {
+    const status = techWorks.normalizeStatus(req.body.status);
+    if (!techWorks.STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status' });
+    row.status = status;
+    if (status === 'completed' && prevStatus !== 'completed') {
+      row.completed_on = techWorks.isoDate(req.body.completed_on) || new Date().toISOString().slice(0, 10);
+      if (row.work_progress < 100) row.work_progress = 100;
+    }
+    if (status !== 'completed') row.completed_on = req.body.completed_on !== undefined ? techWorks.isoDate(req.body.completed_on) || null : null;
+  }
+  const note = String(req.body?.followup || '').trim().slice(0, 400);
+  if (note && (note.length < 3 || /[<>]/.test(note))) {
+    return res.status(400).json({ error: 'Invalid follow-up' });
+  }
+  const now = new Date().toISOString();
+  if (note) {
+    if (!Array.isArray(row.followups)) row.followups = [];
+    row.followups.unshift({ at: now, by: req.user.username, remark: note });
+    row.last_followup_on = now;
+    row.last_followup_by = req.user.username;
+  }
+  row.updated_at = now;
   writeCollection('tech_works', rows);
-  res.json({ row });
+  res.json({ row: techWorkPayload(row, req.user) });
 });
 
 app.patch('/api/bulk/:consumer_id', requireAuth, requirePerm('bulk', 'edit'), (req, res) => {

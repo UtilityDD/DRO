@@ -96,9 +96,13 @@ const GUIDE: Record<string, Guide> = {
     donts: ['Don’t duplicate docket numbers with conflicting data.'],
   },
   'tech-works': {
-    title: 'Tech Works — Do & Don’t',
-    dos: ['Include work_id and division_code.'],
-    donts: ['Don’t remove required status fields.'],
+    title: 'Priority Works — Do & Don’t',
+    dos: [
+      'One row per work. Use work_id as the unique key.',
+      'Put the work head in category_name (must match an existing category).',
+      'Use MVA for SS works and CKT KM for line / feeder works.',
+    ],
+    donts: ['Don’t split one TAA across conflicting work_id rows.', 'Don’t leave division_code blank.'],
   },
   'spot-billing': {
     title: 'Spot Billing — Do & Don’t',
@@ -121,7 +125,29 @@ const TEMPLATES: Record<string, string[]> = {
   nsc: ['application_no', 'consumer_name', 'ccc_code', 'status', 'delay_days', 'category'],
   disco: ['consumer_id', 'consumer_name', 'ccc_code', 'disco_date', 'amount_due', 'status'],
   grievance: ['docket_no', 'consumer_name', 'ccc_code', 'category', 'aging_days', 'status'],
-  'tech-works': ['work_id', 'title', 'division_code', 'vendor_name', 'billing_status', 'status'],
+  'tech-works': [
+    'work_id',
+    'category_name',
+    'division_code',
+    'related_ss_name',
+    'description',
+    'existing_parameter',
+    'proposed_parameter',
+    'proposal_enote_no',
+    'proposal_enote_date',
+    'taa_no',
+    'taa_date',
+    'scheme_value',
+    'billing_progress',
+    'major_material',
+    'po_no',
+    'po_date',
+    'agency_name',
+    'work_start_date',
+    'material_issue_status',
+    'work_progress',
+    'status',
+  ],
   'spot-billing': ['ccc_code', 'consumer_class', 'target_count', 'billed_count', 'period_label'],
   consumers: ['consumer_id', 'name', 'ccc_code', 'consumer_class', 'status', 'meter_no'],
   bulk: ['consumer_id', 'name', 'division_code', 'contract_demand', 'voltage_level'],
@@ -299,6 +325,7 @@ export function UploadPage() {
   const [storeMode, setStoreMode] = useState<'supabase' | 'local'>('local');
   const [nscReportDate, setNscReportDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [nscParseId, setNscParseId] = useState('');
+  const [nscCloudJob, setNscCloudJob] = useState('');
   const [nscPreview, setNscPreview] = useState<{
     filename: string;
     report_date: string;
@@ -462,10 +489,32 @@ export function UploadPage() {
     setError('');
     setMessage('');
     setNscParseId('');
+    setNscCloudJob('');
     setNscPreview(null);
     setBusy(true);
-    setMessage('Parsing workbook… this can take a minute for large SAP dumps.');
     try {
+      if (storeMode === 'supabase') {
+        setMessage('Uploading workbook to storage…');
+        const signed = await api.nscUploadUrl(file.name, nscReportDate);
+        const putHeaders: Record<string, string> = { 'Content-Type': 'application/octet-stream', 'x-upsert': 'true' };
+        if (signed.token) putHeaders.Authorization = `Bearer ${signed.token}`;
+        const put = await fetch(signed.url, { method: 'PUT', body: file, headers: putHeaders });
+        if (!put.ok) throw new Error(`Storage upload failed (${put.status})`);
+        setMessage('Parsing workbook… this can take a minute for large SAP dumps.');
+        const parsed = await api.nscImportParse(signed.job_id);
+        setNscCloudJob(signed.job_id);
+        setNscParseId(parsed.parse_id);
+        const preview = parsed.preview as typeof nscPreview;
+        setNscPreview(preview);
+        const q = (preview?.by_queue || {}) as Record<string, number>;
+        setMessage(
+          `${Number(preview?.total || 0).toLocaleString('en-IN')} applications · pending ${q.pending || 0} · withheld ${q.withheld || 0}${
+            preview?.remapped ? ' · remapped onto DRO 21 CCCs' : ''
+          } · click Save to write in batches`
+        );
+        return;
+      }
+      setMessage('Parsing workbook… this can take a minute for large SAP dumps.');
       const parsed = await api.nscParse(file, nscReportDate);
       setNscParseId(parsed.parse_id);
       setNscPreview(parsed.preview);
@@ -487,16 +536,33 @@ export function UploadPage() {
     setBusy(true);
     setError('');
     try {
-      const res = await api.nscCommit(nscParseId);
-      const host = res.cloud?.host ? ` (${res.cloud.host})` : '';
-      if (res.cloud?.persisted === false) {
-        setMessage(`Saved ${res.upserted.toLocaleString('en-IN')} rows locally`);
-        setError(res.cloud.error ? `Supabase upload failed: ${res.cloud.error}` : 'Supabase upload failed — data kept locally.');
+      if (nscCloudJob) {
+        let upserted = 0;
+        let total = nscPreview?.total || 0;
+        for (;;) {
+          const r = await api.nscImportTick(nscCloudJob);
+          upserted = r.job.upserted || 0;
+          total = r.job.total || total;
+          setMessage(`Saving ${upserted.toLocaleString('en-IN')} / ${total.toLocaleString('en-IN')}…`);
+          if (r.job.status === 'done') break;
+          if (r.job.error) throw new Error(r.job.error);
+        }
+        setMessage(`Saved ${upserted.toLocaleString('en-IN')} pending NSC rows${cloudHost ? ` (${cloudHost})` : ''}`);
+        setNscParseId('');
+        setNscCloudJob('');
+        setNscPreview(null);
       } else {
-        setMessage(`Saved ${res.upserted.toLocaleString('en-IN')} pending NSC rows${host}`);
+        const res = await api.nscCommit(nscParseId);
+        const host = res.cloud?.host ? ` (${res.cloud.host})` : '';
+        if (res.cloud?.persisted === false) {
+          setMessage(`Saved ${res.upserted.toLocaleString('en-IN')} rows locally`);
+          setError(res.cloud.error ? `Supabase upload failed: ${res.cloud.error}` : 'Supabase upload failed — data kept locally.');
+        } else {
+          setMessage(`Saved ${res.upserted.toLocaleString('en-IN')} pending NSC rows${host}`);
+        }
+        setNscParseId('');
+        setNscPreview(null);
       }
-      setNscParseId('');
-      setNscPreview(null);
       try {
         const b = await api.batches();
         setBatches(b.rows);

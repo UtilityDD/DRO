@@ -3,7 +3,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ComposedChart,
+  LabelList,
   Legend,
   Line,
   ResponsiveContainer,
@@ -18,13 +20,14 @@ import {
   NSC_CUMULATIVE,
   NSC_SLABS,
   SLAB_COLORS,
-  asNscRow,
+  buildWithheldTimeline,
   customCutFill,
   encodeCutsParam,
-  daysOf,
   fmtDay,
   fmtInt,
   loadCustomDelayCuts,
+  monthOfIso,
+  yearOfIso,
   makeCustomCut,
   mergeDelayCuts,
   saveCustomDelayCuts,
@@ -36,13 +39,29 @@ import {
   poleLabel,
   procedureLabel,
 } from '../lib/nsc';
+import { buildNscDesk, overlayNscOffices, type NscChartRow, type NscDeskQuery } from '../lib/nscDesk';
+import { nscCacheGetQueue, nscQueueMemGet } from '../lib/nscCache';
+import { ensureNscQueue, prefetchNscQueue, warmNscStamp, type NscQueueSnap } from '../lib/nscQueue';
+import { usePageHeading } from '../lib/pageHeading';
+import {
+  countClasses,
+  countPoles,
+  countProcs,
+  facetRows,
+  stackOffices,
+  summarizeBy,
+  summarizeOffices,
+  summarizeRanges,
+  sumFooter,
+  type NscSumRow,
+  type OfficeGrain,
+} from '../lib/nscOverview';
 
 const PAGE = 80;
-const CHART_H = 300;
-const TIMELINE_H = 320;
+const CHART_H = 320;
+const DELAY_H = 230;
+const TIMELINE_H = 360;
 const DIV_PALETTE = ['#1565c0', '#039be5', '#00838f', '#7c4dff', '#ef6c00', '#c62828'];
-const HOT_IDS = new Set(['m1_3', 'm3_6', 'm6_12', 'y1']);
-
 const TOOLTIP_STYLE = {
   background: '#ffffff',
   border: '1px solid rgba(30,64,120,0.12)',
@@ -51,8 +70,11 @@ const TOOLTIP_STYLE = {
 };
 
 type NscDesk = Awaited<ReturnType<typeof api.nscDesk>>;
-type DeskView = 'bottleneck' | 'poles' | 'procedure' | 'delay' | 'offices' | 'history' | 'cases';
+type DeskView = 'overview' | 'table';
+type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'time' | 'reason' | 'cases';
 type DelayBand = 'exclusive' | 'cumulative';
+type TimelineGrain = 'month' | 'year';
+type TimelineSeries = 'office' | 'total';
 
 function qsOf(p: Record<string, string | number | undefined>) {
   const u = new URLSearchParams();
@@ -64,8 +86,13 @@ function qsOf(p: Record<string, string | number | undefined>) {
   return s ? `?${s}` : '';
 }
 
-function num(v: unknown) {
-  return Number(v || 0);
+function rowDays(row: { quotation_age_days: number | null; processing_days: number | null }, clock: NscClock) {
+  return clock === 'processing' ? row.processing_days : row.quotation_age_days;
+}
+
+function workKind(row: { pole_count: number | null }) {
+  if (row.pole_count == null) return 'unknown';
+  return Number(row.pole_count) > 0 ? 'pole' : 'non_pole';
 }
 
 function ageTone(days: number | null) {
@@ -76,18 +103,268 @@ function ageTone(days: number | null) {
   return '';
 }
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function timePhrase(key: string) {
+  if (!key) return '';
+  if (key.length === 4) return key;
+  const month = Number(key.slice(5, 7));
+  const year = key.slice(0, 4);
+  if (month >= 1 && month <= 12) return `${MONTH_NAMES[month - 1]} ${year}`;
+  return key;
+}
+
+const TABLE_GRAINS_PENDING: { id: TableGrain; label: string }[] = [
+  { id: 'division', label: 'Division' },
+  { id: 'ccc', label: 'CCC' },
+  { id: 'age', label: 'Age' },
+  { id: 'class', label: 'Class' },
+  { id: 'work', label: 'Work' },
+  { id: 'cases', label: 'Cases' },
+];
+
+const TABLE_GRAINS_HELD: { id: TableGrain; label: string }[] = [
+  { id: 'division', label: 'Division' },
+  { id: 'ccc', label: 'CCC' },
+  { id: 'time', label: 'Year' },
+  { id: 'class', label: 'Class' },
+  { id: 'work', label: 'Work' },
+  { id: 'reason', label: 'Reason' },
+  { id: 'cases', label: 'Cases' },
+];
+
+function NscSumTable({
+  label,
+  rows,
+  total,
+  selected,
+  pending,
+  keepEmpty,
+  showTotal = true,
+  customKeys,
+  onPick,
+}: {
+  label: string;
+  rows: NscSumRow[];
+  total: number;
+  selected?: string;
+  pending?: boolean;
+  keepEmpty?: boolean;
+  showTotal?: boolean;
+  customKeys?: Set<string>;
+  onPick: (row: NscSumRow) => void;
+}) {
+  const foot = sumFooter(customKeys ? rows.filter((r) => !customKeys.has(r.key)) : rows, total);
+  const show = keepEmpty ? rows : rows.filter((r) => r.count > 0);
+  return (
+    <div className="table-wrap nsc-table-wrap">
+      <table className="nsc-detail nsc-summary">
+        <thead>
+          <tr>
+            <th>{label}</th>
+            <th className="num">Cases</th>
+            <th className="num">%</th>
+            <th className="num">Non-pole</th>
+            <th className="num">Pole</th>
+            <th className="num">Ind</th>
+            <th className="num">Proc-B</th>
+            {pending ? <th className="num">&gt;30d</th> : null}
+            <th className="num">Avg d</th>
+          </tr>
+        </thead>
+        <tbody>
+          {show.map((r) => (
+            <tr
+              key={r.key}
+              className={selected === r.key ? 'on' : ''}
+              onClick={() => onPick(r)}
+            >
+              <td>
+                {r.label}
+                {customKeys?.has(r.key) ? <span className="nsc-sum-tag">custom</span> : null}
+              </td>
+              <td className="num">{fmtInt(r.count)}</td>
+              <td className="num">{r.pct}%</td>
+              <td className="num">{fmtInt(r.non_pole)}</td>
+              <td className="num">{fmtInt(r.pole)}</td>
+              <td className="num">{fmtInt(r.industrial)}</td>
+              <td className="num">{fmtInt(r.proc_b)}</td>
+              {pending ? <td className="num">{fmtInt(r.hot)}</td> : null}
+              <td className="num">{r.avg_days ?? '—'}</td>
+            </tr>
+          ))}
+          {!show.length && (
+            <tr>
+              <td colSpan={pending ? 9 : 8} className="muted">
+                None in this filter
+              </td>
+            </tr>
+          )}
+        </tbody>
+        {showTotal && show.length > 1 ? (
+          <tfoot>
+            <tr>
+              <td>Total</td>
+              <td className="num">{fmtInt(foot.count)}</td>
+              <td className="num">100%</td>
+              <td className="num">{fmtInt(foot.non_pole)}</td>
+              <td className="num">{fmtInt(foot.pole)}</td>
+              <td className="num">{fmtInt(foot.industrial)}</td>
+              <td className="num">{fmtInt(foot.proc_b)}</td>
+              {pending ? <td className="num">{fmtInt(foot.hot)}</td> : null}
+              <td className="num">{foot.avg_days ?? '—'}</td>
+            </tr>
+          </tfoot>
+        ) : null}
+      </table>
+    </div>
+  );
+}
+
+function useBoxWidth<T extends HTMLElement>() {
+  const [node, setNode] = useState<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!node) return;
+    setWidth(node.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setWidth(e.contentRect.width);
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [node]);
+  return { ref: setNode, width };
+}
+
+function useBoxHeight<T extends HTMLElement>() {
+  const [node, setNode] = useState<T | null>(null);
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (!node) return;
+    setHeight(node.getBoundingClientRect().height);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setHeight(node.getBoundingClientRect().height));
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [node]);
+  return { ref: setNode, height };
+}
+
+function usePresentMode() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const el = document.querySelector('.app-shell');
+    if (!el) return;
+    const read = () => setOn(el.getAttribute('data-present') === 'on');
+    read();
+    const mo = new MutationObserver(read);
+    mo.observe(el, { attributes: true, attributeFilter: ['data-present'] });
+    return () => mo.disconnect();
+  }, []);
+  return on;
+}
+
+function chartFont(width: number, present: boolean) {
+  if (!width) return present ? 15 : 11;
+  if (present) return Math.round(Math.min(21, Math.max(14, width / 46)));
+  return Math.round(Math.min(15, Math.max(10, width / 62)));
+}
+
+function maxDigitsOf(values: number[]) {
+  let max = 1;
+  for (const v of values) max = Math.max(max, fmtInt(Math.round(v || 0)).length);
+  return max;
+}
+
+/** Squeeze an office name into `max` characters: initials first, then a clean truncation. */
+function shortName(name: string, max: number) {
+  const clean = name.replace(/\s+/g, ' ').trim();
+  if (clean.length <= max) return clean;
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length > 1) {
+    const initials = words.map((w) => w[0]).join('').toUpperCase();
+    if (initials.length >= 2 && initials.length <= max) return initials;
+  }
+  return clean.slice(0, max);
+}
+
+/** Reserve room for the widest tick label so present-mode fonts are never clipped. */
+function axisWidth(font: number, values: number[]) {
+  const top = values.reduce((m, v) => Math.max(m, Math.round(v || 0)), 0);
+  const chars = maxDigitsOf([top, top * 1.15]);
+  return Math.max(40, Math.round(chars * font * 0.66) + 16);
+}
+
+type ValueLabels = {
+  show: boolean;
+  rotate: boolean;
+  font: number;
+  top: number;
+  offset: number;
+};
+
+function planLabels(width: number, values: number[], present: boolean): ValueLabels {
+  const font = chartFont(width, present);
+  const count = values.length;
+  const digits = maxDigitsOf(values);
+  const text = digits * font * 0.62;
+  const off = { show: false, rotate: false, font, top: 8, offset: 6 };
+  if (!width || !count) return off;
+  const slot = width / count;
+  if (slot >= text + 10) return { show: true, rotate: false, font, top: font + 12, offset: 6 };
+  if (slot >= font + 3) return { show: true, rotate: true, font, top: text + 16, offset: text / 2 + 6 };
+  return off;
+}
+
+function labelProps(plan: ValueLabels) {
+  return {
+    position: 'top' as const,
+    fill: '#334155',
+    fontSize: plan.font,
+    fontWeight: 600,
+    offset: plan.offset,
+    angle: plan.rotate ? -90 : 0,
+    formatter: (v: unknown) => {
+      const n = Number(v ?? 0);
+      return n ? fmtInt(n) : '';
+    },
+  };
+}
+
+function NscSkeleton() {
+  return (
+    <div className="nsc-skel" aria-busy="true" aria-live="polite">
+      <div className="nsc-skel-kpis">
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="nsc-skel-kpi nsc-skel-pulse" />
+        ))}
+      </div>
+      <div className="nsc-skel-pills">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="nsc-skel-pill nsc-skel-pulse" />
+        ))}
+      </div>
+      <div className="nsc-skel-chart nsc-skel-pulse" />
+    </div>
+  );
+}
+
 export function NscDeskPage() {
   const { user } = useAuth();
   const canUpload = canUploadModule(user, 'nsc');
-  const [desk, setDesk] = useState<NscDesk | null>(null);
-  const [rows, setRows] = useState<NscRow[]>([]);
-  const [total, setTotal] = useState(0);
+  const present = usePresentMode();
+  const [queueSnap, setQueueSnap] = useState<NscQueueSnap | null>(() => nscQueueMemGet('pending'));
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !nscQueueMemGet('pending'));
+  const [syncing, setSyncing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [queue, setQueue] = useState<NscQueue>('pending');
-  const [clock, setClock] = useState<NscClock>('quotation');
-  const [view, setView] = useState<DeskView>('bottleneck');
+  const clock: NscClock = 'quotation';
+  const [view, setView] = useState<DeskView>('overview');
+  const [tableGrain, setTableGrain] = useState<TableGrain>('division');
+  const [officeGrain, setOfficeGrain] = useState<OfficeGrain>('division');
+  const [officeSlabs, setOfficeSlabs] = useState(false);
   const [division, setDivision] = useState('');
   const [ccc, setCcc] = useState('');
   const [klass, setKlass] = useState('');
@@ -108,8 +385,11 @@ export function NscDeskPage() {
   const [qDebounced, setQDebounced] = useState('');
   const [page, setPage] = useState(0);
   const [timeKey, setTimeKey] = useState('');
+  const [reasonPick, setReasonPick] = useState('');
+  const [tlGrain, setTlGrain] = useState<TimelineGrain>('year');
+  const [tlSeries, setTlSeries] = useState<TimelineSeries>('office');
+  const [tlRunning, setTlRunning] = useState(true);
   const deskReq = useRef(0);
-  const rowReq = useRef(0);
   const cutStoreKey = `dro.nsc.delayCuts.${user?.username || 'local'}`;
 
   useEffect(() => {
@@ -123,102 +403,285 @@ export function NscDeskPage() {
 
   const delayFilter = !slab && (delayMin !== '' || delayMax !== '');
   const cutsParam = encodeCutsParam(customCuts);
-  const filterQs = useMemo(
-    () =>
-      qsOf({
-        queue,
-        clock,
-        division,
-        ccc,
-        class: klass,
-        pole,
-        pole_min: poleMin,
-        pole_max: poleMax,
-        procedure,
-        slab: delayFilter ? '' : slab,
-        delay_min: delayFilter ? delayMin : '',
-        delay_max: delayFilter ? delayMax : '',
-        cuts: cutsParam,
-        time: timeKey,
-        q: qDebounced,
-      }),
+  const deskQuery = useMemo<NscDeskQuery>(
+    () => ({
+      queue,
+      clock,
+      division,
+      ccc,
+      class: klass,
+      pole,
+      pole_min: poleMin,
+      pole_max: poleMax,
+      procedure,
+      slab: delayFilter ? '' : slab,
+      delay_min: delayFilter ? delayMin : '',
+      delay_max: delayFilter ? delayMax : '',
+      cuts: cutsParam,
+      time: timeKey,
+      q: qDebounced,
+    }),
     [queue, clock, division, ccc, klass, pole, poleMin, poleMax, procedure, slab, delayFilter, delayMin, delayMax, cutsParam, timeKey, qDebounced]
   );
+  const filterQs = useMemo(() => qsOf(deskQuery as Record<string, string | number | undefined>), [deskQuery]);
+
+  const desk = useMemo<NscDesk | null>(() => {
+    if (!queueSnap) return null;
+    const built = buildNscDesk(queueSnap.rows, deskQuery);
+    built.pending = queueSnap.pending;
+    built.withheld = queueSnap.withheld;
+    built.report_date = queueSnap.report_date || built.report_date;
+    return overlayNscOffices(built, queueSnap, division);
+  }, [queueSnap, deskQuery, division]);
 
   useEffect(() => {
     setPage(0);
-  }, [filterQs]);
+  }, [filterQs, reasonPick]);
 
   useEffect(() => {
     if (queue !== 'withheld') {
       setTimeKey('');
-      if (view === 'history') setView('bottleneck');
+      setReasonPick('');
+      if (tableGrain === 'time' || tableGrain === 'reason') setTableGrain('division');
     }
-  }, [queue, view]);
+    if (view !== 'overview' && view !== 'table') setView('overview');
+  }, [queue, view, tableGrain]);
 
-  const loadDesk = async () => {
-    const id = ++deskReq.current;
-    setLoading(true);
-    setError('');
-    try {
-      const next = await api.nscDesk(filterQs);
-      if (id !== deskReq.current) return;
-      setDesk(next);
-    } catch (e) {
-      if (id !== deskReq.current) return;
-      setError(e instanceof Error ? e.message : 'Failed to load NSC');
-    } finally {
-      if (id === deskReq.current) setLoading(false);
+  const selectQueue = (next: NscQueue) => {
+    if (next === queue) {
+      setView('overview');
+      return;
+    }
+    setQueue(next);
+    setView('overview');
+    setTimeKey('');
+    if (next === 'withheld') {
+      setSlab('');
+      setCumId('');
+      setDelayMin('');
+      setDelayMax('');
+      setTlGrain('year');
     }
   };
 
-  const loadRows = async () => {
-    const id = ++rowReq.current;
+  const showHeldYears = () => {
+    setTimeKey('');
+    setTlGrain('year');
+  };
+
+  const selectHeldYear = (y: string) => {
+    if (!y) {
+      showHeldYears();
+      return;
+    }
+    if (timeKey.slice(0, 4) === y && tlGrain === 'month' && timeKey.length === 4) {
+      showHeldYears();
+      return;
+    }
+    setTimeKey(y);
+    setTlGrain('month');
+  };
+
+  const loadDesk = async (force = false) => {
+    const id = ++deskReq.current;
+    await warmNscStamp();
+    const cached = nscQueueMemGet(queue) || (await nscCacheGetQueue(queue));
+    if (id !== deskReq.current) return;
+    if (!force && cached) {
+      setQueueSnap(cached);
+      setLoading(false);
+      setSyncing(false);
+    } else if (cached) {
+      setQueueSnap(cached);
+      setLoading(false);
+      setSyncing(true);
+    } else {
+      setQueueSnap(null);
+      setLoading(true);
+    }
+    setError('');
     try {
-      const r = await api.nsc(`${filterQs}${filterQs ? '&' : '?'}limit=${PAGE}&offset=${page * PAGE}`);
-      if (id !== rowReq.current) return;
-      setRows((r.rows || []).map(asNscRow));
-      setTotal(r.total || 0);
+      const snap = await ensureNscQueue(queue, {
+        force,
+        onUpdate: (next) => {
+          if (id !== deskReq.current) return;
+          setQueueSnap(next);
+        },
+      });
+      if (id !== deskReq.current) return;
+      setQueueSnap(snap);
+      prefetchNscQueue(queue === 'pending' ? 'withheld' : 'pending');
     } catch (e) {
-      if (id !== rowReq.current) return;
-      if (!rows.length) setError(e instanceof Error ? e.message : 'Failed to load NSC');
+      if (id !== deskReq.current) return;
+      if (!cached) setError(e instanceof Error ? e.message : 'Failed to load NSC');
+    } finally {
+      if (id === deskReq.current) {
+        setLoading(false);
+        setSyncing(false);
+      }
     }
   };
 
   useEffect(() => {
     loadDesk();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterQs]);
+  }, [queue]);
 
-  useEffect(() => {
-    if (view !== 'cases') return;
-    loadRows();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterQs, page, view]);
-
+  const sourceRows = queueSnap?.rows || [];
   const divisions = desk?.divisions || [];
   const cccs = desk?.cccs || [];
-  const classes = desk?.classes || [];
+  const classOpts = desk?.classes || [];
   const timelineYears = desk?.years || [];
-  const byDivision = desk?.by_division || [];
-  const byCcc = desk?.by_ccc || [];
-  const slabOrder = new Map(NSC_SLABS.map((s, i) => [s.id, i]));
+  const reasons = desk?.reasons || [];
+
+  const kpiBase = useMemo(
+    () =>
+      facetRows(sourceRows, deskQuery, {
+        pole: '',
+        pole_min: '',
+        pole_max: '',
+        class: '',
+        procedure: '',
+      }),
+    [sourceRows, deskQuery]
+  );
+  const classFacet = useMemo(() => facetRows(sourceRows, deskQuery, { class: '' }), [sourceRows, deskQuery]);
+  const poleFacet = useMemo(
+    () => facetRows(sourceRows, deskQuery, { pole: '', pole_min: '', pole_max: '' }),
+    [sourceRows, deskQuery]
+  );
+  const kpiClasses = useMemo(() => countClasses(kpiBase), [kpiBase]);
+  const kpiPoles = useMemo(() => countPoles(kpiBase), [kpiBase]);
+  const procCounts = useMemo(() => countProcs(kpiBase), [kpiBase]);
+  const mixTotal = kpiBase.length;
+  const tableRows = useMemo(() => {
+    const rows = facetRows(sourceRows, deskQuery);
+    if (!reasonPick) return rows;
+    if (reasonPick === 'Not recorded') return rows.filter((r) => !String(r.withheld_reason || '').trim());
+    return rows.filter((r) => String(r.withheld_reason || '').trim() === reasonPick);
+  }, [sourceRows, deskQuery, reasonPick]);
+  const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE));
+  const tablePage = tableRows.slice(page * PAGE, page * PAGE + PAGE);
+  const tableCols = queue === 'withheld' ? 10 : 8;
+  const classRows = useMemo(() => countClasses(classFacet), [classFacet]);
+  const poleCounts = useMemo(() => countPoles(poleFacet), [poleFacet]);
+  // every known class keeps its row (at zero) so filters never reflow the panel
+  const classMix = useMemo(() => {
+    const counts = new Map(classRows.map((r) => [r.name, r.count]));
+    const names = [...classOpts];
+    for (const r of classRows) if (!names.includes(r.name)) names.push(r.name);
+    return names.map((name) => ({ name, count: counts.get(name) || 0 }));
+  }, [classRows, classOpts]);
+  const poleMix = useMemo(() => {
+    const rows = [
+      { id: 'non_pole', name: 'Non-pole', count: poleCounts.non_pole, fill: '#059669' },
+      { id: 'pole', name: 'Pole', count: poleCounts.pole, fill: '#ea580c' },
+    ];
+    if (kpiPoles.unknown || poleCounts.unknown) {
+      rows.push({ id: 'unknown', name: 'Not recorded', count: poleCounts.unknown, fill: '#94a3b8' });
+    }
+    return rows;
+  }, [poleCounts, kpiPoles.unknown]);
+  const officeFacet = useMemo(
+    () =>
+      facetRows(sourceRows, deskQuery, officeGrain === 'division' ? { division: '', ccc: '' } : { ccc: '' }),
+    [sourceRows, deskQuery, officeGrain]
+  );
+
+  const officeStacks = useMemo(() => stackOffices(officeFacet, officeGrain, clock), [officeFacet, officeGrain, clock]);
+
+  const timelineSource = useMemo(
+    () => facetRows(sourceRows, deskQuery, { time: '' }),
+    [sourceRows, deskQuery]
+  );
+  const ageFacet = useMemo(
+    () => facetRows(sourceRows, deskQuery, { slab: '', delay_min: '', delay_max: '' }),
+    [sourceRows, deskQuery]
+  );
+  const divisionFacet = useMemo(
+    () => facetRows(sourceRows, deskQuery, { division: '', ccc: '' }),
+    [sourceRows, deskQuery]
+  );
+  const cccFacet = useMemo(
+    () => facetRows(sourceRows, deskQuery, { ccc: '' }),
+    [sourceRows, deskQuery]
+  );
+  const reasonFacet = useMemo(() => facetRows(sourceRows, deskQuery), [sourceRows, deskQuery]);
+  const divisionSum = useMemo(() => summarizeOffices(divisionFacet, 'division', clock), [divisionFacet, clock]);
+  const cccSum = useMemo(() => summarizeOffices(cccFacet, 'ccc', clock), [cccFacet, clock]);
+  const bandCuts = useMemo(
+    () => customCuts.filter((c) => (band === 'exclusive' ? c.op === 'bt' : c.op !== 'bt')),
+    [customCuts, band]
+  );
+  const cutOp: DelayOp = band === 'exclusive' ? 'bt' : customOp === 'bt' ? 'gt' : customOp;
+  const customIds = useMemo(() => new Set(customCuts.map((c) => c.id)), [customCuts]);
+  const ageRanges = useMemo(
+    () => mergeDelayCuts(customCuts, band === 'exclusive').map((r) => ({ id: r.id, label: r.label, cut: r.cut })),
+    [customCuts, band]
+  );
+  const ageSum = useMemo(() => summarizeRanges(ageFacet, clock, ageRanges), [ageFacet, clock, ageRanges]);
+  const classSum = useMemo(
+    () =>
+      summarizeBy(classFacet, clock, (r) => {
+        const name = r.consumer_class || 'Others';
+        return { key: name, label: name };
+      }),
+    [classFacet, clock]
+  );
+  const workSum = useMemo(
+    () =>
+      summarizeBy(poleFacet, clock, (r) => {
+        const kind = r.pole_count == null ? 'unknown' : Number(r.pole_count) > 0 ? 'pole' : 'non_pole';
+        const label = kind === 'pole' ? 'Pole' : kind === 'non_pole' ? 'Non-pole' : 'Not recorded';
+        return { key: kind, label };
+      }),
+    [poleFacet, clock]
+  );
+  const timeSum = useMemo(() => {
+    const year = timeKey.slice(0, 4);
+    const showMonths = Boolean(year);
+    const src = showMonths
+      ? timelineSource.filter((r) => yearOfIso(r.withheld_on || r.collected_on) === year)
+      : timelineSource;
+    return summarizeBy(src, clock, (r) => {
+      const iso = r.withheld_on || r.collected_on;
+      if (showMonths) {
+        const key = monthOfIso(iso) || 'unknown';
+        return { key, label: timePhrase(key) || 'Unknown' };
+      }
+      const key = yearOfIso(iso) || 'unknown';
+      return { key, label: key };
+    }).sort((a, b) => a.key.localeCompare(b.key));
+  }, [timelineSource, clock, timeKey]);
+  const reasonSum = useMemo(
+    () =>
+      summarizeBy(reasonFacet, clock, (r) => {
+        const name = String(r.withheld_reason || '').trim() || 'Not recorded';
+        return { key: name, label: name };
+      }),
+    [reasonFacet, clock]
+  );
+  const heldTimeline = useMemo(() => {
+    if (queue !== 'withheld') return { points: [] as ReturnType<typeof buildWithheldTimeline>, divisions: [] as string[] };
+    const divs = [...new Set(timelineSource.map((r) => r.division_name || r.division_code).filter(Boolean))];
+    const yearZoom = tlGrain === 'month' && timeKey.length >= 4 ? timeKey.slice(0, 4) : '';
+    const stack = tlSeries === 'office';
+    const points = buildWithheldTimeline(timelineSource as unknown as NscRow[], {
+      grain: tlGrain,
+      year: yearZoom,
+      divisions: stack ? divs : [],
+    });
+    return { points, divisions: stack ? divs : [] };
+  }, [queue, timelineSource, tlGrain, tlSeries, timeKey]);
+  const timeline = heldTimeline.points;
+  const timelineDivisions = heldTimeline.divisions;
+  const tlStack = tlSeries === 'office' && timelineDivisions.length > 0;
+
+  const slabOrder = new Map<string, number>(NSC_SLABS.map((s, i) => [s.id, i]));
   const bySlab = (desk?.by_slab || [])
     .filter((s) => s.id !== 'unknown')
     .sort((a, b) => (slabOrder.get(a.id) ?? 99) - (slabOrder.get(b.id) ?? 99))
-    .map((s) => ({ ...s, fill: SLAB_COLORS[s.id] || '#94a3b8' }));
-  const reasons = desk?.reasons || [];
-  const timeline = desk?.timeline || [];
-  const timelineDivisions = desk?.timeline_divisions || [];
-  const reportDate = desk?.report_date || null;
-  const viewCount = desk?.view || 0;
-  const stuck30 = desk?.stuck_30 ?? bySlab.filter((s) => HOT_IDS.has(s.id)).reduce((s, r) => s + r.count, 0);
-  const stuck180 = desk?.stuck_180 ?? bySlab.filter((s) => s.id === 'm6_12' || s.id === 'y1').reduce((s, r) => s + r.count, 0);
-  const stuckPct = viewCount ? Math.round((1000 * stuck30) / viewCount) / 10 : 0;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE));
-  const worstCcc = byCcc[0];
-
-  const mixTotal = desk?.mix_total || bySlab.reduce((s, r) => s + r.count, 0);
+    .map((s) => ({ ...s, fill: SLAB_COLORS[String(s.id)] || '#94a3b8' }));
   const countById = useMemo(() => {
     const m = new Map<string, number>();
     for (const s of bySlab) m.set(s.id, s.count);
@@ -244,11 +707,11 @@ export function NscDeskPage() {
 
   const switchBand = (next: DelayBand) => {
     setBand(next);
+    setCustomOp((prev) => (next === 'exclusive' ? 'bt' : prev === 'bt' ? 'gt' : prev));
     setSlab('');
     setCumId('');
     setDelayMin('');
     setDelayMax('');
-    if (next === 'cumulative' && (view === 'bottleneck' || view === 'delay')) setView('delay');
   };
 
   const applyCut = (cut: DelayCut) => {
@@ -279,24 +742,21 @@ export function NscDeskPage() {
   };
 
   const addCustomRange = () => {
-    const cut = makeCustomCut(customOp, customA, customOp === 'bt' ? customB : undefined);
+    const cut = makeCustomCut(cutOp, customA, cutOp === 'bt' ? customB : undefined);
     if (!cut) return;
     const builtIn = NSC_CUMULATIVE.find((c) => c.op === cut.op && c.days === cut.days && cut.op !== 'bt');
     if (builtIn) {
       applyCut(builtIn);
-      setView('delay');
       return;
     }
     const existing = customCuts.find((c) => c.id === cut.id);
     if (existing) {
       applyCut(existing);
-      setView('delay');
       return;
     }
     if (customCuts.length >= 12) return;
     persistCuts([...customCuts, cut]);
     applyCut(cut);
-    setView('delay');
   };
 
   const removeCustomRange = (id: string) => {
@@ -309,6 +769,14 @@ export function NscDeskPage() {
   };
 
   const selectMixRow = (row: (typeof mixRows)[number]) => {
+    const on = row.cut ? cumId === row.id : slab === row.id;
+    if (on) {
+      setSlab('');
+      setCumId('');
+      setDelayMin('');
+      setDelayMax('');
+      return;
+    }
     if (row.cut) {
       applyCut(row.cut);
       return;
@@ -316,98 +784,87 @@ export function NscDeskPage() {
     setCumId('');
     setDelayMin('');
     setDelayMax('');
-    setSlab((prev) => (prev === row.id ? '' : row.id));
+    setSlab(row.id);
   };
 
   const delayActive = delayMin !== '' || delayMax !== '' || !!slab;
-  const appliedCut =
-    mixRows.find((r) => r.id === cumId)?.cut ||
-    NSC_CUMULATIVE.find((c) => c.id === cumId) ||
-    customCuts.find((c) => c.id === cumId);
-  const rangeLabel = appliedCut
-    ? appliedCut.label
-    : slab
-      ? NSC_SLABS.find((s) => s.id === slab)?.label || ''
-      : delayMin !== '' && delayMax !== ''
-        ? delayMin === 0
-          ? `≤${delayMax}d`
-          : `${delayMin}–${delayMax}d`
-        : delayMin !== ''
-          ? `>${Math.max(0, Number(delayMin) - 1)}d`
-          : delayMax !== ''
-            ? `≤${delayMax}d`
-            : '';
+  const officeSlabsAvailable = queue === 'pending' && band === 'exclusive' && !delayActive;
+  const officeStacked = officeSlabsAvailable && officeSlabs;
 
-  const poleMix = desk?.pole;
-  const byPoleBin = desk?.by_pole_bin || [];
-  const poleHint =
-    pole === 'non_pole'
-      ? 'Non-pole'
-      : pole === 'pole'
-        ? poleMin !== '' || poleMax !== ''
-          ? `${poleMin || 1}${poleMax !== '' ? `–${poleMax}` : '+'} poles`
-          : 'Pole'
-        : pole === 'unknown'
-          ? 'Not recorded'
-          : '';
-
-  const applyPoleBin = (b: { id: string; min?: number; max?: number | null }) => {
-    if (b.id === 'p0') {
-      setPoleMin('');
-      setPoleMax('');
-      setPole((prev) => (prev === 'non_pole' ? '' : 'non_pole'));
-      return;
-    }
-    const min = b.min ?? 1;
-    const max = b.max == null ? ('' as const) : b.max;
-    const same = pole === 'pole' && poleMin === min && poleMax === max;
-    if (same) {
-      setPole('');
-      setPoleMin('');
-      setPoleMax('');
-      return;
-    }
-    setPole('pole');
-    setPoleMin(min);
-    setPoleMax(max);
-  };
-
-  const openPoleCases = (kind: string) => {
-    setPole(kind);
+  const clearMixSlice = () => {
+    setPole('');
     setPoleMin('');
     setPoleMax('');
-    setView('cases');
+    setProcedure('');
+    setKlass('');
   };
 
-  const procMix = desk?.procedure;
-  const procHint = procedure === 'proc_b' ? 'Proc. B' : procedure === 'proc_a' ? 'Individual' : '';
-  const openProcCases = (id: string) => {
-    if (id === 'proc_b') {
-      setProcedure('');
-      setView('procedure');
+  const selectPoleSlice = (id: string) => {
+    const onlyThis = pole === id && !klass && !procedure && poleMin === '';
+    clearMixSlice();
+    if (!onlyThis) {
+      setPole(id);
+      setPoleMin('');
+      setPoleMax('');
+    }
+    setView('overview');
+  };
+
+  const selectClassSlice = (name: string) => {
+    const onlyThis = klass === name && !pole && !procedure;
+    clearMixSlice();
+    if (!onlyThis) setKlass(name);
+    setView('overview');
+  };
+
+  const selectProcSlice = (id: string) => {
+    const onlyThis = procedure === id && !pole && !klass;
+    clearMixSlice();
+    if (!onlyThis) setProcedure(id);
+    setView('overview');
+  };
+
+  const drillOffice = (code: string) => {
+    if (!code) return;
+    if (officeGrain === 'division') {
+      setDivision((prev) => (prev === code ? '' : code));
+      setCcc('');
       return;
     }
-    setProcedure(id);
-    setView('cases');
+    setCcc((prev) => (prev === code ? '' : code));
   };
 
-  const openCcc = (code?: string) => {
-    if (code) setCcc(code);
-    setView('cases');
-  };
+  const officePicked = officeGrain === 'ccc' ? ccc : division;
+  const dimBar = (on: boolean, anyOn: boolean) => (!anyOn || on ? 1 : 0.28);
 
-  const openDivision = (code?: string) => {
-    if (code) {
-      setDivision(code);
-      setCcc('');
-    }
-    setView('cases');
-  };
+  const delayBox = useBoxWidth<HTMLDivElement>();
+  const officeBox = useBoxWidth<HTMLDivElement>();
+  const timeBox = useBoxWidth<HTMLDivElement>();
+  const sideBox = useBoxHeight<HTMLDivElement>();
+  // outside present mode the office panel matches the side column so both bottoms sit on one line
+  const officePanelH = !present && sideBox.height > 0 ? Math.max(Math.round(sideBox.height), 300) : 0;
+  const delayPlan = planLabels(delayBox.width, mixRows.map((r) => r.count), present);
+  const officePlan = planLabels(officeBox.width, officeStacks.map((o) => o.total), present);
+  const timePlan = planLabels(timeBox.width, timeline.map((p) => Number(p.added || 0)), present);
+  const delayFont = delayPlan.font;
+  const officeFont = officePlan.font;
+  const timeFont = timePlan.font;
+  const delayAxisW = axisWidth(delayFont, mixRows.map((r) => r.count));
+  const officeAxisW = axisWidth(officeFont, officeStacks.map((o) => o.total));
+  const timeAxisW = axisWidth(timeFont, timeline.map((p) => Number(p.added || 0)));
+  const timeRunAxisW = axisWidth(timeFont, timeline.map((p) => Number(p.cumulative || 0)));
+  const officeTickChars = officeStacks.length && officeBox.width
+    ? Math.max(3, Math.floor(officeBox.width / officeStacks.length / (officeFont * 0.62)))
+    : 32;
 
   const onTimelineClick = (state: { activePayload?: { payload?: { key?: string } }[] }) => {
     const key = state?.activePayload?.[0]?.payload?.key;
     if (!key) return;
-    setTimeKey((prev) => (prev === key ? (key.length === 7 ? key.slice(0, 4) : '') : key));
+    if (tlGrain === 'year' || key.length === 4) {
+      selectHeldYear(key);
+      return;
+    }
+    setTimeKey((prev) => (prev === key ? key.slice(0, 4) : key));
   };
 
   const download = async () => {
@@ -422,791 +879,988 @@ export function NscDeskPage() {
     }
   };
 
-  const filteredHint = [
-    division && divisions.find((d) => d.code === division)?.name,
-    ccc && cccs.find((c) => c.code === ccc)?.name,
-    rangeLabel,
-    poleHint,
-    procHint,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const industrialCount = kpiClasses.find((c) => c.name.toLowerCase() === 'industrial')?.count || 0;
+  const commercialCount = kpiClasses.find((c) => c.name.toLowerCase() === 'commercial')?.count || 0;
+  const kpiAllOn = !pole && !procedure && !klass;
+
+  const clearFilters = () => {
+    setDivision('');
+    setCcc('');
+    setKlass('');
+    setPole('');
+    setPoleMin('');
+    setPoleMax('');
+    setProcedure('');
+    setSlab('');
+    setCumId('');
+    setDelayMin('');
+    setDelayMax('');
+    setTimeKey('');
+    setQ('');
+    setReasonPick('');
+    setOfficeGrain('division');
+    if (queue === 'withheld') setTlGrain('year');
+  };
+
+  const hasFilters = Boolean(division || ccc || klass || pole || procedure || delayActive || timeKey || qDebounced || reasonPick);
+  const divName = divisions.find((d) => d.code === division)?.name || division;
+  const cccName = cccs.find((c) => c.code === ccc)?.name || ccc;
+
+  const viewTitle = useMemo(() => {
+    const words = [queue === 'withheld' ? 'Withheld' : 'Pending'];
+    if (klass) words.push(klass);
+    if (pole === 'non_pole' || pole === 'pole') words.push(poleLabel(pole));
+    if (procedure === 'proc_b' || procedure === 'proc_a') words.push(procedureLabel(procedure));
+    words.push('NSC');
+    const bits = [words.join(' ')];
+    if (division) bits.push(`Div ${divName}`);
+    if (ccc) bits.push(`CCC ${cccName}`);
+    const when = timePhrase(timeKey);
+    if (when) bits.push(when);
+    return bits.join(' · ');
+  }, [queue, klass, pole, procedure, division, ccc, divName, cccName, timeKey]);
+
+  usePageHeading(viewTitle);
+
+  const openTable = (grain?: TableGrain) => {
+    setView('table');
+    if (grain) {
+      setTableGrain(grain);
+      return;
+    }
+    if (ccc) setTableGrain('cases');
+    else if (division) setTableGrain('ccc');
+    else setTableGrain('division');
+  };
+
+  const pickSummary = (grain: TableGrain, row: NscSumRow) => {
+    if (grain === 'division') {
+      setDivision(row.key);
+      setCcc('');
+      setOfficeGrain('ccc');
+      setTableGrain('ccc');
+      return;
+    }
+    if (grain === 'ccc') {
+      setCcc(row.key);
+      setTableGrain('cases');
+      return;
+    }
+    if (grain === 'age') {
+      const range = ageRanges.find((r) => r.id === row.key);
+      if (range?.cut) applyCut(range.cut);
+      else {
+        setCumId('');
+        setDelayMin('');
+        setDelayMax('');
+        setSlab(row.key);
+      }
+      setTableGrain('cases');
+      return;
+    }
+    if (grain === 'class') {
+      setKlass(row.key);
+      setTableGrain('cases');
+      return;
+    }
+    if (grain === 'work') {
+      setPole(row.key);
+      setPoleMin('');
+      setPoleMax('');
+      setTableGrain('cases');
+      return;
+    }
+    if (grain === 'time') {
+      if (row.key.length === 4) {
+        setTimeKey(row.key);
+        setTlGrain('month');
+        return;
+      }
+      setTimeKey(row.key);
+      setTableGrain('cases');
+      return;
+    }
+    setReasonPick(row.key);
+    setTableGrain('cases');
+  };
+
+  const grainTitle =
+    tableGrain === 'division'
+      ? 'Division'
+      : tableGrain === 'ccc'
+        ? 'CCC'
+        : tableGrain === 'age'
+          ? 'Age'
+          : tableGrain === 'class'
+            ? 'Class'
+            : tableGrain === 'work'
+              ? 'Work'
+              : tableGrain === 'time'
+                ? timeKey.length === 4
+                  ? 'Month'
+                  : 'Year'
+                  : tableGrain === 'reason'
+                  ? 'Reason'
+                  : 'Cases';
+  const summaryRows =
+    tableGrain === 'division'
+      ? divisionSum
+      : tableGrain === 'ccc'
+        ? cccSum
+        : tableGrain === 'age'
+          ? ageSum
+          : tableGrain === 'class'
+            ? classSum
+            : tableGrain === 'work'
+              ? workSum
+              : tableGrain === 'time'
+                ? timeSum
+                : tableGrain === 'reason'
+                  ? reasonSum
+                  : [];
+  const summarySelected =
+    tableGrain === 'division'
+      ? division
+      : tableGrain === 'ccc'
+        ? ccc
+        : tableGrain === 'age'
+          ? cumId || slab
+          : tableGrain === 'class'
+            ? klass
+            : tableGrain === 'work'
+              ? pole
+              : tableGrain === 'time'
+                ? timeKey
+                : tableGrain === 'reason'
+                  ? reasonPick
+                  : '';
+  const summaryTotal =
+    tableGrain === 'division'
+      ? divisionFacet.length
+      : tableGrain === 'ccc'
+        ? cccFacet.length
+        : tableGrain === 'age'
+          ? ageFacet.length
+          : tableGrain === 'class'
+            ? classFacet.length
+            : tableGrain === 'work'
+              ? poleFacet.length
+              : tableGrain === 'time'
+                ? timeSum.reduce((n, r) => n + r.count, 0)
+                : tableGrain === 'reason'
+                  ? reasonFacet.length
+                  : tableRows.length;
 
   return (
     <div className="stack nsc-desk">
-      <div className="panel nsc-head">
-        <div className="panel-head">
-          <div>
-            <h2 style={{ marginBottom: 0 }}>Pending NSC</h2>
-            <p className="muted tight">
-              {reportDate ? `As on ${fmtDay(reportDate)}` : 'No snapshot yet'}
-              {filteredHint ? ` · ${filteredHint}` : ''}
-              {loading ? ' · updating…' : ''}
-            </p>
-          </div>
-          <div className="nsc-head-actions">
-            <button type="button" className="btn secondary" onClick={() => { loadDesk(); if (view === 'cases') loadRows(); }} disabled={loading}>
-              Refresh
+      <header className="nsc-bar">
+        <div className="nsc-bar-actions">
+          <div className="nsc-queue" role="tablist" aria-label="NSC queue">
+            <button type="button" className={queue === 'pending' ? 'on' : ''} onClick={() => selectQueue('pending')}>
+              Pending{queueSnap ? ` ${fmtInt(queueSnap.pending)}` : ''}
             </button>
-            <button type="button" className="btn secondary" disabled={!viewCount || exporting} onClick={download}>
-              {exporting ? 'Preparing…' : 'Download'}
+            <button type="button" className={queue === 'withheld' ? 'on' : ''} onClick={() => selectQueue('withheld')}>
+              Withheld{queueSnap ? ` ${fmtInt(queueSnap.withheld)}` : ''}
             </button>
-            {canUpload && (
-              <a className="btn" href="/upload?module=nsc">
-                Upload
-              </a>
-            )}
           </div>
+          <button type="button" className="nsc-bar-btn" onClick={() => loadDesk(true)} disabled={loading && !desk}>
+            Refresh
+          </button>
+          <button type="button" className="nsc-bar-btn" disabled={!tableRows.length || exporting} onClick={download}>
+            {exporting ? '…' : 'Download'}
+          </button>
+          {canUpload && (
+            <a className="nsc-bar-btn nsc-bar-upload present-hide" href="/upload?module=nsc">
+              Upload
+            </a>
+          )}
         </div>
+      </header>
 
-        <div className="nsc-cards">
-          <div className="kpi">
-            <div className="label">Pending</div>
-            <div className="value">{fmtInt(desk?.pending || 0)}</div>
-          </div>
-          <div className="kpi">
-            <div className="label">Withheld</div>
-            <div className="value">{fmtInt(desk?.withheld || 0)}</div>
-          </div>
-          <div className="kpi nsc-kpi-warn">
-            <div className="label">Stuck &gt;30d</div>
-            <div className="value">{fmtInt(stuck30)}</div>
-            <div className="muted tight">{stuckPct}%</div>
-          </div>
-          <div className="kpi nsc-kpi-alert">
-            <div className="label">Stuck &gt;6m</div>
-            <div className="value">{fmtInt(stuck180)}</div>
-          </div>
-          <div className="kpi">
-            <div className="label">Avg age</div>
-            <div className="value">{desk?.avg_days || 0}d</div>
-          </div>
-          <button type="button" className={`nsc-pole-kpi non ${pole === 'non_pole' && poleMin === '' ? 'on' : ''}`} onClick={() => openPoleCases('non_pole')}>
-            <span className="label">Non-pole</span>
-            <strong>{fmtInt(poleMix?.non_pole || 0)}</strong>
-          </button>
-          <button type="button" className={`nsc-pole-kpi pole ${pole === 'pole' ? 'on' : ''}`} onClick={() => openPoleCases('pole')}>
-            <span className="label">Pole</span>
-            <strong>{fmtInt(poleMix?.pole || 0)}</strong>
-            <span className="muted tight">{fmtInt(poleMix?.poles_sum || 0)} poles</span>
-          </button>
-          <button type="button" className={`nsc-proc-card ${procedure === 'proc_a' ? 'on' : ''}`} onClick={() => openProcCases('proc_a')}>
-            <span className="nsc-proc-kicker">Proc. A</span>
-            <strong>{fmtInt(procMix?.proc_a || 0)}</strong>
-            <span className="muted tight">&gt;30d {fmtInt(procMix?.hot_proc_a || 0)}</span>
-          </button>
-          <button type="button" className={`nsc-proc-card b ${procedure === 'proc_b' || view === 'procedure' ? 'on' : ''}`} onClick={() => openProcCases('proc_b')}>
-            <span className="nsc-proc-kicker">Proc. B</span>
-            <strong>{fmtInt(procMix?.proc_b || 0)}</strong>
-            <span className="muted tight">&gt;30d {fmtInt(procMix?.hot_proc_b || 0)}</span>
-          </button>
-        </div>
-
-        <div className="nsc-toolbar">
-          <div className="hier-tabs" role="tablist" aria-label="NSC queue">
-            <button type="button" className={`hier-tab ${queue === 'pending' ? 'on' : ''}`} onClick={() => setQueue('pending')}>
-              Pending
-            </button>
-            <button type="button" className={`hier-tab ${queue === 'withheld' ? 'on' : ''}`} onClick={() => setQueue('withheld')}>
-              Withheld
-            </button>
-          </div>
-          <div className="hier-tabs" role="tablist" aria-label="Delay clock">
-            <button type="button" className={`hier-tab ${clock === 'quotation' ? 'on' : ''}`} onClick={() => setClock('quotation')}>
-              After collection
-            </button>
-            <button type="button" className={`hier-tab ${clock === 'processing' ? 'on' : ''}`} onClick={() => setClock('processing')}>
-              Create → collection
-            </button>
-          </div>
-          <div className="hier-tabs" role="tablist" aria-label="Delay range type">
-            <button type="button" className={`hier-tab ${band === 'exclusive' ? 'on' : ''}`} onClick={() => switchBand('exclusive')}>
-              Slabs
-            </button>
-            <button type="button" className={`hier-tab ${band === 'cumulative' ? 'on' : ''}`} onClick={() => switchBand('cumulative')}>
-              Cumulative
-            </button>
-          </div>
-        </div>
-
-        <div className="filters nsc-filters">
+      <div className="nsc-filter-card nsc-filter-office">
+        <input
+          className="nsc-filter-search"
+          placeholder="Search application, name or phone…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Search NSC"
+        />
+        <select
+          className={division ? 'nsc-filter-on' : ''}
+          value={division}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDivision(v);
+            setCcc('');
+            setOfficeGrain(v ? 'ccc' : 'division');
+          }}
+        >
+          <option value="">All divisions</option>
+          {divisions.map((d) => (
+            <option key={d.code} value={d.code}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+        <select className={ccc ? 'nsc-filter-on' : ''} value={ccc} onChange={(e) => setCcc(e.target.value)}>
+          <option value="">All CCCs</option>
+          {cccs.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select className={klass ? 'nsc-filter-on' : ''} value={klass} onChange={(e) => setKlass(e.target.value)}>
+          <option value="">All classes</option>
+          {classOpts.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          className={pole ? 'nsc-filter-on' : ''}
+          value={pole}
+          onChange={(e) => {
+            setPole(e.target.value);
+            setPoleMin('');
+            setPoleMax('');
+          }}
+        >
+          <option value="">All work</option>
+          <option value="non_pole">Non-pole</option>
+          <option value="pole">Pole</option>
+        </select>
+        <select className={procedure ? 'nsc-filter-on' : ''} value={procedure} onChange={(e) => setProcedure(e.target.value)}>
+          <option value="">All procedures</option>
+          <option value="proc_a">Individual</option>
+          <option value="proc_b">Proc. B</option>
+        </select>
+        {queue === 'pending' && (
           <select
-            value={division}
+            className={slab ? 'nsc-filter-on' : ''}
+            value={slab}
             onChange={(e) => {
-              setDivision(e.target.value);
-              setCcc('');
+              setSlab(e.target.value);
+              setCumId('');
+              setDelayMin('');
+              setDelayMax('');
             }}
           >
-            <option value="">Division</option>
-            {divisions.map((d) => (
-              <option key={d.code} value={d.code}>
-                {d.name}
+            <option value="">All ages</option>
+            {NSC_SLABS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
               </option>
             ))}
           </select>
-          <select value={ccc} onChange={(e) => setCcc(e.target.value)}>
-            <option value="">CCC</option>
-            {cccs.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <select value={klass} onChange={(e) => setKlass(e.target.value)}>
-            <option value="">Class</option>
-            {classes.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+        )}
+        {queue === 'withheld' && timelineYears.length > 0 && (
           <select
-            value={pole}
+            className={timeKey ? 'nsc-filter-on' : ''}
+            value={timeKey.slice(0, 4)}
             onChange={(e) => {
-              setPole(e.target.value);
-              setPoleMin('');
-              setPoleMax('');
+              const y = e.target.value;
+              if (!y) showHeldYears();
+              else {
+                setTimeKey(y);
+                setTlGrain('month');
+              }
             }}
           >
-            <option value="">Work</option>
-            <option value="non_pole">Non-pole</option>
-            <option value="pole">Pole</option>
-            {(poleMix?.unknown || 0) > 0 && <option value="unknown">Not recorded</option>}
+            <option value="">All years</option>
+            {timelineYears.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
           </select>
-          <select value={procedure} onChange={(e) => setProcedure(e.target.value)}>
-            <option value="">Applicant</option>
-            <option value="proc_a">Individual</option>
-            <option value="proc_b">Proc. B</option>
+        )}
+        {queue === 'withheld' && reasons.length > 0 && (
+          <select
+            className={reasonPick ? 'nsc-filter-on' : ''}
+            value={reasonPick}
+            onChange={(e) => setReasonPick(e.target.value)}
+          >
+            <option value="">All reasons</option>
+            {reasons.map((r) => (
+              <option key={r.name} value={r.name}>
+                {r.name}
+              </option>
+            ))}
           </select>
-          {band === 'exclusive' && (
-            <select
-              value={slab}
-              onChange={(e) => {
-                setSlab(e.target.value);
-                setCumId('');
-                setDelayMin('');
-                setDelayMax('');
-              }}
-            >
-              <option value="">Slab</option>
-              {NSC_SLABS.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          )}
-          {queue === 'withheld' && (
-            <select value={timeKey.slice(0, 4)} onChange={(e) => setTimeKey(e.target.value)}>
-              <option value="">All years</option>
-              {timelineYears.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-          )}
-          <input placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
-          {(division || ccc || klass || pole || procedure || slab || timeKey || q || delayActive) && (
-            <button
-              type="button"
-              className="btn secondary"
-              onClick={() => {
-                setDivision('');
-                setCcc('');
-                setKlass('');
-                setPole('');
-                setPoleMin('');
-                setPoleMax('');
-                setProcedure('');
-                setSlab('');
-                setCumId('');
-                setDelayMin('');
-                setDelayMax('');
-                setTimeKey('');
-                setQ('');
-              }}
-            >
-              Clear
-            </button>
-          )}
-        </div>
-        {error && <p className="error">{error}</p>}
-      </div>
-
-      <div className="hier-tabs nsc-views" role="tablist" aria-label="NSC views">
-        <button type="button" className={`hier-tab ${view === 'bottleneck' ? 'on' : ''}`} onClick={() => setView('bottleneck')}>
-          Bottlenecks
-        </button>
-        <button type="button" className={`hier-tab ${view === 'poles' ? 'on' : ''}`} onClick={() => setView('poles')}>
-          Pole
-        </button>
-        <button type="button" className={`hier-tab ${view === 'procedure' ? 'on' : ''}`} onClick={() => setView('procedure')}>
-          Proc. B
-        </button>
-        <button type="button" className={`hier-tab ${view === 'delay' ? 'on' : ''}`} onClick={() => setView('delay')}>
-          Delay
-        </button>
-        <button type="button" className={`hier-tab ${view === 'offices' ? 'on' : ''}`} onClick={() => setView('offices')}>
-          Offices
-        </button>
-        {queue === 'withheld' && (
-          <button type="button" className={`hier-tab ${view === 'history' ? 'on' : ''}`} onClick={() => setView('history')}>
-            History
+        )}
+        {hasFilters && (
+          <button type="button" className="nsc-clear" onClick={clearFilters}>
+            Clear
           </button>
         )}
-        <button type="button" className={`hier-tab ${view === 'cases' ? 'on' : ''}`} onClick={() => setView('cases')}>
-          Cases
+      </div>
+
+      {error && <p className="error">{error}</p>}
+      {loading && !desk ? (
+        <NscSkeleton />
+      ) : (
+        <>
+      <div className="nsc-kpis">
+        <button
+          type="button"
+          className={`nsc-kpi k1 ${kpiAllOn ? 'on' : ''}`}
+          aria-pressed={kpiAllOn}
+          onClick={() => {
+            clearMixSlice();
+            setView('overview');
+          }}
+        >
+          <strong>{fmtInt(mixTotal)}</strong>
+          <span>{queue === 'withheld' ? 'Withheld' : 'Pending'}</span>
+        </button>
+        <button
+          type="button"
+          className={`nsc-kpi k2 ${pole === 'non_pole' && poleMin === '' ? 'on' : ''}`}
+          aria-pressed={pole === 'non_pole' && poleMin === ''}
+          onClick={() => selectPoleSlice('non_pole')}
+        >
+          <strong>{fmtInt(kpiPoles.non_pole)}</strong>
+          <span>Non-Pole</span>
+        </button>
+        <button
+          type="button"
+          className={`nsc-kpi k3 ${pole === 'pole' && poleMin === '' && poleMax === '' ? 'on' : ''}`}
+          aria-pressed={pole === 'pole' && poleMin === '' && poleMax === ''}
+          onClick={() => selectPoleSlice('pole')}
+        >
+          <strong>
+            {fmtInt(kpiPoles.pole)}
+            <em>({fmtInt(kpiPoles.poles_sum)})</em>
+          </strong>
+          <span>Pole / Reqd. Pole</span>
+        </button>
+        <button
+          type="button"
+          className={`nsc-kpi k5 ${klass === 'Industrial' ? 'on' : ''}`}
+          aria-pressed={klass === 'Industrial'}
+          onClick={() => selectClassSlice('Industrial')}
+        >
+          <strong>{fmtInt(industrialCount)}</strong>
+          <span>Ind</span>
+        </button>
+        <button
+          type="button"
+          className={`nsc-kpi k6 ${procedure === 'proc_b' ? 'on' : ''}`}
+          aria-pressed={procedure === 'proc_b'}
+          onClick={() => selectProcSlice('proc_b')}
+        >
+          <strong>{fmtInt(procCounts.proc_b)}</strong>
+          <span>Proc-B</span>
+        </button>
+        <button
+          type="button"
+          className={`nsc-kpi k7 ${klass === 'Commercial' ? 'on' : ''}`}
+          aria-pressed={klass === 'Commercial'}
+          onClick={() => selectClassSlice('Commercial')}
+        >
+          <strong>{fmtInt(commercialCount)}</strong>
+          <span>Com</span>
+        </button>
+      </div>
+      <div className="nsc-pills" role="tablist" aria-label="NSC view">
+        <button type="button" className={view === 'overview' ? 'on' : ''} onClick={() => setView('overview')}>
+          Overview
+        </button>
+        <button type="button" className={view === 'table' ? 'on' : ''} onClick={() => openTable()}>
+          Table
         </button>
       </div>
 
-      {view === 'bottleneck' && (
-        <div className="nsc-focus">
-          <div className="panel nsc-callout">
-            {worstCcc ? (
-              <p className="nsc-callout-body">
-                <strong>{worstCcc.name}</strong>
-                <span className="muted">
-                  {fmtInt(worstCcc.hot || 0)} &gt;30d{worstCcc.hot_pct ? ` · ${worstCcc.hot_pct}%` : ''}
-                </span>
-              </p>
-            ) : (
-              <p className="muted">None</p>
-            )}
-            {worstCcc?.code && (
-              <button type="button" className="btn" onClick={() => openCcc(worstCcc.code)}>
-                Cases
-              </button>
-            )}
-          </div>
-
-          <div className="panel">
-            <div className="panel-head">
-              <h2 style={{ marginBottom: 0 }}>CCC</h2>
-            </div>
-            <div className="nsc-heat-list">
-              {byCcc.map((c) => {
-                const totalC = c.count || 1;
-                const onTrack = Math.max(0, totalC - (c.hot || 0) - 0);
-                const hot = c.hot || 0;
-                const critical = c.critical || 0;
-                const mid = Math.max(0, hot - critical);
-                return (
-                  <button key={c.code || c.name} type="button" className="nsc-heat-row" onClick={() => openCcc(c.code)}>
-                    <div className="nsc-heat-meta">
-                      <span className="nsc-heat-name">{c.name}</span>
-                      <span className="muted">
-                        {fmtInt(hot)} · {c.hot_pct || 0}% · {c.avg_days || 0}d
-                      </span>
-                    </div>
-                    <div className="nsc-heat-bar" aria-hidden>
-                      <span style={{ width: `${(100 * onTrack) / totalC}%` }} className="nsc-heat-ok" />
-                      <span style={{ width: `${(100 * mid) / totalC}%` }} className="nsc-heat-mid" />
-                      <span style={{ width: `${(100 * critical) / totalC}%` }} className="nsc-heat-bad" />
-                    </div>
+      {view === 'overview' && (
+        <div className="stack">
+          {queue === 'pending' && (
+            <div className="panel nsc-chart-panel">
+              <div className="nsc-delay-tools">
+                <div className="nsc-queue" role="tablist" aria-label="Delay range type">
+                  <button type="button" className={band === 'exclusive' ? 'on' : ''} onClick={() => switchBand('exclusive')}>
+                    Slabs
                   </button>
-                );
-              })}
-              {!byCcc.length && <p className="muted">None</p>}
-            </div>
-            <div className="nsc-heat-legend muted">
-              <span className="nsc-dot ok" /> ≤30d
-              <span className="nsc-dot mid" /> 31d–6m
-              <span className="nsc-dot bad" /> &gt;6m
-            </div>
-          </div>
-        </div>
-      )}
-
-      {view === 'poles' && (
-        <div className="stack">
-          <div className="nsc-focus">
-            <div className="panel nsc-callout">
-              <p className="nsc-callout-body">
-                {(poleMix?.unknown || 0) > 0 && !(poleMix?.pole || poleMix?.non_pole) ? (
-                  <span>Poles not in this snapshot.</span>
-                ) : (
-                  <span>
-                    {fmtInt(poleMix?.hot_non_pole || 0)} non-pole &gt;30d · {fmtInt(poleMix?.hot_pole || 0)} pole &gt;30d
-                  </span>
-                )}
-              </p>
-              <div className="nsc-pole-actions">
-                <button type="button" className="btn" onClick={() => openPoleCases('non_pole')}>
-                  Non-pole
-                </button>
-                <button type="button" className="btn secondary" onClick={() => openPoleCases('pole')}>
-                  Pole
+                  <button type="button" className={band === 'cumulative' ? 'on' : ''} onClick={() => switchBand('cumulative')}>
+                    Cumulative
+                  </button>
+                </div>
+                <button type="button" className="nsc-bar-btn" onClick={() => openTable('age')}>
+                  Table
                 </button>
               </div>
-            </div>
-            <div className="panel">
-              <div className="panel-head">
-                <h2 style={{ marginBottom: 0 }}>Poles</h2>
-              </div>
-              <div className="nsc-mix">
-                {byPoleBin.map((s) => {
-                  const pct = mixTotal ? Math.round((1000 * s.count) / mixTotal) / 10 : 0;
-                  const on =
-                    s.id === 'p0'
-                      ? pole === 'non_pole' && poleMin === ''
-                      : pole === 'pole' && poleMin === (s.min ?? 1) && (s.max == null ? poleMax === '' : poleMax === s.max);
-                  return (
-                    <div key={s.id} className={`nsc-mix-row ${on ? 'on' : ''}`}>
-                      <button type="button" className="nsc-mix-main" onClick={() => applyPoleBin(s)}>
-                        <span className="nsc-mix-label">{s.name}</span>
-                        <span className="nsc-mix-track">
-                          <span
-                            className="nsc-mix-fill"
-                            style={{ width: `${Math.max(pct, s.count ? 1.5 : 0)}%`, background: s.id === 'p0' ? '#059669' : '#ea580c' }}
+              <div ref={delayBox.ref} className="nsc-chart-box" style={{ width: '100%', height: present ? '100%' : DELAY_H }}>
+                <ResponsiveContainer>
+                  <BarChart data={mixRows} margin={{ top: delayPlan.top, right: 8, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                    <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: delayFont }} interval={0} />
+                    <YAxis tick={{ fill: '#64748b', fontSize: delayFont }} allowDecimals={false} width={delayAxisW} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => fmtInt(Number(value ?? 0))} />
+                    <Bar dataKey="count" name="Cases" cursor="pointer" radius={[4, 4, 0, 0]}>
+                      {mixRows.map((s) => {
+                        const on = s.cut ? cumId === s.id : slab === s.id;
+                        return (
+                          <Cell
+                            key={s.id}
+                            fill={s.fill}
+                            fillOpacity={dimBar(on, delayActive)}
+                            cursor="pointer"
+                            onClick={() => selectMixRow(s)}
                           />
-                        </span>
-                        <span className="nsc-mix-count">
-                          {fmtInt(s.count)} <span className="muted">{pct}%</span>
-                        </span>
+                        );
+                      })}
+                      {delayPlan.show ? <LabelList dataKey="count" {...labelProps(delayPlan)} /> : null}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="nsc-custom">
+                  <select value={cutOp} onChange={(e) => setCustomOp(e.target.value as DelayOp)} aria-label="Custom range type">
+                    {band === 'exclusive' ? (
+                      <option value="bt">–</option>
+                    ) : (
+                      <>
+                        <option value="le">≤</option>
+                        <option value="gt">&gt;</option>
+                      </>
+                    )}
+                  </select>
+                  <input type="number" min={0} value={customA} onChange={(e) => setCustomA(Number(e.target.value))} aria-label="Days" />
+                  {cutOp === 'bt' && (
+                    <input type="number" min={0} value={customB} onChange={(e) => setCustomB(Number(e.target.value))} aria-label="To days" />
+                  )}
+                  <span className="muted">days</span>
+                  <button type="button" className="btn" onClick={addCustomRange}>
+                    Add
+                  </button>
+                  {bandCuts.map((c) => (
+                    <button key={c.id} type="button" className="nsc-chip" onClick={() => removeCustomRange(c.id)}>
+                      {c.label} <span aria-hidden>×</span>
+                    </button>
+                  ))}
+                </div>
+            </div>
+          )}
+
+          {queue === 'withheld' && (
+            <div className="panel nsc-timeline">
+              <div className="nsc-delay-tools">
+                <div className="nsc-queue" role="tablist" aria-label="Timeline grain">
+                  <button
+                    type="button"
+                    className={tlGrain === 'month' ? 'on' : ''}
+                    onClick={() => {
+                      setTlGrain('month');
+                      if (!timeKey && timelineYears.length) setTimeKey(timelineYears[timelineYears.length - 1]);
+                    }}
+                  >
+                    Month
+                  </button>
+                  <button type="button" className={tlGrain === 'year' ? 'on' : ''} onClick={showHeldYears}>
+                    Year
+                  </button>
+                </div>
+                <div className="nsc-queue" role="tablist" aria-label="Timeline series">
+                  <button
+                    type="button"
+                    className={tlSeries === 'office' ? 'on' : ''}
+                    onClick={() => setTlSeries('office')}
+                  >
+                    Division
+                  </button>
+                  <button type="button" className={tlSeries === 'total' ? 'on' : ''} onClick={() => setTlSeries('total')}>
+                    Total
+                  </button>
+                </div>
+                <div className="nsc-queue" role="tablist" aria-label="Running total">
+                  <button type="button" className={tlRunning ? 'on' : ''} onClick={() => setTlRunning((v) => !v)}>
+                    Running
+                  </button>
+                </div>
+                {timelineYears.length > 0 && (
+                  <div className="nsc-queue nsc-year-btns" role="tablist" aria-label="Year zoom">
+                    <button type="button" className={!timeKey && tlGrain === 'year' ? 'on' : ''} onClick={showHeldYears}>
+                      All
+                    </button>
+                    {timelineYears.map((y) => (
+                      <button
+                        key={y}
+                        type="button"
+                        className={timeKey.slice(0, 4) === y ? 'on' : ''}
+                        onClick={() => selectHeldYear(y)}
+                      >
+                        {y.slice(2)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button type="button" className="nsc-bar-btn" onClick={() => openTable('time')}>
+                  Table
+                </button>
+              </div>
+              <div ref={timeBox.ref} className="nsc-office-chart nsc-chart-box" style={{ width: '100%', height: present ? '100%' : TIMELINE_H }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={timeline} margin={{ top: Math.max(12, timePlan.top), right: 8, left: 0, bottom: 8 }} onClick={onTimelineClick}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: '#64748b', fontSize: timeFont }}
+                      interval={timeline.length > 20 ? Math.ceil(timeline.length / 16) - 1 : 0}
+                      minTickGap={8}
+                    />
+                    <YAxis yAxisId="left" tick={{ fill: '#64748b', fontSize: timeFont }} allowDecimals={false} width={timeAxisW} tickFormatter={(v) => fmtInt(Number(v))} />
+                    {tlRunning ? (
+                      <YAxis
+                        yAxisId="right"
+                        orientation="right"
+                        tick={{ fill: '#64748b', fontSize: timeFont }}
+                        allowDecimals={false}
+                        width={timeRunAxisW}
+                        tickFormatter={(v) => fmtInt(Number(v))}
+                      />
+                    ) : null}
+                    <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value, name) => [fmtInt(Number(value ?? 0)), String(name)]} />
+                    {tlStack ? <Legend wrapperStyle={{ fontSize: timeFont + 1 }} /> : null}
+                    {tlStack
+                      ? timelineDivisions.map((d, i) => (
+                          <Bar key={d} yAxisId="left" dataKey={d} name={d} stackId="held" fill={DIV_PALETTE[i % DIV_PALETTE.length]} cursor="pointer">
+                            {timeline.map((p) => (
+                              <Cell
+                                key={`${d}-${p.key}`}
+                                fill={DIV_PALETTE[i % DIV_PALETTE.length]}
+                                fillOpacity={dimBar(timeKey === p.key, timeKey.length === 7 || (tlGrain === 'year' && timeKey.length === 4))}
+                              />
+                            ))}
+                            {timePlan.show && i === timelineDivisions.length - 1 ? (
+                              <LabelList dataKey="added" {...labelProps(timePlan)} />
+                            ) : null}
+                          </Bar>
+                        ))
+                      : (
+                          <Bar yAxisId="left" dataKey="added" name="Withheld" fill="#1565c0" cursor="pointer" radius={[4, 4, 0, 0]}>
+                            {timeline.map((p) => (
+                              <Cell
+                                key={p.key}
+                                fill={timeKey === p.key ? '#0d47a1' : '#1565c0'}
+                                fillOpacity={dimBar(timeKey === p.key, timeKey.length === 7 || (tlGrain === 'year' && timeKey.length === 4))}
+                              />
+                            ))}
+                            {timePlan.show ? <LabelList dataKey="added" {...labelProps(timePlan)} /> : null}
+                          </Bar>
+                        )}
+                    {tlRunning ? (
+                      <Line yAxisId="right" type="monotone" dataKey="cumulative" name="Running" stroke="#b91c1c" strokeWidth={2.4} dot={{ r: 2 }} />
+                    ) : null}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          <div className="nsc-overview">
+            <div className="panel nsc-chart-panel nsc-office-panel" style={officePanelH ? { height: officePanelH } : undefined}>
+              <div className="panel-head">
+                <h2 style={{ marginBottom: 0 }}>{officeGrain === 'ccc' ? 'CCC' : 'Division'}</h2>
+                <div className="nsc-chart-tools">
+                  <div className="nsc-queue" role="tablist" aria-label="Office grain">
+                    <button
+                      type="button"
+                      className={officeGrain === 'division' ? 'on' : ''}
+                      onClick={() => {
+                        setOfficeGrain('division');
+                        setCcc('');
+                      }}
+                    >
+                      Division
+                    </button>
+                    <button type="button" className={officeGrain === 'ccc' ? 'on' : ''} onClick={() => setOfficeGrain('ccc')}>
+                      CCC
+                    </button>
+                  </div>
+                  {officeSlabsAvailable && (
+                    <div className="nsc-queue" role="tablist" aria-label="Age slab split">
+                      <button type="button" className={officeSlabs ? 'on' : ''} onClick={() => setOfficeSlabs(true)}>
+                        Slabs
+                      </button>
+                      <button type="button" className={officeSlabs ? '' : 'on'} onClick={() => setOfficeSlabs(false)}>
+                        Total
                       </button>
                     </div>
-                  );
-                })}
+                  )}
+                  <button type="button" className="nsc-bar-btn" onClick={() => openTable(officeGrain)}>
+                    Table
+                  </button>
+                </div>
               </div>
+              <div
+                ref={officeBox.ref}
+                className="nsc-office-chart nsc-chart-box"
+                style={{ width: '100%', minWidth: 0, height: present || officePanelH ? '100%' : CHART_H }}
+              >
+                {officeStacks.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={officeStacks}
+                      margin={{ top: officePlan.top, right: 8, left: 0, bottom: 0 }}
+                      onClick={(state) => {
+                        const code = String(state?.activePayload?.[0]?.payload?.code || '');
+                        if (code) drillOffice(code);
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                      <XAxis
+                        dataKey="name"
+                        tick={{ fill: '#64748b', fontSize: officeFont }}
+                        interval={0}
+                        tickFormatter={(v) => shortName(String(v ?? ''), officeTickChars)}
+                      />
+                      <YAxis tick={{ fill: '#64748b', fontSize: officeFont }} allowDecimals={false} width={officeAxisW} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => fmtInt(Number(Array.isArray(value) ? value[1] ?? value[0] : value ?? 0))} />
+                      {officeStacked ? <Legend wrapperStyle={{ fontSize: officeFont + 1 }} /> : null}
+                      {officeStacked
+                        ? NSC_SLABS.map((s, i) => (
+                            <Bar key={s.id} dataKey={s.id} name={s.label} stackId="a" fill={SLAB_COLORS[s.id]} cursor="pointer">
+                              {officeStacks.map((o) => (
+                                <Cell
+                                  key={`${s.id}-${o.code}`}
+                                  fill={SLAB_COLORS[s.id]}
+                                  fillOpacity={dimBar(o.code === officePicked, Boolean(officePicked))}
+                                />
+                              ))}
+                              {officePlan.show && i === NSC_SLABS.length - 1 ? (
+                                <LabelList dataKey="total" {...labelProps(officePlan)} />
+                              ) : null}
+                            </Bar>
+                          ))
+                        : (
+                            <Bar
+                              key="total"
+                              dataKey="total"
+                              name="Cases"
+                              fill="#2563eb"
+                              cursor="pointer"
+                              radius={[4, 4, 0, 0]}
+                            >
+                              {officeStacks.map((o) => (
+                                <Cell
+                                  key={o.code}
+                                  fill="#2563eb"
+                                  fillOpacity={dimBar(o.code === officePicked, Boolean(officePicked))}
+                                />
+                              ))}
+                              {officePlan.show ? <LabelList dataKey="total" {...labelProps(officePlan)} /> : null}
+                            </Bar>
+                          )}
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="muted">No office totals in this slice.</p>
+                )}
+              </div>
+              <p className="muted tight">Click an office to filter the other charts. Click it again to clear.</p>
             </div>
-          </div>
-          <div className="panel">
-            <div className="panel-head">
-              <h2 style={{ marginBottom: 0 }}>CCC</h2>
-            </div>
-            <div className="nsc-heat-list">
-              {[...byCcc]
-                .sort((a, b) => (b.hot_pole || 0) - (a.hot_pole || 0) || (b.pole || 0) - (a.pole || 0))
-                .map((c) => {
-                  const totalC = c.count || 1;
-                  const non = c.non_pole || 0;
-                  const yes = c.pole || 0;
-                  return (
-                    <button key={c.code || c.name} type="button" className="nsc-heat-row" onClick={() => openCcc(c.code)}>
-                      <div className="nsc-heat-meta">
-                        <span className="nsc-heat-name">{c.name}</span>
-                        <span className="muted">
-                          {fmtInt(non)} non-pole · {fmtInt(yes)} pole · {fmtInt(c.hot_pole || 0)} &gt;30d
-                        </span>
-                      </div>
-                      <div className="nsc-heat-bar" aria-hidden>
-                        <span style={{ width: `${(100 * non) / totalC}%` }} className="nsc-heat-ok" />
-                        <span style={{ width: `${(100 * yes) / totalC}%` }} className="nsc-heat-mid" />
-                      </div>
-                    </button>
-                  );
-                })}
-              {!byCcc.length && <p className="muted">None</p>}
-            </div>
-          </div>
-        </div>
-      )}
 
-      {view === 'procedure' && (
-        <div className="stack">
-          <div className="panel nsc-callout">
-            <p className="nsc-callout-body">
-              {fmtInt(procMix?.proc_b || 0)} Proc. B · {fmtInt(procMix?.hot_proc_b || 0)} &gt;30d
-            </p>
-            <div className="nsc-pole-actions">
-              <button type="button" className="btn" onClick={() => { setProcedure('proc_b'); setView('cases'); }}>
-                Proc. B
-              </button>
-              <button type="button" className="btn secondary" onClick={() => { setProcedure('proc_a'); setView('cases'); }}>
-                Individual
-              </button>
-            </div>
-          </div>
-          <div className="panel">
-            <h2>Division</h2>
-            <div className="table-wrap nsc-crosstab">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Division</th>
-                    <th>Individual</th>
-                    <th>Proc. B</th>
-                    <th>&gt;30d</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {byDivision.map((d) => (
-                    <tr key={String(d.name)}>
-                      <td>
-                        <button type="button" className="linkish" onClick={() => openDivision(String(d.code || ''))}>
-                          {d.name}
-                        </button>
-                      </td>
-                      <td>
-                        <button type="button" className="linkish" onClick={() => { setProcedure('proc_a'); setView('cases'); }}>
-                          {fmtInt(num(d.proc_a))}
-                        </button>
-                      </td>
-                      <td>
-                        <button type="button" className="linkish" onClick={() => { setProcedure('proc_b'); setView('cases'); }}>
-                          {fmtInt(num(d.proc_b))}
-                        </button>
-                      </td>
-                      <td>{fmtInt(num(d.hot_proc_b))}</td>
-                      <td>
-                        <strong>{fmtInt(num(d.total))}</strong>
-                      </td>
-                    </tr>
-                  ))}
-                  {!byDivision.length && (
-                    <tr>
-                      <td colSpan={5} className="muted">
-                        None
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="panel">
-            <h2>CCC</h2>
-            <div className="table-wrap nsc-crosstab">
-              <table>
-                <thead>
-                  <tr>
-                    <th>CCC</th>
-                    <th>Proc. B</th>
-                    <th>&gt;30d</th>
-                    <th>Individual</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...byCcc]
-                    .filter((c) => (c.proc_b || 0) > 0)
-                    .sort((a, b) => (b.hot_proc_b || 0) - (a.hot_proc_b || 0) || (b.proc_b || 0) - (a.proc_b || 0))
-                    .map((c) => (
-                      <tr key={c.code || c.name}>
-                        <td>
-                          <button type="button" className="linkish" onClick={() => openCcc(c.code)}>
-                            {c.name}
-                          </button>
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="linkish"
-                            onClick={() => {
-                              setProcedure('proc_b');
-                              if (c.code) setCcc(c.code);
-                              setView('cases');
-                            }}
-                          >
-                            {fmtInt(c.proc_b || 0)}
-                          </button>
-                        </td>
-                        <td>{fmtInt(c.hot_proc_b || 0)}</td>
-                        <td>{fmtInt(c.proc_a || 0)}</td>
-                        <td>
-                          <strong>{fmtInt(c.count || 0)}</strong>
-                        </td>
-                      </tr>
-                    ))}
-                  {!byCcc.some((c) => (c.proc_b || 0) > 0) && (
-                    <tr>
-                      <td colSpan={5} className="muted">
-                        None
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {view === 'delay' && (
-        <div className="stack">
-          <div className="panel">
-            <div className="nsc-custom">
-              <select value={customOp} onChange={(e) => setCustomOp(e.target.value as DelayOp)}>
-                <option value="le">≤</option>
-                <option value="gt">&gt;</option>
-                <option value="bt">–</option>
-              </select>
-              <input
-                type="number"
-                min={0}
-                value={customA}
-                onChange={(e) => setCustomA(Number(e.target.value))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') addCustomRange();
-                }}
-                aria-label={customOp === 'bt' ? 'From days' : 'Days'}
-              />
-              {customOp === 'bt' && (
-                <input
-                  type="number"
-                  min={0}
-                  value={customB}
-                  onChange={(e) => setCustomB(Number(e.target.value))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') addCustomRange();
-                  }}
-                  aria-label="To days"
-                />
-              )}
-              <span className="muted">days</span>
-              <button type="button" className="btn" onClick={addCustomRange}>
-                Add
-              </button>
-            </div>
-            <div className="nsc-mix">
-              {mixRows.map((s) => {
-                const pct = mixTotal ? Math.round((1000 * s.count) / mixTotal) / 10 : 0;
-                const on = s.cut ? cumId === s.id : slab === s.id;
-                return (
-                  <div key={s.id} className={`nsc-mix-row ${on ? 'on' : ''} ${s.custom ? 'nsc-mix-custom' : ''}`}>
-                    <button type="button" className="nsc-mix-main" onClick={() => selectMixRow(s)}>
-                      <span className="nsc-mix-label">
-                        {s.name}
-                        {s.custom ? <span className="nsc-mix-local">*</span> : null}
-                      </span>
-                      <span className="nsc-mix-track">
-                        <span className="nsc-mix-fill" style={{ width: `${Math.max(pct, s.count ? 1.5 : 0)}%`, background: s.fill }} />
-                      </span>
-                      <span className="nsc-mix-count">
-                        {fmtInt(s.count)} <span className="muted">{pct}%</span>
-                      </span>
-                    </button>
-                    {s.custom && (
-                      <button type="button" className="nsc-mix-remove" aria-label={`Remove ${s.name}`} onClick={() => removeCustomRange(s.id)}>
-                        ×
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div className="panel">
-            <h2>Division</h2>
-            <div className="table-wrap nsc-crosstab">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Division</th>
-                    {mixRows.map((s) => (
-                      <th key={s.id} className={cumId === s.id || slab === s.id ? 'nsc-cut-on' : ''}>
-                        {s.name}
-                        {s.custom ? ' *' : ''}
-                      </th>
-                    ))}
-                    {band === 'exclusive' && <th>&gt;30d</th>}
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {byDivision.map((d) => (
-                    <tr key={String(d.name)}>
-                      <td>
-                        <button type="button" className="linkish" onClick={() => openDivision(String(d.code || ''))}>
-                          {d.name}
-                        </button>
-                      </td>
-                      {mixRows.map((s) => (
-                        <td key={s.id} className={cumId === s.id || slab === s.id ? 'nsc-cut-on' : ''}>
-                          <button type="button" className="linkish" onClick={() => selectMixRow(s)}>
-                            {fmtInt(num(d[s.id]))}
-                          </button>
-                        </td>
-                      ))}
-                      {band === 'exclusive' && <td>{fmtInt(num(d.hot))}</td>}
-                      <td>
-                        <strong>{fmtInt(num(d.total))}</strong>
-                      </td>
-                    </tr>
-                  ))}
-                  {!byDivision.length && (
-                    <tr>
-                      <td colSpan={12} className="muted">
-                        None
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {view === 'offices' && (
-        <div className="stack">
-          <div className="panel">
-            <h2>Division</h2>
-            <div style={{ width: '100%', height: CHART_H }}>
-              <ResponsiveContainer>
-                <BarChart data={byDivision} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
-                  <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 11 }} interval={0} />
-                  <YAxis tick={{ fill: '#64748b', fontSize: 11 }} allowDecimals={false} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {band === 'cumulative'
-                    ? mixRows
-                        .filter((s) => s.cut?.op === 'gt')
-                        .map((s) => (
-                          <Bar
-                            key={s.id}
-                            dataKey={s.id}
-                            name={s.name}
-                            fill={s.fill}
-                            cursor="pointer"
-                            onClick={() => s.cut && applyCut(s.cut)}
-                          />
-                        ))
-                    : NSC_SLABS.map((s) => (
-                        <Bar
-                          key={s.id}
-                          dataKey={s.id}
-                          name={s.label}
-                          stackId="a"
-                          fill={SLAB_COLORS[s.id]}
-                          cursor="pointer"
+            <div className="nsc-overview-side" ref={sideBox.ref}>
+              <div className="panel">
+                <div className="panel-head">
+                  <h2 style={{ marginBottom: 0 }}>Class</h2>
+                  <button type="button" className="nsc-bar-btn" onClick={() => openTable('class')}>
+                    Table
+                  </button>
+                </div>
+                <div className="nsc-mix">
+                  {classMix.map((s) => {
+                    const pct = classFacet.length ? Math.round((1000 * s.count) / classFacet.length) / 10 : 0;
+                    const empty = !s.count && klass !== s.name;
+                    return (
+                      <div key={s.name} className={`nsc-mix-row ${klass === s.name ? 'on' : ''} ${empty ? 'zero' : ''}`}>
+                        <button
+                          type="button"
+                          className="nsc-mix-main"
+                          disabled={empty}
                           onClick={() => {
-                            switchBand('exclusive');
-                            setSlab(s.id);
+                            setKlass((prev) => (prev === s.name ? '' : s.name));
+                            setView('overview');
                           }}
-                        />
-                      ))}
-                </BarChart>
-              </ResponsiveContainer>
+                        >
+                          <span className="nsc-mix-label">{s.name}</span>
+                          <span className="nsc-mix-track">
+                            <span className="nsc-mix-fill" style={{ width: `${Math.max(pct, s.count ? 1.5 : 0)}%`, background: '#0e7490' }} />
+                          </span>
+                          <span className="nsc-mix-count">
+                            <b>{fmtInt(s.count)}</b>
+                            <em>{pct}%</em>
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {!classMix.length && <p className="muted">None</p>}
+                </div>
+              </div>
+              <div className="panel">
+                <div className="panel-head">
+                  <h2 style={{ marginBottom: 0 }}>Pole / Non-pole</h2>
+                  <button type="button" className="nsc-bar-btn" onClick={() => openTable('work')}>
+                    Table
+                  </button>
+                </div>
+                <div className="nsc-mix">
+                  {poleMix.map((s) => {
+                    const pct = poleFacet.length ? Math.round((1000 * s.count) / poleFacet.length) / 10 : 0;
+                    const on = pole === s.id && poleMin === '';
+                    const empty = !s.count && !on;
+                    return (
+                      <div key={s.id} className={`nsc-mix-row ${on ? 'on' : ''} ${empty ? 'zero' : ''}`}>
+                        <button
+                          type="button"
+                          className="nsc-mix-main"
+                          disabled={empty}
+                          onClick={() => {
+                            if (on) {
+                              setPole('');
+                              setPoleMin('');
+                              setPoleMax('');
+                            } else {
+                              setPole(s.id);
+                              setPoleMin('');
+                              setPoleMax('');
+                            }
+                            setView('overview');
+                          }}
+                        >
+                          <span className="nsc-mix-label">{s.name}</span>
+                          <span className="nsc-mix-track">
+                            <span className="nsc-mix-fill" style={{ width: `${Math.max(pct, s.count ? 1.5 : 0)}%`, background: s.fill }} />
+                          </span>
+                          <span className="nsc-mix-count">
+                            <b>{fmtInt(s.count)}</b>
+                            <em>{pct}%</em>
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {queue === 'withheld' && reasons.length > 0 && (
+                <div className="panel">
+                  <div className="panel-head">
+                    <h2 style={{ marginBottom: 0 }}>Reasons</h2>
+                    <button type="button" className="nsc-bar-btn" onClick={() => openTable('reason')}>
+                      Table
+                    </button>
+                  </div>
+                  <div className="nsc-reason-list">
+                    {reasons.map((r) => (
+                      <div key={r.name} className="nsc-reason-row">
+                        <span>{r.name}</span>
+                        <strong>{fmtInt(r.count)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-          {queue === 'withheld' && reasons.length > 0 && (
-            <div className="panel">
-              <h2>Reasons</h2>
-              <div className="nsc-reason-list">
-                {reasons.map((r) => (
-                  <div key={r.name} className="nsc-reason-row">
-                    <span>{r.name}</span>
-                    <strong>{fmtInt(r.count)}</strong>
-                  </div>
-                ))}
+        </div>
+      )}
+
+      {view === 'table' && (
+        <div className="panel nsc-table-panel">
+          <div className="nsc-table-nav">
+            <nav className="nsc-crumb" aria-label="Table path">
+              <button
+                type="button"
+                onClick={() => {
+                  setDivision('');
+                  setCcc('');
+                  setOfficeGrain('division');
+                  if (queue === 'withheld') setTimeKey('');
+                  setTableGrain('division');
+                }}
+              >
+                All
+              </button>
+              {division ? (
+                <>
+                  <i>/</i>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCcc('');
+                      setOfficeGrain('ccc');
+                      setTableGrain('ccc');
+                    }}
+                  >
+                    Div {divName}
+                  </button>
+                </>
+              ) : null}
+              {ccc ? (
+                <>
+                  <i>/</i>
+                  <button type="button" onClick={() => setTableGrain('cases')}>
+                    CCC {cccName}
+                  </button>
+                </>
+              ) : null}
+              {timeKey ? (
+                <>
+                  <i>/</i>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (timeKey.length > 4) {
+                        setTimeKey(timeKey.slice(0, 4));
+                        setTableGrain('time');
+                      } else {
+                        setTableGrain('time');
+                      }
+                    }}
+                  >
+                    {timePhrase(timeKey)}
+                  </button>
+                </>
+              ) : null}
+              <i>/</i>
+              <span>{grainTitle}</span>
+            </nav>
+            <div className="nsc-table-nav-row">
+            <div className="nsc-queue nsc-grain-tabs" role="tablist" aria-label="Table grain">
+              {(queue === 'withheld' ? TABLE_GRAINS_HELD : TABLE_GRAINS_PENDING).map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  className={tableGrain === g.id ? 'on' : ''}
+                  onClick={() => {
+                    if (g.id === 'time' && tableGrain === 'time' && timeKey) {
+                      setTimeKey(timeKey.length > 4 ? timeKey.slice(0, 4) : '');
+                      return;
+                    }
+                    if (g.id === 'time' && timeKey.length > 4) setTimeKey(timeKey.slice(0, 4));
+                    setTableGrain(g.id);
+                  }}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+            {tableGrain === 'age' ? (
+              <div className="nsc-age-tools">
+                <div className="nsc-queue" role="tablist" aria-label="Age range type">
+                  <button type="button" className={band === 'exclusive' ? 'on' : ''} onClick={() => switchBand('exclusive')}>
+                    Slabs
+                  </button>
+                  <button type="button" className={band === 'cumulative' ? 'on' : ''} onClick={() => switchBand('cumulative')}>
+                    Cumulative
+                  </button>
+                </div>
+                <div className="nsc-custom nsc-custom-inline">
+                  <select value={cutOp} onChange={(e) => setCustomOp(e.target.value as DelayOp)} aria-label="Custom range type">
+                    {band === 'exclusive' ? (
+                      <option value="bt">–</option>
+                    ) : (
+                      <>
+                        <option value="le">≤</option>
+                        <option value="gt">&gt;</option>
+                      </>
+                    )}
+                  </select>
+                  <input type="number" min={0} value={customA} onChange={(e) => setCustomA(Number(e.target.value))} aria-label="Days" />
+                  {cutOp === 'bt' && (
+                    <input type="number" min={0} value={customB} onChange={(e) => setCustomB(Number(e.target.value))} aria-label="To days" />
+                  )}
+                  <span className="muted">days</span>
+                  <button type="button" className="btn" onClick={addCustomRange}>
+                    Add
+                  </button>
+                  {bandCuts.map((c) => (
+                    <button key={c.id} type="button" className="nsc-chip" onClick={() => removeCustomRange(c.id)}>
+                      {c.label} <span aria-hidden>×</span>
+                    </button>
+                  ))}
+                </div>
               </div>
+            ) : null}
+            {tableGrain === 'cases' ? (
+              <div className="nsc-pager">
+                <span className="muted tight">
+                  {fmtInt(tableRows.length)} · {page + 1}/{pageCount}
+                </span>
+                <button type="button" className="btn secondary" disabled={page <= 0} onClick={() => setPage((p) => p - 1)}>
+                  Prev
+                </button>
+                <button type="button" className="btn secondary" disabled={page + 1 >= pageCount} onClick={() => setPage((p) => p + 1)}>
+                  Next
+                </button>
+              </div>
+            ) : null}
+            </div>
+          </div>
+          {tableGrain !== 'cases' ? (
+            <NscSumTable
+              label={grainTitle}
+              rows={summaryRows}
+              total={summaryTotal}
+              selected={summarySelected}
+              pending={queue === 'pending'}
+              keepEmpty={tableGrain === 'age'}
+              showTotal={tableGrain !== 'age' || band === 'exclusive'}
+              customKeys={tableGrain === 'age' ? customIds : undefined}
+              onPick={(row) => pickSummary(tableGrain, row)}
+            />
+          ) : (
+            <div className="table-wrap nsc-table-wrap">
+              <table className="nsc-detail">
+                <thead>
+                  <tr>
+                    <th>Application</th>
+                    <th>Division</th>
+                    <th>CCC</th>
+                    <th>Class</th>
+                    <th>Work</th>
+                    <th>Procedure</th>
+                    <th>Age</th>
+                    <th>Collected</th>
+                    {queue === 'withheld' && <th>Withheld</th>}
+                    {queue === 'withheld' && <th>Reason</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tablePage.map((r: NscChartRow) => {
+                    const age = rowDays(r, clock);
+                    const work = workKind(r);
+                    return (
+                      <tr key={r.application_no || `${r.ccc_code}-${r.collected_on}`}>
+                        <td>{r.application_no || '—'}</td>
+                        <td>{r.division_name || r.division_code || '—'}</td>
+                        <td>{r.ccc_name || r.ccc_code || '—'}</td>
+                        <td>{r.consumer_class || '—'}</td>
+                        <td>{poleLabel(work, r.pole_count)}</td>
+                        <td>{procedureLabel(r.procedure, r.applicant_type)}</td>
+                        <td className={ageTone(age)}>{age ?? '—'}</td>
+                        <td>{fmtDay(r.collected_on)}</td>
+                        {queue === 'withheld' && <td>{fmtDay(r.withheld_on)}</td>}
+                        {queue === 'withheld' && <td>{r.withheld_reason || '—'}</td>}
+                      </tr>
+                    );
+                  })}
+                  {!tablePage.length && (
+                    <tr>
+                      <td colSpan={tableCols} className="muted">
+                        None in this filter
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       )}
-
-      {view === 'history' && queue === 'withheld' && (
-        <div className="panel nsc-timeline">
-          <div className="panel-head">
-            <div>
-              <h2 style={{ marginBottom: 0 }}>
-                {timeKey.length === 7
-                  ? `${String(timeline.find((p) => p.key === timeKey)?.label || timeKey)} ${timeKey.slice(0, 4)}`
-                  : timeKey
-                    ? timeKey
-                    : 'Timeline'}
-              </h2>
-            </div>
-            {timeKey && (
-              <button type="button" className="btn secondary" onClick={() => setTimeKey(timeKey.length === 7 ? timeKey.slice(0, 4) : '')}>
-                {timeKey.length === 7 ? `Back to ${timeKey.slice(0, 4)}` : 'All years'}
-              </button>
-            )}
-          </div>
-          <div style={{ width: '100%', height: TIMELINE_H }}>
-            <ResponsiveContainer>
-              <ComposedChart data={timeline} margin={{ top: 12, right: 16, left: 0, bottom: 0 }} onClick={onTimelineClick}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
-                <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis yAxisId="left" tick={{ fill: '#64748b', fontSize: 11 }} allowDecimals={false} tickFormatter={(v) => fmtInt(Number(v))} />
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  tick={{ fill: '#64748b', fontSize: 11 }}
-                  allowDecimals={false}
-                  tickFormatter={(v) => fmtInt(Number(v))}
-                />
-                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value, name) => [fmtInt(Number(value ?? 0)), String(name)]} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                {timelineDivisions.map((d, i) => (
-                  <Bar key={d} yAxisId="left" dataKey={d} name={d} stackId="held" fill={DIV_PALETTE[i % DIV_PALETTE.length]} cursor="pointer" />
-                ))}
-                <Line yAxisId="right" type="monotone" dataKey="cumulative" name="Open" stroke="#b91c1c" strokeWidth={2.4} dot={{ r: 3 }} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {view === 'cases' && (
-        <div className="panel">
-          <div className="panel-head">
-            <h2 style={{ marginBottom: 0 }}>
-              Cases
-              <span className="muted" style={{ fontWeight: 500, marginLeft: 8 }}>
-                {fmtInt(total)} · page {page + 1}/{pageCount}
-              </span>
-            </h2>
-            <div className="nsc-pager">
-              <button type="button" className="btn secondary" disabled={page <= 0} onClick={() => setPage((p) => p - 1)}>
-                Prev
-              </button>
-              <button type="button" className="btn secondary" disabled={page + 1 >= pageCount} onClick={() => setPage((p) => p + 1)}>
-                Next
-              </button>
-            </div>
-          </div>
-          <div className="table-wrap">
-            <table className="nsc-detail">
-              <thead>
-                <tr>
-                  <th>Application</th>
-                  <th>CCC</th>
-                  <th>Class</th>
-                  <th>Work</th>
-                  <th>Procedure</th>
-                  <th>Age</th>
-                  <th>Agency</th>
-                  <th>WO</th>
-                  <th>Collected</th>
-                  {queue === 'withheld' && <th>Withheld</th>}
-                  {queue === 'withheld' && <th>Reason</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const age = daysOf(r, clock);
-                  return (
-                    <tr key={r.application_no}>
-                      <td>{r.application_no}</td>
-                      <td>{r.ccc_name}</td>
-                      <td>{r.consumer_class}</td>
-                      <td>{poleLabel(r.pole_kind, r.pole_count)}</td>
-                      <td>{procedureLabel(r.procedure, r.applicant_type)}</td>
-                      <td className={ageTone(age)}>{age ?? '—'}</td>
-                      <td>{r.agency_name || '—'}</td>
-                      <td>{r.wo_no || '—'}</td>
-                      <td>{fmtDay(r.collected_on)}</td>
-                      {queue === 'withheld' && <td>{fmtDay(r.withheld_on)}</td>}
-                      {queue === 'withheld' && <td>{r.withheld_reason || '—'}</td>}
-                    </tr>
-                  );
-                })}
-                {!rows.length && (
-                  <tr>
-                    <td colSpan={9} className="muted">
-                      {loading ? 'Loading…' : 'None'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        </>
       )}
     </div>
   );

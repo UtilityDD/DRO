@@ -24,7 +24,7 @@ export function HomePage() {
     { label: 'Withheld NSC', value: Number(pulse.withheld_nsc || 0).toLocaleString('en-IN') },
     { label: 'Pending Disco', value: pulse.pending_disco },
     { label: 'Open Grievances', value: pulse.open_grievances },
-    { label: 'Open Tech Works', value: pulse.open_tech_works },
+    { label: 'Open Priority Works', value: pulse.open_tech_works },
     { label: 'Spot Coverage %', value: pulse.spot_coverage_pct },
     { label: 'Region Consumers', value: pulse.region_consumers?.toLocaleString?.() ?? pulse.region_consumers },
   ];
@@ -43,7 +43,7 @@ export function HomePage() {
       <div className="split">
         <div className="panel">
           <h2>NSC pending by division</h2>
-          <div style={{ width: '100%', height: 260 }}>
+          <div className="home-chart" style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer>
               <BarChart data={nscDiv}>
                 <XAxis dataKey="division_name" tick={{ fill: '#64748b', fontSize: 11 }} />
@@ -58,12 +58,12 @@ export function HomePage() {
                   labelStyle={{ color: '#1e293b', fontWeight: 600 }}
                   itemStyle={{ color: '#1e293b' }}
                 />
-                <Bar dataKey="pending" fill="#1a73e8" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="pending" fill="var(--accent)" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
-        <div className="panel">
+        <div className="panel present-hide">
           <h2>Quick links</h2>
           <div className="stack home-actions" style={{ gap: '0.55rem' }}>
             <Link className="btn secondary" to="/nsc">

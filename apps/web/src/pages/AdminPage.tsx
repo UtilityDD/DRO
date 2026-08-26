@@ -192,7 +192,7 @@ export function AdminPage() {
 
   return (
     <div className="stack">
-      <div className="panel">
+      <div className="panel present-hide">
         <h2>{editing ? `Edit user · ${editing}` : 'Create user & authorization'}</h2>
         <p className="muted tight">
           Grant <strong>View</strong>, <strong>Upload</strong>, and <strong>Edit</strong> per database. Office scope still
@@ -303,7 +303,7 @@ export function AdminPage() {
                   <td>{u.ccc_code || '—'}</td>
                   <td className="perm-summary">{u.role === 'admin' ? 'ALL' : summarizePerms(u.permissions)}</td>
                   <td>
-                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <div className="present-hide" style={{ display: 'flex', gap: '0.35rem' }}>
                       <button type="button" className="btn secondary" onClick={() => startEdit(u)}>
                         Edit
                       </button>
@@ -351,7 +351,7 @@ export function AdminPage() {
               <p className="muted" style={{ fontSize: '0.75rem', margin: '0.55rem 0 0' }}>
                 {u.role === 'admin' ? 'ALL permissions' : summarizePerms(u.permissions)}
               </p>
-              <div className="data-card-actions" style={{ display: 'flex', gap: '0.45rem' }}>
+              <div className="data-card-actions present-hide" style={{ display: 'flex', gap: '0.45rem' }}>
                 <button type="button" className="btn secondary" onClick={() => startEdit(u)}>
                   Edit auth
                 </button>

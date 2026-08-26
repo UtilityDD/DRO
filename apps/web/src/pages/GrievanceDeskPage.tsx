@@ -484,7 +484,7 @@ export function GrievanceDeskPage() {
             ))}
           </select>
           {canAdd && (
-            <button type="button" className="btn" onClick={startAdd}>
+            <button type="button" className="btn present-hide" onClick={startAdd}>
               New case
             </button>
           )}

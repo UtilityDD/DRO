@@ -142,13 +142,15 @@ export function mergeDelayCuts(custom: DelayCut[], exclusive: boolean) {
       sort: SLAB_POS[s.id] ?? 99,
       custom: false as boolean,
     }));
-    const extra = custom.map((c) => ({
-      id: c.id,
-      label: c.label,
-      sort: cutSortKey(c, true),
-      custom: true,
-      cut: c,
-    }));
+    const extra = custom
+      .filter((c) => c.op === 'bt')
+      .map((c) => ({
+        id: c.id,
+        label: c.label,
+        sort: cutSortKey(c, true),
+        custom: true,
+        cut: c,
+      }));
     return [...slabs.map((s) => ({ ...s, cut: undefined as DelayCut | undefined })), ...extra]
       .sort((a, b) => a.sort - b.sort || Number(a.custom) - Number(b.custom))
       .map((row) => ({
@@ -158,7 +160,7 @@ export function mergeDelayCuts(custom: DelayCut[], exclusive: boolean) {
         cut: row.cut,
       }));
   }
-  return [...NSC_CUMULATIVE, ...custom]
+  return [...NSC_CUMULATIVE, ...custom.filter((c) => c.op !== 'bt')]
     .sort((a, b) => cutSortKey(a) - cutSortKey(b) || Number(!!a.custom) - Number(!!b.custom))
     .map((c) => ({ id: c.id, label: c.label, custom: !!c.custom, cut: c }));
 }
@@ -343,7 +345,32 @@ export function monthOfIso(iso: string | null): string | null {
   return iso.slice(0, 7);
 }
 
-const MONTH_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export function monthYearLabel(ym: string) {
+  if (!ym || ym.length < 7) return ym;
+  const month = Number(ym.slice(5, 7));
+  const yy = ym.slice(2, 4);
+  if (!Number.isFinite(month) || month < 1 || month > 12) return ym;
+  return `${month}/${yy}`;
+}
+
+function eachMonth(fromYm: string, toYm: string) {
+  const out: string[] = [];
+  let y = Number(fromYm.slice(0, 4));
+  let m = Number(fromYm.slice(5, 7));
+  const y2 = Number(toYm.slice(0, 4));
+  const m2 = Number(toYm.slice(5, 7));
+  if (![y, m, y2, m2].every(Number.isFinite)) return out;
+  while (y < y2 || (y === y2 && m <= m2)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    if (out.length > 240) break;
+  }
+  return out;
+}
 
 export type WithheldTimelinePoint = {
   key: string;
@@ -365,27 +392,36 @@ export function buildWithheldTimeline(
   };
 
   if (opts.grain === 'month') {
-    const year = opts.year || '';
+    const year = String(opts.year || '');
     const buckets = new Map<string, Record<string, number>>();
-    for (let m = 1; m <= 12; m += 1) {
-      buckets.set(`${year}-${String(m).padStart(2, '0')}`, empty());
-    }
+    const seen: string[] = [];
     for (const r of rows) {
       const ym = monthOfIso(withheldEventOn(r));
-      if (!ym || ym.slice(0, 4) !== year) continue;
+      if (!ym) continue;
+      if (year && ym.slice(0, 4) !== year) continue;
       const rec = buckets.get(ym) || empty();
       rec.added += 1;
       const div = r.division_name || r.division_code || 'Unknown';
       rec[div] = (rec[div] || 0) + 1;
       buckets.set(ym, rec);
+      seen.push(ym);
+    }
+    let keys: string[];
+    if (year && year.length === 4) {
+      keys = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+    } else if (seen.length) {
+      const sortedSeen = [...new Set(seen)].sort();
+      keys = eachMonth(sortedSeen[0], sortedSeen[sortedSeen.length - 1]);
+    } else {
+      return [];
     }
     let run = 0;
-    return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([key, rec]) => {
+    return keys.map((key) => {
+      const rec = buckets.get(key) || empty();
       run += rec.added;
-      const month = Number(key.slice(5, 7));
       return {
         key,
-        label: MONTH_LABEL[month - 1] || key,
+        label: monthYearLabel(key),
         added: rec.added,
         cumulative: run,
         ...rec,
