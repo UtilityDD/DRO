@@ -276,8 +276,12 @@ function isoDay(v) {
 function toNscChartRow(r) {
   const row = {
     application_no: r.application_no || '',
+    consumer_id: r.consumer_id || '',
+    consumer_name: r.consumer_name || '',
+    phone: r.phone || '',
     status: r.status || 'pending',
     sap_status: r.sap_status || r.stage || '',
+    stage: r.stage || '',
     division_code: r.division_code || '',
     division_name: r.division_name || r.division_code || '',
     ccc_code: r.ccc_code || '',
@@ -291,12 +295,15 @@ function toNscChartRow(r) {
     procedure: r.procedure || 'unknown',
     applicant_type: r.applicant_type || '',
     agency_name: r.agency_name || '',
+    wo_no: r.wo_no || '',
     withheld_on: isoDay(r.withheld_on),
     withheld_reason: r.withheld_reason || '',
     collected_on: isoDay(r.collected_on),
     created_on: isoDay(r.created_on || r.applied_on),
     quotation_issue_on: isoDay(r.quotation_issue_on),
     report_date: isoDay(r.report_date),
+    remarks: r.remarks || '',
+    first_seen_on: r.first_seen_on || null,
   };
   for (const k of Object.keys(row)) {
     if (row[k] == null || row[k] === '') delete row[k];
@@ -337,10 +344,11 @@ function filterScoped(user, rows) {
 
 function nscScopeQuery(user) {
   const role = String(user?.role || '').toLowerCase();
-  if (role === 'ccc' && user.ccc_code) return `ccc_code=eq.${encodeURIComponent(user.ccc_code)}`;
-  if (role === 'division' && user.division_code) {
-    return `division_code=eq.${encodeURIComponent(user.division_code)}`;
-  }
+  if (role === 'admin' || role === 'region') return '';
+  const ccc = String(user?.ccc_code || '').trim();
+  const div = String(user?.division_code || '').trim();
+  if (ccc) return `ccc_code=eq.${encodeURIComponent(ccc)}`;
+  if (div) return `division_code=eq.${encodeURIComponent(div)}`;
   return '';
 }
 
@@ -1840,7 +1848,13 @@ app.post('/api/nsc/commit', requireAuth, requirePerm('nsc', 'upload'), async (re
   }
   try {
     const payload = JSON.parse(fs.readFileSync(staging, 'utf8'));
-    const rows = (payload.rows || []).map((r, i) => ({ ...r, id: i + 1 }));
+    const existingByApp = new Map();
+    for (const row of readCollection('nsc_cases', [])) {
+      const app = String(row?.application_no || '').trim();
+      if (app && row.first_seen_on) existingByApp.set(app, row.first_seen_on);
+    }
+    const stamped = nscLib.mergeFirstSeen(payload.rows || [], existingByApp);
+    const rows = stamped.map((r, i) => ({ ...r, id: i + 1 }));
     req.body.filename = payload.filename;
     req.body.notes = `report ${payload.report_date}`;
     const { batch } = await createBatchPersisted('nsc', req, rows.length, payload.report_date);

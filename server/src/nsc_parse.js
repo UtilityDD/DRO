@@ -536,6 +536,7 @@ function parseNscWorkbook({ filePath, filename, reportDate, droCccs }) {
       report_date: reportIso,
       remarks: withheld_reason.slice(0, 240),
       updated_at: new Date().toISOString(),
+      first_seen_on: new Date().toISOString(),
     });
   }
 
@@ -661,6 +662,7 @@ function packNscCloudRow(row) {
     remarks: `${text}${NSC_META}${JSON.stringify(extra)}`,
     batch_id: row.batch_id ?? null,
     updated_at: row.updated_at || new Date().toISOString(),
+    first_seen_on: row.first_seen_on || null,
     consumer_id: extra.consumer_id,
     phone: extra.phone,
     consumer_class: extra.consumer_class,
@@ -701,10 +703,22 @@ function slimNscCloudRow(row) {
     'remarks',
     'batch_id',
     'updated_at',
+    'first_seen_on',
   ];
   const out = {};
   for (const k of keep) out[k] = packed[k] ?? null;
   return out;
+}
+
+/** Keep the original DRO arrival time when the same application is uploaded again. */
+function mergeFirstSeen(incoming, existingByApp) {
+  const now = new Date().toISOString();
+  return (incoming || []).map((row) => {
+    const app = String(row?.application_no || '').trim();
+    const prev = app ? existingByApp.get(app) : null;
+    const kept = prev || row.first_seen_on || null;
+    return { ...row, first_seen_on: kept || now };
+  });
 }
 
 function hydrateNscRows(rows) {
@@ -1326,6 +1340,7 @@ module.exports = {
   parseNscWorkbook,
   packNscCloudRow,
   slimNscCloudRow,
+  mergeFirstSeen,
   hydrateNsc,
   hydrateNscRows,
   extraPayload,

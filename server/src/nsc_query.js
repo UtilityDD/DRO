@@ -60,6 +60,9 @@ const DESK_SELECT = [
 
 const CHART_SELECT = [
   'application_no',
+  'consumer_id',
+  'consumer_name',
+  'phone',
   'ccc_code',
   'division_code',
   'status',
@@ -75,13 +78,16 @@ const CHART_SELECT = [
   'procedure',
   'applicant_type',
   'agency_name',
+  'wo_no',
   'withheld_on',
   'withheld_reason',
   'collected_on',
   'applied_on',
   'quotation_issue_on',
   'report_date',
+  'remarks',
   'delay_days',
+  'first_seen_on',
 ];
 
 const skippedCols = new Set();
@@ -151,11 +157,30 @@ function canFilter(col) {
 
 function scopeParts(user) {
   const role = String(user?.role || '').toLowerCase();
-  if (role === 'ccc' && user.ccc_code) return [`ccc_code=eq.${enc(user.ccc_code)}`];
-  if (role === 'division' && user.division_code) {
-    return [`division_code=eq.${enc(user.division_code)}`];
-  }
+  if (role === 'admin' || role === 'region') return [];
+  // Prefer office assignment over role name so viewers with a CCC/division stay scoped
+  const ccc = String(user?.ccc_code || '').trim();
+  const div = String(user?.division_code || '').trim();
+  if (ccc) return [`ccc_code=eq.${enc(ccc)}`];
+  if (div) return [`division_code=eq.${enc(div)}`];
   return [];
+}
+
+/** Drop client office filters that try to widen past the user's assignment. */
+function clampOfficeQuery(q = {}, user) {
+  const role = String(user?.role || '').toLowerCase();
+  if (role === 'admin' || role === 'region') return q;
+  const userCcc = String(user?.ccc_code || '').trim();
+  const userDiv = String(user?.division_code || '').trim();
+  const out = { ...q };
+  if (userCcc) {
+    out.ccc = userCcc;
+    if (userDiv) out.division = userDiv;
+  } else if (userDiv) {
+    out.division = userDiv;
+    if (out.ccc && String(out.ccc).slice(0, userDiv.length) !== userDiv) delete out.ccc;
+  }
+  return out;
 }
 
 function queueParts(queue) {
@@ -167,13 +192,14 @@ function queueParts(queue) {
 
 function nscFilterParts(q = {}, user, opts = {}) {
   const chart = !!opts.chart;
-  const parts = [...scopeParts(user), ...queueParts(q.queue)];
-  if (q.division) parts.push(`division_code=eq.${enc(q.division)}`);
-  if (q.ccc) parts.push(`ccc_code=eq.${enc(q.ccc)}`);
-  if ((q.class || q.klass) && canFilter('consumer_class')) {
-    parts.push(`consumer_class=eq.${enc(q.class || q.klass)}`);
-  } else if ((q.class || q.klass) && skippedCols.has('consumer_class')) {
-    parts.push(`category=eq.${enc(q.class || q.klass)}`);
+  const scoped = clampOfficeQuery(q, user);
+  const parts = [...scopeParts(user), ...queueParts(scoped.queue)];
+  if (scoped.division) parts.push(`division_code=eq.${enc(scoped.division)}`);
+  if (scoped.ccc) parts.push(`ccc_code=eq.${enc(scoped.ccc)}`);
+  if ((scoped.class || scoped.klass) && canFilter('consumer_class')) {
+    parts.push(`consumer_class=eq.${enc(scoped.class || scoped.klass)}`);
+  } else if ((scoped.class || scoped.klass) && skippedCols.has('consumer_class')) {
+    parts.push(`category=eq.${enc(scoped.class || scoped.klass)}`);
   }
   if (!chart) {
     const slabCol = clockCol(q.clock, 'slab');
