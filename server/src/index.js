@@ -290,6 +290,7 @@ function toNscChartRow(r) {
     pole_count: r.pole_count == null || r.pole_count === '' ? null : Number(r.pole_count),
     procedure: r.procedure || 'unknown',
     applicant_type: r.applicant_type || '',
+    agency_name: r.agency_name || '',
     withheld_on: isoDay(r.withheld_on),
     withheld_reason: r.withheld_reason || '',
     collected_on: isoDay(r.collected_on),

@@ -44,9 +44,11 @@ export function nscSetLiveStamp(stamp: string) {
 }
 
 async function db() {
-  return openDB<NscDB>('dro-ops-nsc', 3, {
+  return openDB<NscDB>('dro-ops-nsc', 4, {
     upgrade(database, oldVersion) {
       if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta');
+      // row shape gained agency_name: drop cached queues so they refetch once
+      if (oldVersion < 4 && database.objectStoreNames.contains('queue')) database.deleteObjectStore('queue');
       if (!database.objectStoreNames.contains('queue')) database.createObjectStore('queue');
       if (oldVersion < 2 && (database.objectStoreNames as unknown as DOMStringList).contains('nsc')) {
         (database as unknown as { deleteObjectStore(name: string): void }).deleteObjectStore('nsc');

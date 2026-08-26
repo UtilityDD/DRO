@@ -881,6 +881,7 @@ function filterNscRows(rows, q = {}) {
   const poleMin = numOrNull(q.pole_min);
   const poleMax = numOrNull(q.pole_max);
   const procedure = String(q.procedure || '').toLowerCase();
+  const agency = String(q.agency || '').trim().toLowerCase();
   return rows.filter((r) => {
     if (queue === 'pending' && !isPendingQueue(r)) return false;
     if (queue === 'withheld' && String(r.status) !== 'withheld') return false;
@@ -900,6 +901,10 @@ function filterNscRows(rows, q = {}) {
     }
     if (procedure === 'proc_a' || procedure === 'proc_b' || procedure === 'unknown') {
       if (procedureOf(r) !== procedure) return false;
+    }
+    if (agency) {
+      const name = String(r.agency_name || '').trim().toLowerCase();
+      if (agency === '__none__' ? name !== '' : name !== agency) return false;
     }
     if (applyTime && timeKey) {
       const iso = eventOn(r);

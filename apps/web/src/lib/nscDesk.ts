@@ -26,6 +26,7 @@ export type NscChartRow = {
   pole_count: number | null;
   procedure?: string;
   applicant_type?: string;
+  agency_name?: string;
   withheld_on: string | null;
   withheld_reason: string;
   collected_on: string | null;
@@ -49,10 +50,14 @@ export type NscDeskQuery = {
   pole_min?: string | number | '';
   pole_max?: string | number | '';
   procedure?: string;
+  agency?: string;
   time?: string;
   q?: string;
   apply_time?: string;
 };
+
+/** Filter value used for rows with no agency recorded. */
+export const NSC_NO_AGENCY = '__none__';
 
 export type NscOfficeOpt = { code: string; name: string; division_code?: string };
 
@@ -105,8 +110,12 @@ function poleBinOf(count: number) {
   return POLE_BINS.find((b) => n >= b.min && n <= b.max) || POLE_BINS[0];
 }
 
-function eventOn(row: NscChartRow) {
+export function nscEventOn(row: NscChartRow) {
   return row.withheld_on || row.collected_on || row.created_on || row.quotation_issue_on || null;
+}
+
+function eventOn(row: NscChartRow) {
+  return nscEventOn(row);
 }
 
 function slabIdOf(row: NscChartRow, clock: NscClock) {
@@ -198,6 +207,7 @@ export function hydrateChartRow(row: NscChartRow): NscChartRow {
     pole_count: row.pole_count == null || Number.isNaN(Number(row.pole_count)) ? null : Number(row.pole_count),
     procedure: row.procedure || 'unknown',
     applicant_type: row.applicant_type || '',
+    agency_name: row.agency_name || '',
     withheld_on: row.withheld_on || null,
     withheld_reason: row.withheld_reason || '',
     collected_on: row.collected_on || null,
@@ -230,6 +240,7 @@ export function filterNscChartRows(rows: NscChartRow[], q: NscDeskQuery = {}) {
   const poleMin = numOrNull(q.pole_min);
   const poleMax = numOrNull(q.pole_max);
   const procedure = String(q.procedure || '').toLowerCase();
+  const agency = String(q.agency || '').trim().toLowerCase();
   return rows.filter((r) => {
     if (queue === 'pending' && !isPendingQueue({ status: r.status, sap_status: r.sap_status || '' })) return false;
     if (queue === 'withheld' && String(r.status) !== 'withheld') return false;
@@ -250,13 +261,17 @@ export function filterNscChartRows(rows: NscChartRow[], q: NscDeskQuery = {}) {
     if (procedure === 'proc_a' || procedure === 'proc_b' || procedure === 'unknown') {
       if (procedureOf(r) !== procedure) return false;
     }
+    if (agency) {
+      const name = String(r.agency_name || '').trim().toLowerCase();
+      if (agency === NSC_NO_AGENCY ? name !== '' : name !== agency) return false;
+    }
     if (applyTime && timeKey) {
       const iso = eventOn(r);
       if (timeKey.length === 7 && monthOfIso(iso) !== timeKey) return false;
       if (timeKey.length === 4 && yearOfIso(iso) !== timeKey) return false;
     }
     if (search) {
-      const blob = `${r.application_no || ''} ${r.ccc_name || ''} ${r.withheld_reason || ''}`.toLowerCase();
+      const blob = `${r.application_no || ''} ${r.ccc_name || ''} ${r.withheld_reason || ''} ${r.agency_name || ''}`.toLowerCase();
       if (!blob.includes(search)) return false;
     }
     return true;

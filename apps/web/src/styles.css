@@ -340,6 +340,7 @@ button {
   width: 100%;
 }
 
+.present-btn kbd,
 .sidebar-present kbd {
   margin-left: auto;
   font-size: 0.65rem;
@@ -347,8 +348,47 @@ button {
   letter-spacing: 0.04em;
   padding: 0.12rem 0.35rem;
   border-radius: 5px;
-  border: 1px solid var(--sidebar-border);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.sidebar-present kbd {
+  border-color: var(--sidebar-border);
   color: var(--sidebar-text);
+}
+
+.present-btn.on kbd,
+.sidebar-present.on kbd,
+.laser-btn.on kbd {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: inherit;
+}
+
+.present-fab-stack {
+  position: fixed;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 40;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.present-fab-stack .present-fab {
+  position: static;
+}
+
+.present-btn.laser-btn.on,
+.present-fab.laser-btn.on,
+.sidebar-present.laser-btn.on {
+  background: #ff123c;
+  border-color: #ff123c;
+  color: #fff;
+}
+
+.present-btn.laser-btn.on .nav-icon,
+.present-fab.laser-btn.on .nav-icon,
+.sidebar-present.laser-btn.on .nav-icon {
+  color: #fff;
 }
 
 .sidebar-present.on,
@@ -530,7 +570,8 @@ button {
   box-shadow: var(--shadow);
 }
 
-.app-shell[data-present='on'] .page-masthead .present-btn {
+.app-shell[data-present='on'] .page-masthead .present-btn,
+.app-shell[data-present='on'] .page-masthead .laser-btn {
   display: none;
 }
 
@@ -5235,7 +5276,7 @@ th {
 .nsc-overview {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(240px, 0.9fr);
-  gap: 0.75rem;
+  gap: clamp(0.45rem, 1vh, 0.75rem);
   align-items: start;
 }
 
@@ -5250,7 +5291,7 @@ th {
 
 .nsc-overview-side {
   display: grid;
-  gap: 0.75rem;
+  gap: clamp(0.45rem, 1vh, 0.75rem);
   align-content: start;
 }
 
@@ -5348,8 +5389,8 @@ th {
   flex-direction: column;
   justify-content: center;
   gap: 0.1rem;
-  min-height: 72px;
-  padding: 0.5rem 0.55rem;
+  min-height: clamp(54px, 8vh, 72px);
+  padding: clamp(0.3rem, 0.8vh, 0.5rem) 0.55rem;
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
@@ -5602,7 +5643,7 @@ th {
 
 .nsc-mix {
   display: grid;
-  gap: 0.5rem;
+  gap: clamp(0.25rem, 0.7vh, 0.5rem);
 }
 
 .nsc-mix-row {
@@ -5650,7 +5691,7 @@ th {
   gap: 0.75rem;
   align-items: center;
   width: 100%;
-  padding: 0.28rem 0.15rem;
+  padding: clamp(0.08rem, 0.45vh, 0.28rem) 0.15rem;
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -5690,7 +5731,7 @@ th {
 }
 
 .nsc-mix-track {
-  height: 18px;
+  height: clamp(14px, 2vh, 18px);
   border-radius: 7px;
   background: #eaf0f8;
   box-shadow: inset 0 0 0 1px rgba(30, 64, 120, 0.07);
@@ -5711,9 +5752,10 @@ th {
   font-variant-numeric: tabular-nums;
 }
 
+/* reads as a chart data label, so it tracks the size the charts use */
 .nsc-mix-count b {
   font-family: var(--display);
-  font-size: 1.2rem;
+  font-size: clamp(0.95rem, 1.7vh, 1.05rem);
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: -0.01em;
@@ -5770,16 +5812,6 @@ th {
   margin-bottom: 0.5rem;
 }
 
-.nsc-year-btns {
-  flex-wrap: wrap;
-  width: 100%;
-}
-
-.nsc-year-btns button {
-  min-width: 2.1rem;
-  padding: 0.1rem 0.35rem;
-}
-
 .nsc-timeline .panel-head {
   align-items: flex-start;
 }
@@ -5802,6 +5834,20 @@ th {
   --nsc-table-size: clamp(0.95rem, 0.72rem + 0.42vw, 1.2rem);
   --nsc-table-pad-y: clamp(0.48rem, 0.32rem + 0.22vw, 0.72rem);
   --nsc-table-pad-x: clamp(0.55rem, 0.38rem + 0.28vw, 0.95rem);
+}
+
+/* the desk aims at one screen, so its own spacing gives way on short viewports */
+.nsc-desk.stack,
+.nsc-desk .stack {
+  gap: clamp(0.45rem, 1vh, 0.9rem);
+}
+
+.nsc-desk .panel {
+  padding: clamp(0.6rem, 1.4vh, 1rem);
+}
+
+.nsc-desk .panel h2 {
+  margin-bottom: clamp(0.35rem, 0.9vh, 0.85rem);
 }
 
 .nsc-detail,
@@ -5830,6 +5876,49 @@ th {
 
 .nsc-table-nav {
   font-size: clamp(0.82rem, 0.72rem + 0.18vw, 0.98rem);
+}
+
+/* serial column stays narrow and quiet */
+.nsc-detail th.nsc-sl,
+.nsc-detail td.nsc-sl {
+  width: 3.2em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nsc-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.nsc-detail th.num .nsc-sort {
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.nsc-sort i {
+  font-size: 0.78em;
+  font-style: normal;
+  line-height: 1;
+  opacity: 0.35;
+}
+
+.nsc-sort:hover i,
+.nsc-sort.on i {
+  opacity: 1;
+}
+
+.nsc-sort.on {
+  color: var(--accent);
 }
 
 .nsc-sum-tag {
@@ -6284,12 +6373,12 @@ th {
 }
 
 .app-shell[data-present="on"] .nsc-kpi {
-  min-height: 96px;
-  padding: 0.75rem 0.8rem;
+  min-height: min(96px, 11vh);
+  padding: clamp(0.35rem, 1vh, 0.75rem) 0.8rem;
 }
 
 .app-shell[data-present="on"] .nsc-kpi strong {
-  font-size: 1.7rem;
+  font-size: clamp(1.2rem, 3vh, 1.7rem);
 }
 
 .app-shell[data-present="on"] .nsc-kpi span {
@@ -6365,22 +6454,21 @@ th {
 }
 
 .app-shell[data-present="on"] .nsc-mix-label,
-.app-shell[data-present="on"] .nsc-mix-count,
-.app-shell[data-present="on"] .nsc-reason-row {
-  font-size: 1.05rem;
+.app-shell[data-present="on"] .nsc-mix-count {
+  font-size: clamp(0.92rem, 1.6vh, 1.05rem);
 }
 
 .app-shell[data-present="on"] .nsc-mix-track {
-  height: 24px;
+  height: clamp(15px, 2.6vh, 24px);
 }
 
 .app-shell[data-present="on"] .nsc-mix-count b {
-  font-size: 1.55rem;
+  font-size: clamp(1.1rem, 2.1vh, 1.3rem);
 }
 
 .app-shell[data-present="on"] .nsc-mix-count em {
   min-width: 4.2rem;
-  font-size: 1.02rem;
+  font-size: clamp(0.9rem, 1.55vh, 1.02rem);
 }
 
 .app-shell[data-present="on"] .nsc-desk .muted {
@@ -6461,7 +6549,7 @@ th {
 }
 
 .app-shell[data-present="on"] .nsc-pills button {
-  min-height: 40px;
+  min-height: clamp(30px, 4.4vh, 40px);
   font-size: 0.92rem;
   padding: 0.35rem 0.85rem;
 }
@@ -6492,7 +6580,8 @@ th {
   padding-bottom: 0.85rem;
 }
 
-.app-shell[data-present="on"] .nsc-desk {
+/* Screen-bound desk: panels flex into the viewport instead of stacking */
+.nsc-desk.nsc-fit {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
@@ -6501,63 +6590,103 @@ th {
   overflow: auto;
 }
 
-.app-shell[data-present="on"] .nsc-desk > * {
+.nsc-desk.nsc-fit > * {
   flex: 0 0 auto;
 }
 
-.app-shell[data-present="on"] .nsc-desk > .stack,
-.app-shell[data-present="on"] .nsc-desk > .nsc-table-panel {
+.nsc-desk.nsc-fit > .stack,
+.nsc-desk.nsc-fit > .nsc-table-panel {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-/* rows share the leftover height but never squeeze below what their panels need */
-.app-shell[data-present="on"] .nsc-desk > .stack {
-  grid-auto-rows: minmax(min-content, 1fr);
+/* charts absorb the squeeze so nothing overflows; the office row gets the larger share
+   because it carries the side column as well as a chart */
+.nsc-desk.nsc-fit > .stack {
+  grid-template-rows: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  grid-auto-rows: minmax(0, 1fr);
   gap: 0.55rem;
 }
 
-.app-shell[data-present="on"] .nsc-desk > .nsc-table-panel {
-  min-height: 240px;
+/* withheld leads with its timeline, so that row takes the larger share instead */
+.nsc-desk.nsc-fit.nsc-held > .stack {
+  grid-template-rows: minmax(0, 1.12fr) minmax(0, 0.88fr);
 }
 
-.app-shell[data-present="on"] .nsc-desk .nsc-chart-panel,
-.app-shell[data-present="on"] .nsc-overview > .panel {
+/* withheld has one side panel, so it matches the chart beside it and spreads its bars */
+.nsc-desk.nsc-fit.nsc-held .nsc-overview-side {
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.nsc-desk.nsc-fit.nsc-held .nsc-overview-side > .panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
 
-/* the chart column fills the row so it can grow with the screen; the side column stays its own size */
-.app-shell[data-present="on"] .nsc-overview {
+.nsc-desk.nsc-fit.nsc-held .nsc-overview-side > .panel > .panel-head {
+  flex: 0 0 auto;
+}
+
+.nsc-desk.nsc-fit.nsc-held .nsc-overview-side .nsc-mix {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.nsc-desk.nsc-fit > .nsc-table-panel {
+  min-height: min(240px, 34vh);
+}
+
+.nsc-desk.nsc-fit > .stack > .panel,
+.nsc-desk.nsc-fit .nsc-overview > .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* both columns fill the row height so neither can push past the screen */
+.nsc-desk.nsc-fit .nsc-overview {
   min-height: 0;
   align-items: stretch;
 }
 
-.app-shell[data-present="on"] .nsc-overview-side {
-  align-self: start;
+/* the column fills its row and keeps panels at natural height, so anything left over
+   scrolls inside the column instead of spilling out of the screen-bound desk */
+.nsc-desk.nsc-fit .nsc-overview-side {
   min-height: 0;
   align-content: start;
+  overflow: auto;
 }
 
-.app-shell[data-present="on"] .nsc-chart-box {
+/* no floor here: a floor is what makes a screen-bound desk scroll */
+.nsc-desk.nsc-fit .nsc-chart-box,
+.nsc-desk.nsc-fit .nsc-overview > .panel > .nsc-chart-box {
   flex: 1 1 auto;
-  min-height: 220px;
+  min-height: 0;
 }
 
-.app-shell[data-present="on"] .nsc-desk .nsc-chart-panel > *:not(.nsc-chart-box),
-.app-shell[data-present="on"] .nsc-overview > .panel > *:not(.nsc-chart-box) {
+/* interaction hints are noise once the desk is bound to the screen */
+.nsc-desk.nsc-fit .nsc-overview > .panel > p.muted {
+  display: none;
+}
+
+
+.nsc-desk.nsc-fit > .stack > .panel > *:not(.nsc-chart-box),
+.nsc-desk.nsc-fit .nsc-overview > .panel > *:not(.nsc-chart-box) {
   flex: 0 0 auto;
 }
 
-.app-shell[data-present="on"] .nsc-table-panel {
+.nsc-desk.nsc-fit .nsc-table-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.app-shell[data-present="on"] .nsc-table-wrap {
+.nsc-desk.nsc-fit .nsc-table-wrap {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
@@ -6638,9 +6767,14 @@ th {
   opacity: 0.75;
 }
 
-.app-shell.is-idle,
-.app-shell.present-idle {
-  cursor: none;
+.present-hud-btn.on {
+  background: #ff2d55;
+  color: #fff;
+}
+
+.app-shell[data-laser='on'],
+.app-shell[data-laser='on'] * {
+  cursor: none !important;
 }
 
 .app-shell.is-idle .present-hud,
@@ -6651,10 +6785,108 @@ th {
   pointer-events: none;
 }
 
-.app-shell.is-idle .present-edge,
-.app-shell.present-idle .present-hotzone,
-.app-shell.is-idle .present-hotzone {
-  cursor: none;
+.present-laser-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  pointer-events: none;
+}
+
+.present-laser-trail {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.present-laser {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  will-change: transform;
+}
+
+.present-laser.on {
+  opacity: 1;
+}
+
+.present-laser-bloom,
+.present-laser-core,
+.present-laser-spark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.present-laser-bloom {
+  width: 88px;
+  height: 88px;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 1) 0 7%,
+    rgba(255, 230, 150, 0.95) 12%,
+    rgba(255, 50, 70, 0.9) 22%,
+    rgba(255, 0, 40, 0.55) 40%,
+    rgba(255, 0, 40, 0.18) 58%,
+    transparent 72%
+  );
+  box-shadow:
+    0 0 16px 8px rgba(255, 255, 255, 0.95),
+    0 0 32px 16px rgba(255, 40, 70, 1),
+    0 0 64px 28px rgba(255, 0, 40, 0.75);
+}
+
+.present-laser-core {
+  width: 26px;
+  height: 26px;
+  background: radial-gradient(circle, #ffffff 0 46%, #ffe58a 56%, #ff2d4d 68%, #ff0030 80%, transparent 86%);
+  box-shadow:
+    0 0 8px 4px #fff,
+    0 0 16px 8px rgba(255, 255, 220, 1),
+    0 0 26px 12px rgba(255, 30, 70, 1),
+    0 0 44px 18px rgba(255, 0, 40, 0.95);
+}
+
+.present-laser-spark {
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  box-shadow:
+    0 0 6px 3px #fff,
+    0 0 12px 6px rgba(255, 255, 255, 0.95);
+}
+
+.present-laser-pulse {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 22px 8px rgba(255, 20, 60, 0.95);
+  animation: present-laser-pulse 0.55s ease-out forwards;
+}
+
+@keyframes present-laser-pulse {
+  to {
+    transform: scale(5.4);
+    opacity: 0;
+  }
+}
+
+@media (pointer: coarse) {
+  .app-shell[data-laser='on'],
+  .app-shell[data-laser='on'] * {
+    cursor: auto !important;
+  }
+
+  .present-laser-layer {
+    display: none;
+  }
 }
 
 .present-nav-root {

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth';
 import { canAccessPath, canView, api, type Office } from '../api';
 import { PageHeadingProvider } from '../lib/pageHeading';
+import { PresentLaser } from './PresentLaser';
 
 type ThemeId =
   | 'home'
@@ -60,6 +61,7 @@ const links: LinkItem[] = [
 
 const PRIMARY = ['/', '/nsc', '/disco', '/upload'];
 const PRESENT_KEY = 'dro.present';
+const LASER_KEY = 'dro.laser';
 
 function readPresentFlag() {
   try {
@@ -68,6 +70,22 @@ function readPresentFlag() {
     return window.localStorage.getItem(PRESENT_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+function readLaserFlag() {
+  try {
+    return window.localStorage.getItem(LASER_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistLaser(on: boolean) {
+  try {
+    window.localStorage.setItem(LASER_KEY, on ? '1' : '0');
+  } catch {
+    /* ignore quota / private mode */
   }
 }
 
@@ -207,6 +225,13 @@ function Icon({ name }: { name: string }) {
           <path d="M8 21h8M12 17v4" />
         </svg>
       );
+    case 'laser':
+      return (
+        <svg {...common} width={18} height={18}>
+          <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="12" r="7.2" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>
@@ -228,7 +253,9 @@ export function AppShell() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [present, setPresent] = useState(readPresentFlag);
   const [presentNav, setPresentNav] = useState(false);
+  const [laser, setLaser] = useState(() => readPresentFlag() || readLaserFlag());
   const [idle, setIdle] = useState(false);
+  const laserBeforePresent = useRef(readLaserFlag());
   const [offices, setOffices] = useState<Office[]>([]);
   const [heading, setHeading] = useState('');
 
@@ -292,13 +319,24 @@ export function AppShell() {
     }
   }, []);
 
+  const setLaserOn = useCallback((on: boolean) => {
+    setLaser(on);
+    persistLaser(on);
+  }, []);
+
   const setPresentOn = useCallback(
     (on: boolean, opts?: { fullscreen?: boolean }) => {
       setPresent(on);
       persistPresent(on);
+      if (on) {
+        laserBeforePresent.current = laser;
+        setLaserOn(true);
+      } else {
+        setLaserOn(laserBeforePresent.current);
+      }
       if (on && opts?.fullscreen !== false) enterFullscreen();
     },
-    [enterFullscreen]
+    [enterFullscreen, laser, setLaserOn]
   );
 
   useEffect(() => {
@@ -316,6 +354,11 @@ export function AppShell() {
         if (present) {
           e.preventDefault();
           setPresentOn(false);
+          return;
+        }
+        if (laser) {
+          e.preventDefault();
+          setLaserOn(false);
         }
         return;
       }
@@ -329,6 +372,11 @@ export function AppShell() {
         setPresentNav((v) => !v);
         return;
       }
+      if (key === 'l') {
+        e.preventDefault();
+        setLaserOn(!laser);
+        return;
+      }
       if (key === 'f' && present) {
         e.preventDefault();
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -337,7 +385,7 @@ export function AppShell() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [present, presentNav, setPresentOn, enterFullscreen]);
+  }, [laser, present, presentNav, setLaserOn, setPresentOn, enterFullscreen]);
 
   const visible = useMemo(() => {
     if (!user) return [];
@@ -457,6 +505,22 @@ export function AppShell() {
     </button>
   );
 
+  const laserBtn = (where: 'sidebar' | 'masthead' | 'fab') => (
+    <button
+      type="button"
+      className={`${where === 'sidebar' ? 'sidebar-present' : where === 'fab' ? 'present-fab laser-fab' : 'present-btn'} laser-btn${laser ? ' on' : ''}`}
+      aria-pressed={laser}
+      title={laser ? 'Laser off (L)' : 'Laser pointer (L)'}
+      onClick={() => setLaserOn(!laser)}
+    >
+      <span className="nav-icon">
+        <Icon name="laser" />
+      </span>
+      <span>{laser ? 'Laser on' : 'Laser'}</span>
+      {where !== 'fab' && <kbd>L</kbd>}
+    </button>
+  );
+
   const mapMode = location.pathname.startsWith('/powermap');
 
   return (
@@ -464,6 +528,7 @@ export function AppShell() {
       className={`app-shell${mapMode ? ' mode-powermap' : ''}${idle && present && !presentNav ? ' present-idle' : ''}`}
       data-theme={theme}
       data-present={present ? 'on' : 'off'}
+      data-laser={laser ? 'on' : 'off'}
     >
       <header className="app-bar">
         <div
@@ -496,6 +561,7 @@ export function AppShell() {
           </div>
           <nav className="nav">{navList(visible)}</nav>
           <div className="sidebar-footer">
+            {laserBtn('sidebar')}
             {presentBtn('sidebar')}
             {userCard}
           </div>
@@ -511,6 +577,7 @@ export function AppShell() {
               </div>
               <div className="page-masthead-actions">
                 {present && <span className="present-chip">Presenting</span>}
+                {laserBtn('masthead')}
                 {presentBtn('masthead')}
               </div>
             </header>
@@ -524,7 +591,12 @@ export function AppShell() {
         </div>
       </div>
 
-      {mapMode && !present && presentBtn('fab')}
+      {mapMode && !present && (
+        <div className="present-fab-stack">
+          {laserBtn('fab')}
+          {presentBtn('fab')}
+        </div>
+      )}
 
       {present && (
         <>
@@ -543,12 +615,21 @@ export function AppShell() {
             <button type="button" className="present-hud-btn" onClick={() => setPresentNav(true)}>
               Modules <kbd>N</kbd>
             </button>
+            <button
+              type="button"
+              className={`present-hud-btn${laser ? ' on' : ''}`}
+              onClick={() => setLaserOn(!laser)}
+            >
+              Laser <kbd>L</kbd>
+            </button>
             <button type="button" className="present-hud-btn" onClick={() => setPresentOn(false)}>
               Exit <kbd>Esc</kbd>
             </button>
           </div>
         </>
       )}
+
+      <PresentLaser active={laser} />
 
       {presentNav && (
         <div className="present-nav-root" role="dialog" aria-modal="true" aria-label="Modules">

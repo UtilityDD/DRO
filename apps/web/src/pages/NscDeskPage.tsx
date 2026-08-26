@@ -39,7 +39,7 @@ import {
   poleLabel,
   procedureLabel,
 } from '../lib/nsc';
-import { buildNscDesk, overlayNscOffices, type NscChartRow, type NscDeskQuery } from '../lib/nscDesk';
+import { NSC_NO_AGENCY, buildNscDesk, nscEventOn, overlayNscOffices, type NscChartRow, type NscDeskQuery } from '../lib/nscDesk';
 import { nscCacheGetQueue, nscQueueMemGet } from '../lib/nscCache';
 import { ensureNscQueue, prefetchNscQueue, warmNscStamp, type NscQueueSnap } from '../lib/nscQueue';
 import { usePageHeading } from '../lib/pageHeading';
@@ -58,9 +58,12 @@ import {
 } from '../lib/nscOverview';
 
 const PAGE = 80;
-const CHART_H = 320;
-const DELAY_H = 230;
-const TIMELINE_H = 360;
+// chart heights cap themselves against the viewport so a desk keeps to one screen
+const CHART_H = 'min(320px, 32vh)';
+// withheld leads with its timeline, so the office chart there gives height back to it
+const HELD_CHART_H = 'min(250px, 25vh)';
+const DELAY_H = 'min(230px, 26vh)';
+const TIMELINE_H = 'min(310px, 34vh)';
 const DIV_PALETTE = ['#1565c0', '#039be5', '#00838f', '#7c4dff', '#ef6c00', '#c62828'];
 const TOOLTIP_STYLE = {
   background: '#ffffff',
@@ -71,7 +74,7 @@ const TOOLTIP_STYLE = {
 
 type NscDesk = Awaited<ReturnType<typeof api.nscDesk>>;
 type DeskView = 'overview' | 'table';
-type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'time' | 'reason' | 'cases';
+type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'agency' | 'time' | 'reason' | 'cases';
 type DelayBand = 'exclusive' | 'cumulative';
 type TimelineGrain = 'month' | 'year';
 type TimelineSeries = 'office' | 'total';
@@ -120,6 +123,7 @@ const TABLE_GRAINS_PENDING: { id: TableGrain; label: string }[] = [
   { id: 'age', label: 'Age' },
   { id: 'class', label: 'Class' },
   { id: 'work', label: 'Work' },
+  { id: 'agency', label: 'Agency' },
   { id: 'cases', label: 'Cases' },
 ];
 
@@ -129,9 +133,60 @@ const TABLE_GRAINS_HELD: { id: TableGrain; label: string }[] = [
   { id: 'time', label: 'Year' },
   { id: 'class', label: 'Class' },
   { id: 'work', label: 'Work' },
+  { id: 'agency', label: 'Agency' },
   { id: 'reason', label: 'Reason' },
   { id: 'cases', label: 'Cases' },
 ];
+
+type SortDir = 'asc' | 'desc';
+type Sort<K extends string> = { key: K; dir: SortDir } | null;
+
+/** Cycles a column through its first direction, the opposite, then back to the natural order. */
+function nextSort<K extends string>(current: Sort<K>, key: K, first: SortDir): Sort<K> {
+  if (!current || current.key !== key) return { key, dir: first };
+  if (current.dir === first) return { key, dir: first === 'asc' ? 'desc' : 'asc' };
+  return null;
+}
+
+function SortTh<K extends string>({
+  label,
+  col,
+  sort,
+  onSort,
+  num,
+  first = 'desc',
+}: {
+  label: string;
+  col: K;
+  sort: Sort<K>;
+  onSort: (key: K, first: SortDir) => void;
+  num?: boolean;
+  first?: SortDir;
+}) {
+  const on = sort?.key === col;
+  return (
+    <th className={num ? 'num' : undefined} aria-sort={on ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" className={`nsc-sort${on ? ' on' : ''}`} onClick={() => onSort(col, first)}>
+        {label}
+        <i aria-hidden="true">{on ? (sort!.dir === 'asc' ? '▲' : '▼') : '↕'}</i>
+      </button>
+    </th>
+  );
+}
+
+type SumSortKey = 'label' | 'count' | 'non_pole' | 'pole' | 'industrial' | 'proc_b' | 'hot' | 'avg_days';
+
+type CaseSortKey =
+  | 'app'
+  | 'division'
+  | 'ccc'
+  | 'class'
+  | 'work'
+  | 'age'
+  | 'collected'
+  | 'agency'
+  | 'withheld'
+  | 'reason';
 
 function NscSumTable({
   label,
@@ -154,31 +209,46 @@ function NscSumTable({
   customKeys?: Set<string>;
   onPick: (row: NscSumRow) => void;
 }) {
+  const [sort, setSort] = useState<Sort<SumSortKey>>(null);
   const foot = sumFooter(customKeys ? rows.filter((r) => !customKeys.has(r.key)) : rows, total);
-  const show = keepEmpty ? rows : rows.filter((r) => r.count > 0);
+  const show = useMemo(() => {
+    const base = keepEmpty ? rows : rows.filter((r) => r.count > 0);
+    if (!sort) return base;
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...base].sort((a, b) => {
+      if (sort.key === 'label') return a.label.localeCompare(b.label) * dir;
+      const av = sort.key === 'avg_days' ? a.avg_days ?? -1 : a[sort.key];
+      const bv = sort.key === 'avg_days' ? b.avg_days ?? -1 : b[sort.key];
+      return (Number(av) - Number(bv)) * dir;
+    });
+  }, [rows, keepEmpty, sort]);
+  const onSort = (key: SumSortKey, first: SortDir) => setSort((prev) => nextSort(prev, key, first));
+  const cols = pending ? 10 : 9;
   return (
     <div className="table-wrap nsc-table-wrap">
       <table className="nsc-detail nsc-summary">
         <thead>
           <tr>
-            <th>{label}</th>
-            <th className="num">Cases</th>
+            <th className="num nsc-sl">#</th>
+            <SortTh label={label} col="label" sort={sort} onSort={onSort} first="asc" />
+            <SortTh label="Cases" col="count" sort={sort} onSort={onSort} num />
             <th className="num">%</th>
-            <th className="num">Non-pole</th>
-            <th className="num">Pole</th>
-            <th className="num">Ind</th>
-            <th className="num">Proc-B</th>
-            {pending ? <th className="num">&gt;30d</th> : null}
-            <th className="num">Avg d</th>
+            <SortTh label="Non-pole" col="non_pole" sort={sort} onSort={onSort} num />
+            <SortTh label="Pole" col="pole" sort={sort} onSort={onSort} num />
+            <SortTh label="Ind" col="industrial" sort={sort} onSort={onSort} num />
+            <SortTh label="Proc-B" col="proc_b" sort={sort} onSort={onSort} num />
+            {pending ? <SortTh label=">30d" col="hot" sort={sort} onSort={onSort} num /> : null}
+            <SortTh label="Avg d" col="avg_days" sort={sort} onSort={onSort} num />
           </tr>
         </thead>
         <tbody>
-          {show.map((r) => (
+          {show.map((r, i) => (
             <tr
               key={r.key}
               className={selected === r.key ? 'on' : ''}
               onClick={() => onPick(r)}
             >
+              <td className="num nsc-sl">{i + 1}</td>
               <td>
                 {r.label}
                 {customKeys?.has(r.key) ? <span className="nsc-sum-tag">custom</span> : null}
@@ -195,7 +265,7 @@ function NscSumTable({
           ))}
           {!show.length && (
             <tr>
-              <td colSpan={pending ? 9 : 8} className="muted">
+              <td colSpan={cols} className="muted">
                 None in this filter
               </td>
             </tr>
@@ -204,6 +274,7 @@ function NscSumTable({
         {showTotal && show.length > 1 ? (
           <tfoot>
             <tr>
+              <td className="num nsc-sl" />
               <td>Total</td>
               <td className="num">{fmtInt(foot.count)}</td>
               <td className="num">100%</td>
@@ -248,6 +319,34 @@ function useBoxHeight<T extends HTMLElement>() {
     ro.observe(node);
     return () => ro.disconnect();
   }, [node]);
+  return { ref: setNode, height };
+}
+
+/**
+ * Room left for the desk below its own top edge, so it can hold one screen.
+ * Zero on narrow or short viewports, where normal document scrolling is better.
+ */
+function useFitHeight<T extends HTMLElement>(watch: unknown) {
+  const [node, setNode] = useState<T | null>(null);
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (!node) return;
+    const calc = () => {
+      const parent = node.parentElement;
+      const padBottom = parent ? parseFloat(getComputedStyle(parent).paddingBottom) || 0 : 0;
+      const top = node.getBoundingClientRect().top;
+      const room = window.innerHeight - top - padBottom - 4;
+      const ok = window.innerWidth >= 1100 && room >= 520;
+      setHeight(ok ? Math.floor(room) : 0);
+    };
+    calc();
+    window.addEventListener('resize', calc);
+    const t = setTimeout(calc, 200);
+    return () => {
+      window.removeEventListener('resize', calc);
+      clearTimeout(t);
+    };
+  }, [node, watch]);
   return { ref: setNode, height };
 }
 
@@ -372,6 +471,7 @@ export function NscDeskPage() {
   const [poleMin, setPoleMin] = useState<number | ''>('');
   const [poleMax, setPoleMax] = useState<number | ''>('');
   const [procedure, setProcedure] = useState('');
+  const [agency, setAgency] = useState('');
   const [slab, setSlab] = useState('');
   const [band, setBand] = useState<DelayBand>('exclusive');
   const [cumId, setCumId] = useState('');
@@ -384,6 +484,7 @@ export function NscDeskPage() {
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
   const [page, setPage] = useState(0);
+  const [caseSort, setCaseSort] = useState<Sort<CaseSortKey>>(null);
   const [timeKey, setTimeKey] = useState('');
   const [reasonPick, setReasonPick] = useState('');
   const [tlGrain, setTlGrain] = useState<TimelineGrain>('year');
@@ -414,6 +515,7 @@ export function NscDeskPage() {
       pole_min: poleMin,
       pole_max: poleMax,
       procedure,
+      agency,
       slab: delayFilter ? '' : slab,
       delay_min: delayFilter ? delayMin : '',
       delay_max: delayFilter ? delayMax : '',
@@ -421,7 +523,7 @@ export function NscDeskPage() {
       time: timeKey,
       q: qDebounced,
     }),
-    [queue, clock, division, ccc, klass, pole, poleMin, poleMax, procedure, slab, delayFilter, delayMin, delayMax, cutsParam, timeKey, qDebounced]
+    [queue, clock, division, ccc, klass, pole, poleMin, poleMax, procedure, agency, slab, delayFilter, delayMin, delayMax, cutsParam, timeKey, qDebounced]
   );
   const filterQs = useMemo(() => qsOf(deskQuery as Record<string, string | number | undefined>), [deskQuery]);
 
@@ -561,8 +663,44 @@ export function NscDeskPage() {
     return rows.filter((r) => String(r.withheld_reason || '').trim() === reasonPick);
   }, [sourceRows, deskQuery, reasonPick]);
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE));
-  const tablePage = tableRows.slice(page * PAGE, page * PAGE + PAGE);
-  const tableCols = queue === 'withheld' ? 10 : 8;
+  const sortedCases = useMemo(() => {
+    if (!caseSort) return tableRows;
+    const dir = caseSort.dir === 'asc' ? 1 : -1;
+    const text = (r: NscChartRow) => {
+      switch (caseSort.key) {
+        case 'app':
+          return r.application_no || '';
+        case 'division':
+          return r.division_name || r.division_code || '';
+        case 'ccc':
+          return r.ccc_name || r.ccc_code || '';
+        case 'class':
+          return r.consumer_class || '';
+        case 'agency':
+          return r.agency_name || '';
+        case 'reason':
+          return r.withheld_reason || '';
+        case 'collected':
+          return r.collected_on || '';
+        case 'withheld':
+          return r.withheld_on || '';
+        default:
+          return null;
+      }
+    };
+    const num = (r: NscChartRow) => {
+      if (caseSort.key === 'age') return rowDays(r, clock) ?? -1;
+      if (caseSort.key === 'work') return r.pole_count == null ? -1 : Number(r.pole_count);
+      return null;
+    };
+    return [...tableRows].sort((a, b) => {
+      const an = num(a);
+      if (an != null) return (an - (num(b) as number)) * dir;
+      return String(text(a)).localeCompare(String(text(b))) * dir;
+    });
+  }, [tableRows, caseSort, clock]);
+  const tablePage = sortedCases.slice(page * PAGE, page * PAGE + PAGE);
+  const tableCols = queue === 'withheld' ? 12 : 10;
   const classRows = useMemo(() => countClasses(classFacet), [classFacet]);
   const poleCounts = useMemo(() => countPoles(poleFacet), [poleFacet]);
   // every known class keeps its row (at zero) so filters never reflow the panel
@@ -607,6 +745,15 @@ export function NscDeskPage() {
     [sourceRows, deskQuery]
   );
   const reasonFacet = useMemo(() => facetRows(sourceRows, deskQuery), [sourceRows, deskQuery]);
+  const agencyFacet = useMemo(() => facetRows(sourceRows, deskQuery, { agency: '' }), [sourceRows, deskQuery]);
+  const agencySum = useMemo(
+    () =>
+      summarizeBy(agencyFacet, clock, (r) => {
+        const name = String(r.agency_name || '').trim();
+        return name ? { key: name, label: name } : { key: NSC_NO_AGENCY, label: 'Not assigned' };
+      }),
+    [agencyFacet, clock]
+  );
   const divisionSum = useMemo(() => summarizeOffices(divisionFacet, 'division', clock), [divisionFacet, clock]);
   const cccSum = useMemo(() => summarizeOffices(cccFacet, 'ccc', clock), [cccFacet, clock]);
   const bandCuts = useMemo(
@@ -638,19 +785,19 @@ export function NscDeskPage() {
     [poleFacet, clock]
   );
   const timeSum = useMemo(() => {
-    const year = timeKey.slice(0, 4);
-    const showMonths = Boolean(year);
-    const src = showMonths
-      ? timelineSource.filter((r) => yearOfIso(r.withheld_on || r.collected_on) === year)
+    const year = timeKey.length >= 4 ? timeKey.slice(0, 4) : '';
+    const showMonths = timeKey.length === 4 || timeKey.length === 7;
+    const src = year
+      ? timelineSource.filter((r) => yearOfIso(nscEventOn(r)) === year)
       : timelineSource;
     return summarizeBy(src, clock, (r) => {
-      const iso = r.withheld_on || r.collected_on;
+      const iso = nscEventOn(r);
       if (showMonths) {
         const key = monthOfIso(iso) || 'unknown';
         return { key, label: timePhrase(key) || 'Unknown' };
       }
       const key = yearOfIso(iso) || 'unknown';
-      return { key, label: key };
+      return { key, label: key === 'unknown' ? 'Not recorded' : key };
     }).sort((a, b) => a.key.localeCompare(b.key));
   }, [timelineSource, clock, timeKey]);
   const reasonSum = useMemo(
@@ -841,8 +988,11 @@ export function NscDeskPage() {
   const officeBox = useBoxWidth<HTMLDivElement>();
   const timeBox = useBoxWidth<HTMLDivElement>();
   const sideBox = useBoxHeight<HTMLDivElement>();
-  // outside present mode the office panel matches the side column so both bottoms sit on one line
-  const officePanelH = !present && sideBox.height > 0 ? Math.max(Math.round(sideBox.height), 300) : 0;
+  const fitBox = useFitHeight<HTMLDivElement>(`${present}|${queue}|${view}`);
+  // bound to one screen, so charts flex into the space instead of using fixed heights
+  const fit = present || fitBox.height > 0;
+  // otherwise the office panel matches the side column so both bottoms line up
+  const officePanelH = !fit && sideBox.height > 0 ? Math.max(Math.round(sideBox.height), 300) : 0;
   const delayPlan = planLabels(delayBox.width, mixRows.map((r) => r.count), present);
   const officePlan = planLabels(officeBox.width, officeStacks.map((o) => o.total), present);
   const timePlan = planLabels(timeBox.width, timeline.map((p) => Number(p.added || 0)), present);
@@ -883,6 +1033,11 @@ export function NscDeskPage() {
   const commercialCount = kpiClasses.find((c) => c.name.toLowerCase() === 'commercial')?.count || 0;
   const kpiAllOn = !pole && !procedure && !klass;
 
+  const onCaseSort = (key: CaseSortKey, first: SortDir) => {
+    setCaseSort((prev) => nextSort(prev, key, first));
+    setPage(0);
+  };
+
   const clearFilters = () => {
     setDivision('');
     setCcc('');
@@ -891,6 +1046,7 @@ export function NscDeskPage() {
     setPoleMin('');
     setPoleMax('');
     setProcedure('');
+    setAgency('');
     setSlab('');
     setCumId('');
     setDelayMin('');
@@ -902,7 +1058,10 @@ export function NscDeskPage() {
     if (queue === 'withheld') setTlGrain('year');
   };
 
-  const hasFilters = Boolean(division || ccc || klass || pole || procedure || delayActive || timeKey || qDebounced || reasonPick);
+  const hasFilters = Boolean(
+    division || ccc || klass || pole || procedure || agency || delayActive || timeKey || qDebounced || reasonPick
+  );
+  const agencyLabel = agency === NSC_NO_AGENCY ? 'Not assigned' : agency;
   const divName = divisions.find((d) => d.code === division)?.name || division;
   const cccName = cccs.find((c) => c.code === ccc)?.name || ccc;
 
@@ -915,15 +1074,23 @@ export function NscDeskPage() {
     const bits = [words.join(' ')];
     if (division) bits.push(`Div ${divName}`);
     if (ccc) bits.push(`CCC ${cccName}`);
+    if (agency) bits.push(`Agency ${agencyLabel}`);
     const when = timePhrase(timeKey);
     if (when) bits.push(when);
     return bits.join(' · ');
-  }, [queue, klass, pole, procedure, division, ccc, divName, cccName, timeKey]);
+  }, [queue, klass, pole, procedure, division, ccc, divName, cccName, agency, agencyLabel, timeKey]);
 
   usePageHeading(viewTitle);
 
   const openTable = (grain?: TableGrain) => {
     setView('table');
+    if (grain === 'time') {
+      // Year table always starts with the year list; drill into months by picking a year
+      setTimeKey('');
+      setTlGrain('year');
+      setTableGrain('time');
+      return;
+    }
     if (grain) {
       setTableGrain(grain);
       return;
@@ -970,6 +1137,11 @@ export function NscDeskPage() {
       setTableGrain('cases');
       return;
     }
+    if (grain === 'agency') {
+      setAgency((prev) => (prev === row.key ? '' : row.key));
+      setTableGrain('cases');
+      return;
+    }
     if (grain === 'time') {
       if (row.key.length === 4) {
         setTimeKey(row.key);
@@ -995,6 +1167,8 @@ export function NscDeskPage() {
             ? 'Class'
             : tableGrain === 'work'
               ? 'Work'
+              : tableGrain === 'agency'
+                ? 'Agency'
               : tableGrain === 'time'
                 ? timeKey.length === 4
                   ? 'Month'
@@ -1013,6 +1187,8 @@ export function NscDeskPage() {
             ? classSum
             : tableGrain === 'work'
               ? workSum
+              : tableGrain === 'agency'
+                ? agencySum
               : tableGrain === 'time'
                 ? timeSum
                 : tableGrain === 'reason'
@@ -1029,6 +1205,8 @@ export function NscDeskPage() {
             ? klass
             : tableGrain === 'work'
               ? pole
+              : tableGrain === 'agency'
+                ? agency
               : tableGrain === 'time'
                 ? timeKey
                 : tableGrain === 'reason'
@@ -1045,6 +1223,8 @@ export function NscDeskPage() {
             ? classFacet.length
             : tableGrain === 'work'
               ? poleFacet.length
+              : tableGrain === 'agency'
+                ? agencyFacet.length
               : tableGrain === 'time'
                 ? timeSum.reduce((n, r) => n + r.count, 0)
                 : tableGrain === 'reason'
@@ -1052,7 +1232,11 @@ export function NscDeskPage() {
                   : tableRows.length;
 
   return (
-    <div className="stack nsc-desk">
+    <div
+      className={`stack nsc-desk${fit ? ' nsc-fit' : ''}${queue === 'withheld' ? ' nsc-held' : ''}`}
+      ref={fitBox.ref}
+      style={!present && fitBox.height ? { height: fitBox.height } : undefined}
+    >
       <header className="nsc-bar">
         <div className="nsc-bar-actions">
           <div className="nsc-queue" role="tablist" aria-label="NSC queue">
@@ -1161,7 +1345,7 @@ export function NscDeskPage() {
             value={timeKey.slice(0, 4)}
             onChange={(e) => {
               const y = e.target.value;
-              if (!y) showHeldYears();
+              if (!y) setTimeKey('');
               else {
                 setTimeKey(y);
                 setTlGrain('month');
@@ -1290,7 +1474,7 @@ export function NscDeskPage() {
                   Table
                 </button>
               </div>
-              <div ref={delayBox.ref} className="nsc-chart-box" style={{ width: '100%', height: present ? '100%' : DELAY_H }}>
+              <div ref={delayBox.ref} className="nsc-chart-box" style={{ width: '100%', height: fit ? '100%' : DELAY_H }}>
                 <ResponsiveContainer>
                   <BarChart data={mixRows} margin={{ top: delayPlan.top, right: 8, left: 0, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
@@ -1344,17 +1528,10 @@ export function NscDeskPage() {
           )}
 
           {queue === 'withheld' && (
-            <div className="panel nsc-timeline">
+            <div className="panel nsc-chart-panel nsc-timeline">
               <div className="nsc-delay-tools">
                 <div className="nsc-queue" role="tablist" aria-label="Timeline grain">
-                  <button
-                    type="button"
-                    className={tlGrain === 'month' ? 'on' : ''}
-                    onClick={() => {
-                      setTlGrain('month');
-                      if (!timeKey && timelineYears.length) setTimeKey(timelineYears[timelineYears.length - 1]);
-                    }}
-                  >
+                  <button type="button" className={tlGrain === 'month' ? 'on' : ''} onClick={() => setTlGrain('month')}>
                     Month
                   </button>
                   <button type="button" className={tlGrain === 'year' ? 'on' : ''} onClick={showHeldYears}>
@@ -1378,28 +1555,21 @@ export function NscDeskPage() {
                     Running
                   </button>
                 </div>
-                {timelineYears.length > 0 && (
-                  <div className="nsc-queue nsc-year-btns" role="tablist" aria-label="Year zoom">
-                    <button type="button" className={!timeKey && tlGrain === 'year' ? 'on' : ''} onClick={showHeldYears}>
-                      All
-                    </button>
-                    {timelineYears.map((y) => (
-                      <button
-                        key={y}
-                        type="button"
-                        className={timeKey.slice(0, 4) === y ? 'on' : ''}
-                        onClick={() => selectHeldYear(y)}
-                      >
-                        {y.slice(2)}
-                      </button>
-                    ))}
-                  </div>
+                {timeKey && (
+                  <button type="button" className="nsc-chip" onClick={() => setTimeKey('')}>
+                    {timePhrase(timeKey) || timeKey} <span aria-hidden>×</span>
+                  </button>
+                )}
+                {reasons.length > 0 && (
+                  <button type="button" className="nsc-bar-btn" onClick={() => openTable('reason')}>
+                    Reasons
+                  </button>
                 )}
                 <button type="button" className="nsc-bar-btn" onClick={() => openTable('time')}>
                   Table
                 </button>
               </div>
-              <div ref={timeBox.ref} className="nsc-office-chart nsc-chart-box" style={{ width: '100%', height: present ? '100%' : TIMELINE_H }}>
+              <div ref={timeBox.ref} className="nsc-office-chart nsc-chart-box" style={{ width: '100%', height: fit ? '100%' : TIMELINE_H }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={timeline} margin={{ top: Math.max(12, timePlan.top), right: 8, left: 0, bottom: 8 }} onClick={onTimelineClick}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
@@ -1496,7 +1666,11 @@ export function NscDeskPage() {
               <div
                 ref={officeBox.ref}
                 className="nsc-office-chart nsc-chart-box"
-                style={{ width: '100%', minWidth: 0, height: present || officePanelH ? '100%' : CHART_H }}
+                style={{
+                  width: '100%',
+                  minWidth: 0,
+                  height: fit || officePanelH ? '100%' : queue === 'withheld' ? HELD_CHART_H : CHART_H,
+                }}
               >
                 {officeStacks.length ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -1599,66 +1773,50 @@ export function NscDeskPage() {
                   {!classMix.length && <p className="muted">None</p>}
                 </div>
               </div>
-              <div className="panel">
-                <div className="panel-head">
-                  <h2 style={{ marginBottom: 0 }}>Pole / Non-pole</h2>
-                  <button type="button" className="nsc-bar-btn" onClick={() => openTable('work')}>
-                    Table
-                  </button>
-                </div>
-                <div className="nsc-mix">
-                  {poleMix.map((s) => {
-                    const pct = poleFacet.length ? Math.round((1000 * s.count) / poleFacet.length) / 10 : 0;
-                    const on = pole === s.id && poleMin === '';
-                    const empty = !s.count && !on;
-                    return (
-                      <div key={s.id} className={`nsc-mix-row ${on ? 'on' : ''} ${empty ? 'zero' : ''}`}>
-                        <button
-                          type="button"
-                          className="nsc-mix-main"
-                          disabled={empty}
-                          onClick={() => {
-                            if (on) {
-                              setPole('');
-                              setPoleMin('');
-                              setPoleMax('');
-                            } else {
-                              setPole(s.id);
-                              setPoleMin('');
-                              setPoleMax('');
-                            }
-                            setView('overview');
-                          }}
-                        >
-                          <span className="nsc-mix-label">{s.name}</span>
-                          <span className="nsc-mix-track">
-                            <span className="nsc-mix-fill" style={{ width: `${Math.max(pct, s.count ? 1.5 : 0)}%`, background: s.fill }} />
-                          </span>
-                          <span className="nsc-mix-count">
-                            <b>{fmtInt(s.count)}</b>
-                            <em>{pct}%</em>
-                          </span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              {queue === 'withheld' && reasons.length > 0 && (
+              {queue !== 'withheld' && (
                 <div className="panel">
                   <div className="panel-head">
-                    <h2 style={{ marginBottom: 0 }}>Reasons</h2>
-                    <button type="button" className="nsc-bar-btn" onClick={() => openTable('reason')}>
+                    <h2 style={{ marginBottom: 0 }}>Pole / Non-pole</h2>
+                    <button type="button" className="nsc-bar-btn" onClick={() => openTable('work')}>
                       Table
                     </button>
                   </div>
-                  <div className="nsc-reason-list">
-                    {reasons.map((r) => (
-                      <div key={r.name} className="nsc-reason-row">
-                        <span>{r.name}</span>
-                        <strong>{fmtInt(r.count)}</strong>
-                      </div>
-                    ))}
+                  <div className="nsc-mix">
+                    {poleMix.map((s) => {
+                      const pct = poleFacet.length ? Math.round((1000 * s.count) / poleFacet.length) / 10 : 0;
+                      const on = pole === s.id && poleMin === '';
+                      const empty = !s.count && !on;
+                      return (
+                        <div key={s.id} className={`nsc-mix-row ${on ? 'on' : ''} ${empty ? 'zero' : ''}`}>
+                          <button
+                            type="button"
+                            className="nsc-mix-main"
+                            disabled={empty}
+                            onClick={() => {
+                              if (on) {
+                                setPole('');
+                                setPoleMin('');
+                                setPoleMax('');
+                              } else {
+                                setPole(s.id);
+                                setPoleMin('');
+                                setPoleMax('');
+                              }
+                              setView('overview');
+                            }}
+                          >
+                            <span className="nsc-mix-label">{s.name}</span>
+                            <span className="nsc-mix-track">
+                              <span className="nsc-mix-fill" style={{ width: `${Math.max(pct, s.count ? 1.5 : 0)}%`, background: s.fill }} />
+                            </span>
+                            <span className="nsc-mix-count">
+                              <b>{fmtInt(s.count)}</b>
+                              <em>{pct}%</em>
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1724,6 +1882,20 @@ export function NscDeskPage() {
                   </button>
                 </>
               ) : null}
+              {agency ? (
+                <>
+                  <i>/</i>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAgency('');
+                      setTableGrain('agency');
+                    }}
+                  >
+                    Agency {agencyLabel}
+                  </button>
+                </>
+              ) : null}
               <i>/</i>
               <span>{grainTitle}</span>
             </nav>
@@ -1735,11 +1907,17 @@ export function NscDeskPage() {
                   type="button"
                   className={tableGrain === g.id ? 'on' : ''}
                   onClick={() => {
-                    if (g.id === 'time' && tableGrain === 'time' && timeKey) {
-                      setTimeKey(timeKey.length > 4 ? timeKey.slice(0, 4) : '');
+                    if (g.id === 'time') {
+                      // Year tab shows years; a second click while on months steps back to years
+                      if (tableGrain === 'time' && timeKey.length > 4) {
+                        setTimeKey(timeKey.slice(0, 4));
+                        return;
+                      }
+                      setTimeKey('');
+                      setTlGrain('year');
+                      setTableGrain('time');
                       return;
                     }
-                    if (g.id === 'time' && timeKey.length > 4) setTimeKey(timeKey.slice(0, 4));
                     setTableGrain(g.id);
                   }}
                 >
@@ -1816,24 +1994,27 @@ export function NscDeskPage() {
               <table className="nsc-detail">
                 <thead>
                   <tr>
-                    <th>Application</th>
-                    <th>Division</th>
-                    <th>CCC</th>
-                    <th>Class</th>
-                    <th>Work</th>
+                    <th className="num nsc-sl">#</th>
+                    <SortTh label="Application" col="app" sort={caseSort} onSort={onCaseSort} first="asc" />
+                    <SortTh label="Division" col="division" sort={caseSort} onSort={onCaseSort} first="asc" />
+                    <SortTh label="CCC" col="ccc" sort={caseSort} onSort={onCaseSort} first="asc" />
+                    <SortTh label="Class" col="class" sort={caseSort} onSort={onCaseSort} first="asc" />
+                    <SortTh label="Work" col="work" sort={caseSort} onSort={onCaseSort} />
                     <th>Procedure</th>
-                    <th>Age</th>
-                    <th>Collected</th>
-                    {queue === 'withheld' && <th>Withheld</th>}
-                    {queue === 'withheld' && <th>Reason</th>}
+                    <SortTh label="Age" col="age" sort={caseSort} onSort={onCaseSort} />
+                    <SortTh label="Collected" col="collected" sort={caseSort} onSort={onCaseSort} />
+                    <SortTh label="Agency" col="agency" sort={caseSort} onSort={onCaseSort} first="asc" />
+                    {queue === 'withheld' && <SortTh label="Withheld" col="withheld" sort={caseSort} onSort={onCaseSort} />}
+                    {queue === 'withheld' && <SortTh label="Reason" col="reason" sort={caseSort} onSort={onCaseSort} first="asc" />}
                   </tr>
                 </thead>
                 <tbody>
-                  {tablePage.map((r: NscChartRow) => {
+                  {tablePage.map((r: NscChartRow, i: number) => {
                     const age = rowDays(r, clock);
                     const work = workKind(r);
                     return (
-                      <tr key={r.application_no || `${r.ccc_code}-${r.collected_on}`}>
+                      <tr key={r.application_no || `${r.ccc_code}-${r.collected_on}-${i}`}>
+                        <td className="num nsc-sl">{page * PAGE + i + 1}</td>
                         <td>{r.application_no || '—'}</td>
                         <td>{r.division_name || r.division_code || '—'}</td>
                         <td>{r.ccc_name || r.ccc_code || '—'}</td>
@@ -1842,6 +2023,7 @@ export function NscDeskPage() {
                         <td>{procedureLabel(r.procedure, r.applicant_type)}</td>
                         <td className={ageTone(age)}>{age ?? '—'}</td>
                         <td>{fmtDay(r.collected_on)}</td>
+                        <td>{r.agency_name || '—'}</td>
                         {queue === 'withheld' && <td>{fmtDay(r.withheld_on)}</td>}
                         {queue === 'withheld' && <td>{r.withheld_reason || '—'}</td>}
                       </tr>
