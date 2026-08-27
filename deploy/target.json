@@ -1,0 +1,32 @@
+{
+  "product": "DRO Ops",
+  "description": "Darjeeling Region ops PWA — this repo only. Not Smart Line Man (SLM).",
+  "vercel": {
+    "team": "dipankar-das-projects-1592747b",
+    "project": "dro-ops",
+    "forbiddenProjects": [
+      "slm",
+      "slm_web",
+      "mzo-report-pwa",
+      "power-map-v2",
+      "website",
+      "esti-gen",
+      "powerflow-sim",
+      "grid-mind-ai",
+      "mzo-new"
+    ],
+    "forbiddenProductionHosts": [
+      "slm-inky.vercel.app",
+      "smartlineman.in",
+      "www.smartlineman.in",
+      "slmweb-ivory.vercel.app"
+    ]
+  },
+  "git": {
+    "primaryRemote": "origin",
+    "primaryRemoteUrl": "https://github.com/UtilityDD/DRO.git",
+    "mirrorRemote": "slm",
+    "mirrorRemoteUrl": "https://github.com/smartlinemanapp/dro-insight.git",
+    "mirrorNote": "The slm git remote is a DRO code mirror only. It is NOT the SLM app repository and must never be used to pick a Vercel project."
+  }
+}

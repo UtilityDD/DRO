@@ -35,9 +35,8 @@ export function LoginPage() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={onSubmit}>
-        <div className="app-bar-brand" style={{ display: 'grid', marginBottom: '0.75rem' }}>
-          DRO
-        </div>
+        <img className="login-logo" src="/icons/icon-192.png" alt="DRO Insights" />
+        <p className="login-brand">DRO Insights</p>
         <h1>Sign in</h1>
         <p>Darjeeling Region operations</p>
         <label htmlFor="username">Username</label>

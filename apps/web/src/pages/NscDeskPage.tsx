@@ -322,6 +322,17 @@ function useBoxHeight<T extends HTMLElement>() {
   return { ref: setNode, height };
 }
 
+function useWideOverview(minWidth = 1100) {
+  const [wide, setWide] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= minWidth : true));
+  useEffect(() => {
+    const calc = () => setWide(window.innerWidth >= minWidth);
+    calc();
+    window.addEventListener('resize', calc);
+    return () => window.removeEventListener('resize', calc);
+  }, [minWidth]);
+  return wide;
+}
+
 /**
  * Room left for the desk below its own top edge, so it can hold one screen.
  * Zero on narrow or short viewports, where normal document scrolling is better.
@@ -989,10 +1000,11 @@ export function NscDeskPage() {
   const timeBox = useBoxWidth<HTMLDivElement>();
   const sideBox = useBoxHeight<HTMLDivElement>();
   const fitBox = useFitHeight<HTMLDivElement>(`${present}|${queue}|${view}`);
+  const wideOverview = useWideOverview(1100);
   // bound to one screen, so charts flex into the space instead of using fixed heights
   const fit = present || fitBox.height > 0;
-  // otherwise the office panel matches the side column so both bottoms line up
-  const officePanelH = !fit && sideBox.height > 0 ? Math.max(Math.round(sideBox.height), 300) : 0;
+  // match office height to Class/Pole only when they sit side-by-side — never on stacked mobile
+  const officePanelH = !fit && wideOverview && sideBox.height > 0 ? Math.max(Math.round(sideBox.height), 300) : 0;
   const delayPlan = planLabels(delayBox.width, mixRows.map((r) => r.count), present);
   const officePlan = planLabels(officeBox.width, officeStacks.map((o) => o.total), present);
   const timePlan = planLabels(timeBox.width, timeline.map((p) => Number(p.added || 0)), present);

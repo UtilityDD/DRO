@@ -224,12 +224,20 @@ button {
 
 .sidebar-brand {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.7rem;
   min-height: 72px;
   padding: 1.1rem 1.15rem 0.85rem;
   color: var(--sidebar-text-strong);
   border-bottom: 1px solid var(--sidebar-border);
+}
+
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .brand-mark {
@@ -653,12 +661,8 @@ button {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: #0f172a;
-  color: #fff;
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 0.85rem;
-  place-items: center;
+  object-fit: contain;
+  background: transparent;
   flex-shrink: 0;
 }
 
@@ -1050,6 +1054,23 @@ th {
   padding: 1.5rem;
   box-shadow: var(--shadow);
   animation: rise 0.45s ease both;
+}
+
+.login-logo {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  margin: 0 0 0.35rem;
+}
+
+.login-brand {
+  margin: 0 0 0.85rem !important;
+  font-family: var(--display);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text) !important;
 }
 
 .login-card h1 {
@@ -5323,6 +5344,35 @@ th {
   .nsc-filter-card.nsc-filter-office {
     max-width: none;
   }
+
+  /* stacked mobile: each block keeps its own height — Div/CCC must not stretch to Class+Pole */
+  .nsc-overview > .nsc-office-panel {
+    height: auto !important;
+  }
+
+  .nsc-overview > .nsc-office-panel > .nsc-chart-box {
+    flex: 0 0 auto;
+    height: min(280px, 38vh) !important;
+    min-height: 200px;
+  }
+
+  .nsc-desk.nsc-held .nsc-overview > .nsc-office-panel > .nsc-chart-box {
+    height: min(240px, 32vh) !important;
+    min-height: 180px;
+  }
+
+  .nsc-overview-side {
+    align-content: start;
+  }
+
+  .nsc-overview-side > .panel {
+    height: auto;
+  }
+
+  .nsc-overview-side .nsc-mix {
+    display: grid;
+    gap: 0.35rem;
+  }
 }
 
 .nsc-filter-card select,
@@ -6277,8 +6327,7 @@ th {
 [data-theme="admin"] { --item-accent: #94a3b8; }
 
 .login-card .app-bar-brand {
-  background: #0f172a;
-  color: #fff;
+  background: transparent;
 }
 
 .crm-title h2,
@@ -6823,57 +6872,52 @@ th {
 }
 
 .present-laser-bloom {
-  width: 88px;
-  height: 88px;
+  width: 16px;
+  height: 16px;
   background: radial-gradient(
     circle,
-    rgba(255, 255, 255, 1) 0 7%,
-    rgba(255, 230, 150, 0.95) 12%,
-    rgba(255, 50, 70, 0.9) 22%,
-    rgba(255, 0, 40, 0.55) 40%,
-    rgba(255, 0, 40, 0.18) 58%,
-    transparent 72%
+    #ffffff 0 22%,
+    #ffe566 38%,
+    #ff2048 58%,
+    rgba(255, 0, 40, 0.7) 78%,
+    transparent 100%
   );
   box-shadow:
-    0 0 16px 8px rgba(255, 255, 255, 0.95),
-    0 0 32px 16px rgba(255, 40, 70, 1),
-    0 0 64px 28px rgba(255, 0, 40, 0.75);
+    0 0 3px 1px #fff,
+    0 0 7px 2px rgba(255, 30, 60, 1);
 }
 
 .present-laser-core {
-  width: 26px;
-  height: 26px;
-  background: radial-gradient(circle, #ffffff 0 46%, #ffe58a 56%, #ff2d4d 68%, #ff0030 80%, transparent 86%);
+  width: 6px;
+  height: 6px;
+  background: #fff;
   box-shadow:
-    0 0 8px 4px #fff,
-    0 0 16px 8px rgba(255, 255, 220, 1),
-    0 0 26px 12px rgba(255, 30, 70, 1),
-    0 0 44px 18px rgba(255, 0, 40, 0.95);
+    0 0 2px 1px #fff,
+    0 0 5px 2px rgba(255, 255, 255, 1),
+    0 0 8px 3px rgba(255, 20, 60, 1);
 }
 
 .present-laser-spark {
-  width: 8px;
-  height: 8px;
+  width: 3px;
+  height: 3px;
   background: #fff;
-  box-shadow:
-    0 0 6px 3px #fff,
-    0 0 12px 6px rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 2px 1px #fff;
 }
 
 .present-laser-pulse {
   position: absolute;
-  width: 18px;
-  height: 18px;
-  margin: -9px 0 0 -9px;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
   border-radius: 50%;
-  border: 3px solid #fff;
-  box-shadow: 0 0 22px 8px rgba(255, 20, 60, 0.95);
-  animation: present-laser-pulse 0.55s ease-out forwards;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 6px 2px rgba(255, 20, 60, 1);
+  animation: present-laser-pulse 0.45s ease-out forwards;
 }
 
 @keyframes present-laser-pulse {
   to {
-    transform: scale(5.4);
+    transform: scale(3.2);
     opacity: 0;
   }
 }

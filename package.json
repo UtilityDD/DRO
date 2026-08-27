@@ -12,6 +12,8 @@
     "dev:server": "npm run dev --prefix server",
     "dev:web": "npm run dev --prefix apps/web",
     "build": "node scripts/vercel-build.js",
+    "deploy:verify": "node scripts/verify-deploy-target.js",
+    "deploy:prod": "node scripts/verify-deploy-target.js --strict && npx --yes vercel@59.5.0 deploy --prod --yes",
     "start": "npm start --prefix server",
     "seed": "node scripts/seed_offices.js",
     "supabase:status": "npm run supabase:status --prefix server",

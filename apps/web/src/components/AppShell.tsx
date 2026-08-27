@@ -536,8 +536,8 @@ export function AppShell() {
           role={present ? 'button' : undefined}
           onClick={present ? () => setPresentNav(true) : undefined}
         >
-          <div className="app-bar-brand">DRO</div>
-          <h1>{heading || current?.label || 'DRO Ops'}</h1>
+          <img className="app-bar-brand" src="/icons/icon-192.png" alt="" />
+          <h1>{heading || current?.label || 'DRO Insights'}</h1>
         </div>
         <button
           type="button"
@@ -556,8 +556,11 @@ export function AppShell() {
       <div className="app-body">
         <aside className="sidebar desktop-only">
           <div className="sidebar-brand">
-            <div className="brand-mark">DRO</div>
-            <div className="brand-sub">Actionable Insight</div>
+            <img className="brand-logo" src="/icons/icon-192.png" alt="" />
+            <div>
+              <div className="brand-mark">DRO Insights</div>
+              <div className="brand-sub">Actionable Insight</div>
+            </div>
           </div>
           <nav className="nav">{navList(visible)}</nav>
           <div className="sidebar-footer">
@@ -572,7 +575,7 @@ export function AppShell() {
             <header className="page-masthead desktop-only">
               <div className="page-masthead-copy">
                 <div className="page-masthead-kicker">{groupLabel}</div>
-                <h1>{heading || current?.label || 'DRO Ops'}</h1>
+                <h1>{heading || current?.label || 'DRO Insights'}</h1>
                 <p>{scope}</p>
               </div>
               <div className="page-masthead-actions">
@@ -636,8 +639,11 @@ export function AppShell() {
           <button type="button" className="present-nav-back" aria-label="Close" onClick={() => setPresentNav(false)} />
           <aside className="present-nav-panel">
             <div className="sidebar-brand">
-              <div className="brand-mark">DRO</div>
-              <div className="brand-sub">N to toggle · Esc to close</div>
+              <img className="brand-logo" src="/icons/icon-192.png" alt="" />
+              <div>
+                <div className="brand-mark">DRO Insights</div>
+                <div className="brand-sub">N to toggle · Esc to close</div>
+              </div>
             </div>
             <nav className="nav">{navList(visible, () => setPresentNav(false))}</nav>
           </aside>
