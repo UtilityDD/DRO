@@ -34,7 +34,7 @@ DRO does **not** use the MZO Supabase project. Point it at a project you create:
 
 Full steps: [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md)
 
-**Deploying to Vercel:** read [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) first — DRO uses project **`dro-ops`**, never **`slm`** / `smartlineman.in`.
+**Deploying to Vercel:** read [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) first — live site is **https://dro-insight.vercel.app/**; never deploy to **`slm`** / `smartlineman.in`, and do not create a substitute project under another account.
 
 Check: `http://localhost:8787/api/health` → `"store":"supabase"` when connected.
 

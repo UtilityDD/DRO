@@ -20,17 +20,23 @@ function loadTarget() {
 
 function main() {
   const target = loadTarget();
-  const expected = String(target.vercel.project || '').trim();
+  const expected = target.vercel.project == null ? '' : String(target.vercel.project).trim();
+  const productionUrl = String(target.vercel.productionUrl || 'https://dro-insight.vercel.app/');
   const forbidden = (target.vercel.forbiddenProjects || []).map((n) => String(n).toLowerCase());
 
   console.log(`[deploy:verify] Product: ${target.product}`);
-  console.log(`[deploy:verify] Expected Vercel project: ${expected}`);
+  console.log(`[deploy:verify] Canonical URL: ${productionUrl}`);
+  console.log(`[deploy:verify] Expected Vercel project: ${expected || '(not set — ask user / set deploy/target.json)'}`);
   console.log(`[deploy:verify] Forbidden Vercel projects: ${forbidden.join(', ')}`);
   console.log(`[deploy:verify] Never deploy to: ${(target.vercel.forbiddenProductionHosts || []).join(', ')}`);
   console.log('');
 
   if (!expected) {
-    console.error('[deploy:verify] deploy/target.json is missing vercel.project');
+    const msg =
+      '[deploy:verify] vercel.project is not set in deploy/target.json.\n' +
+      `  Log into the Vercel account that owns ${productionUrl}, set vercel.project to that project name, then link.\n` +
+      '  Do not create a new project under another team. See docs/DEPLOYMENT.md';
+    console.error(msg);
     process.exit(1);
   }
 
@@ -58,7 +64,7 @@ function main() {
     if (forbidden.includes(lower)) {
       console.error('');
       console.error(`[deploy:verify] BLOCKED: this folder is linked to forbidden project "${linkedName}".`);
-      console.error(`[deploy:verify] That project serves production sites such as smartlineman.in — NOT DRO.`);
+      console.error('[deploy:verify] That is not the DRO production project (dro-insight.vercel.app).');
       console.error('');
       console.error(`Relink safely:\n  Remove-Item -Recurse -Force .vercel\n  npx vercel link --project ${expected} --yes`);
       console.error('');

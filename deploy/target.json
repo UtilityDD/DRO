@@ -2,8 +2,9 @@
   "product": "DRO Ops",
   "description": "Darjeeling Region ops PWA — this repo only. Not Smart Line Man (SLM).",
   "vercel": {
-    "team": "dipankar-das-projects-1592747b",
-    "project": "dro-ops",
+    "productionUrl": "https://dro-insight.vercel.app/",
+    "project": null,
+    "projectNote": "Set vercel.project to the Vercel project that serves dro-insight.vercel.app after logging into the correct account. Do not invent a new project under another team.",
     "forbiddenProjects": [
       "slm",
       "slm_web",
@@ -13,13 +14,15 @@
       "esti-gen",
       "powerflow-sim",
       "grid-mind-ai",
-      "mzo-new"
+      "mzo-new",
+      "dro-ops"
     ],
     "forbiddenProductionHosts": [
       "slm-inky.vercel.app",
       "smartlineman.in",
       "www.smartlineman.in",
-      "slmweb-ivory.vercel.app"
+      "slmweb-ivory.vercel.app",
+      "dro-ops.vercel.app"
     ]
   },
   "git": {
