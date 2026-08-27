@@ -62,9 +62,15 @@ const links: LinkItem[] = [
 const PRIMARY = ['/', '/nsc', '/disco', '/upload'];
 const PRESENT_KEY = 'dro.present';
 const LASER_KEY = 'dro.laser';
+const MOBILE_MQ = '(max-width: 960px)';
+
+function isMobileView() {
+  return typeof window !== 'undefined' && window.matchMedia(MOBILE_MQ).matches;
+}
 
 function readPresentFlag() {
   try {
+    if (isMobileView()) return false;
     const q = new URLSearchParams(window.location.search).get('present');
     if (q === '1' || q === 'true' || q === 'on') return true;
     return window.localStorage.getItem(PRESENT_KEY) === '1';
@@ -326,6 +332,7 @@ export function AppShell() {
 
   const setPresentOn = useCallback(
     (on: boolean, opts?: { fullscreen?: boolean }) => {
+      if (on && isMobileView()) return;
       setPresent(on);
       persistPresent(on);
       if (on) {
@@ -338,6 +345,16 @@ export function AppShell() {
     },
     [enterFullscreen, laser, setLaserOn]
   );
+
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_MQ);
+    const apply = () => {
+      if (mq.matches) setPresentOn(false);
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [setPresentOn]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -492,7 +509,7 @@ export function AppShell() {
   const presentBtn = (where: 'sidebar' | 'masthead' | 'fab') => (
     <button
       type="button"
-      className={`${where === 'sidebar' ? 'sidebar-present' : where === 'fab' ? 'present-fab' : 'present-btn'}${present ? ' on' : ''}`}
+      className={`${where === 'sidebar' ? 'sidebar-present' : where === 'fab' ? 'present-fab desktop-only' : 'present-btn'}${present ? ' on' : ''}`}
       aria-pressed={present}
       title={present ? 'Exit present (Esc)' : 'Present on a big screen (P)'}
       onClick={() => setPresentOn(!present)}
@@ -539,18 +556,6 @@ export function AppShell() {
           <img className="app-bar-brand" src="/icons/icon-192.png" alt="" />
           <h1>{heading || current?.label || 'DRO Insights'}</h1>
         </div>
-        <button
-          type="button"
-          className={`icon-btn ${present ? 'on' : ''}`}
-          aria-pressed={present}
-          aria-label={present ? 'Exit present mode' : 'Present mode'}
-          onClick={() => setPresentOn(!present)}
-        >
-          <Icon name="present" />
-        </button>
-        <button type="button" className="icon-btn present-hide" aria-label="Sign out" onClick={() => logout()}>
-          {logoutIcon}
-        </button>
       </header>
 
       <div className="app-body">

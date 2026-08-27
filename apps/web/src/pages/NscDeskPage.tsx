@@ -333,57 +333,19 @@ function useBoxWidth<T extends HTMLElement>() {
   return { ref: setNode, width };
 }
 
-function useBoxHeight<T extends HTMLElement>() {
-  const [node, setNode] = useState<T | null>(null);
-  const [height, setHeight] = useState(0);
-  useEffect(() => {
-    if (!node) return;
-    setHeight(node.getBoundingClientRect().height);
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setHeight(node.getBoundingClientRect().height));
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, [node]);
-  return { ref: setNode, height };
-}
-
+/** Two-column overview + one-screen desk. Phone/stacked layouts keep document scroll. */
 function useWideOverview(minWidth = 1100) {
-  const [wide, setWide] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= minWidth : true));
+  const [wide, setWide] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(`(min-width: ${minWidth}px)`).matches : false
+  );
   useEffect(() => {
-    const calc = () => setWide(window.innerWidth >= minWidth);
-    calc();
-    window.addEventListener('resize', calc);
-    return () => window.removeEventListener('resize', calc);
+    const mq = window.matchMedia(`(min-width: ${minWidth}px)`);
+    const apply = () => setWide(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
   }, [minWidth]);
   return wide;
-}
-
-/**
- * Room left for the desk below its own top edge, so it can hold one screen.
- * Zero on narrow or short viewports, where normal document scrolling is better.
- */
-function useFitHeight<T extends HTMLElement>(watch: unknown) {
-  const [node, setNode] = useState<T | null>(null);
-  const [height, setHeight] = useState(0);
-  useEffect(() => {
-    if (!node) return;
-    const calc = () => {
-      const parent = node.parentElement;
-      const padBottom = parent ? parseFloat(getComputedStyle(parent).paddingBottom) || 0 : 0;
-      const top = node.getBoundingClientRect().top;
-      const room = window.innerHeight - top - padBottom - 4;
-      const ok = window.innerWidth >= 1100 && room >= 520;
-      setHeight(ok ? Math.floor(room) : 0);
-    };
-    calc();
-    window.addEventListener('resize', calc);
-    const t = setTimeout(calc, 200);
-    return () => {
-      window.removeEventListener('resize', calc);
-      clearTimeout(t);
-    };
-  }, [node, watch]);
-  return { ref: setNode, height };
 }
 
 function usePresentMode() {
@@ -1385,13 +1347,9 @@ export function NscDeskPage() {
   const delayBox = useBoxWidth<HTMLDivElement>();
   const officeBox = useBoxWidth<HTMLDivElement>();
   const timeBox = useBoxWidth<HTMLDivElement>();
-  const sideBox = useBoxHeight<HTMLDivElement>();
-  const fitBox = useFitHeight<HTMLDivElement>(`${present}|${queue}|${view}`);
   const wideOverview = useWideOverview(1100);
-  // bound to one screen, so charts flex into the space instead of using fixed heights
-  const fit = present || fitBox.height > 0;
-  // match office height to Class/Pole only when they sit side-by-side — never on stacked mobile
-  const officePanelH = !fit && wideOverview && sideBox.height > 0 ? Math.max(Math.round(sideBox.height), 300) : 0;
+  // desktop / present: CSS pins the desk to the viewport; charts flex, tables scroll inside
+  const fit = present || wideOverview;
   const delayPlan = planLabels(delayBox.width, mixRows.map((r) => r.count), present);
   const officePlan = planLabels(officeBox.width, officeStacks.map((o) => o.total), present);
   const timePlan = planLabels(timeBox.width, timeline.map((p) => Number(p.added || 0)), present);
@@ -1657,8 +1615,6 @@ export function NscDeskPage() {
   return (
     <div
       className={`stack nsc-desk${fit ? ' nsc-fit' : ''}${queue === 'withheld' ? ' nsc-held' : ''}`}
-      ref={fitBox.ref}
-      style={!present && fitBox.height ? { height: fitBox.height } : undefined}
     >
       <header className="nsc-bar">
         <div className="nsc-bar-actions">
@@ -2058,7 +2014,7 @@ export function NscDeskPage() {
           )}
 
           <div className="nsc-overview">
-            <div className="panel nsc-chart-panel nsc-office-panel" style={officePanelH ? { height: officePanelH } : undefined}>
+            <div className="panel nsc-chart-panel nsc-office-panel">
               <div className="panel-head">
                 <h2 style={{ marginBottom: 0 }}>{officeGrain === 'ccc' ? 'CCC' : 'Division'}</h2>
                 <div className="nsc-chart-tools">
@@ -2100,7 +2056,7 @@ export function NscDeskPage() {
                 style={{
                   width: '100%',
                   minWidth: 0,
-                  height: fit || officePanelH ? '100%' : queue === 'withheld' ? HELD_CHART_H : CHART_H,
+                  height: fit ? '100%' : queue === 'withheld' ? HELD_CHART_H : CHART_H,
                 }}
               >
                 {officeStacks.length ? (
@@ -2166,7 +2122,7 @@ export function NscDeskPage() {
               <p className="muted tight">Click an office to filter the other charts. Click it again to clear.</p>
             </div>
 
-            <div className="nsc-overview-side" ref={sideBox.ref}>
+            <div className="nsc-overview-side">
               <div className="panel">
                 <div className="panel-head">
                   <h2 style={{ marginBottom: 0 }}>Class</h2>
