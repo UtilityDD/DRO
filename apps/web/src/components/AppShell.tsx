@@ -407,18 +407,21 @@ export function AppShell() {
   const setPresentOn = useCallback(
     (on: boolean, opts?: { fullscreen?: boolean }) => {
       if (on && isMobileView()) return;
-      setPresent(on);
-      persistPresent(on);
-      if (on) {
-        laserBeforePresent.current = laser;
-        appearanceBeforePresent.current = appearance;
-        setLaserOn(true);
-        setAppearanceOn('dark');
-      } else {
-        setLaserOn(laserBeforePresent.current);
-        setAppearanceOn(appearanceBeforePresent.current);
-      }
-      if (on && opts?.fullscreen !== false) enterFullscreen();
+      setPresent((currently) => {
+        if (currently === on) return currently;
+        persistPresent(on);
+        if (on) {
+          laserBeforePresent.current = laser;
+          appearanceBeforePresent.current = appearance;
+          setLaserOn(true);
+          setAppearanceOn('dark');
+        } else {
+          setLaserOn(laserBeforePresent.current);
+          setAppearanceOn(appearanceBeforePresent.current);
+        }
+        if (on && opts?.fullscreen !== false) enterFullscreen();
+        return on;
+      });
     },
     [appearance, enterFullscreen, laser, setAppearanceOn, setLaserOn]
   );
@@ -629,6 +632,7 @@ export function AppShell() {
         type="button"
         className={`${where === 'sidebar' ? 'sidebar-present' : where === 'fab' ? 'present-fab' : where === 'sheet' ? 'btn secondary' : 'present-btn'} appearance-btn${dark ? ' on' : ''}`}
         aria-pressed={dark}
+        aria-label={dark ? 'Light theme' : 'Dark theme'}
         title={dark ? 'Light theme (D)' : 'Dark theme (D)'}
         onClick={() => {
           const next = dark ? 'light' : 'dark';

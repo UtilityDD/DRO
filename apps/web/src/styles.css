@@ -990,6 +990,7 @@ button {
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
+  flex: 1;
   padding: 0 0.65rem;
 }
 
@@ -1380,63 +1381,241 @@ th {
   min-height: 100dvh;
   display: grid;
   place-items: center;
+  position: relative;
+  overflow: hidden;
   padding: max(1rem, var(--safe-top)) 1rem max(1.25rem, var(--safe-bottom));
+  background: #0b3d5c;
 }
 
-.login-card {
-  width: min(400px, 100%);
+.login-backdrop {
+  position: absolute;
+  inset: -18%;
+  background: url('/icons/icon-512.png') center / cover no-repeat;
+  filter: blur(36px) saturate(1.2);
+  opacity: 0.55;
+  transform: scale(1.12);
+  pointer-events: none;
+}
+
+html[data-appearance='dark'] .login-backdrop {
+  opacity: 0.32;
+  filter: blur(40px) saturate(1.05) brightness(0.72);
+}
+
+.login-shell {
+  position: relative;
+  isolation: isolate;
+  width: min(960px, 100%);
+  min-height: min(580px, 86dvh);
+  display: grid;
+  grid-template-columns: 1.12fr minmax(300px, 1fr);
+  border-radius: 28px;
+  overflow: hidden;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 1.5rem;
-  box-shadow: var(--shadow);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 28px 80px rgba(8, 24, 42, 0.35);
   animation: rise 0.45s ease both;
 }
 
-.login-logo {
-  display: block;
-  width: 72px;
-  height: 72px;
-  object-fit: contain;
-  margin: 0 0 0.35rem;
+.login-art-wrap {
+  position: relative;
+  min-height: 100%;
+  background: #3aa0e4;
+  overflow: hidden;
+}
+
+.login-art {
+  position: absolute;
+  top: -14%;
+  left: -11%;
+  width: 122%;
+  height: 116%;
+  object-fit: cover;
+  object-position: center 86%;
+  pointer-events: none;
+}
+
+.login-art-fade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 58%, var(--surface) 100%);
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: auto;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2rem 1.85rem 1.65rem;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: none;
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-left: 1px solid var(--border);
+}
+
+html[data-appearance='dark'] .login-card {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.login-shell-boot .login-card {
+  align-items: center;
+  text-align: center;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+.login-copy {
+  margin-bottom: 1.25rem;
 }
 
 .login-brand {
-  margin: 0 0 0.85rem !important;
+  margin: 0 0 0.45rem;
   font-family: var(--display);
-  font-size: 0.92rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--text) !important;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 
 .login-card h1 {
   font-family: var(--display);
   margin: 0;
-  font-size: 2rem;
+  font-size: clamp(1.7rem, 1.4rem + 1.2vw, 2.15rem);
+  letter-spacing: -0.03em;
+  color: var(--text);
 }
 
-.login-card p {
+.login-lead {
   color: var(--muted);
-  margin: 0.35rem 0 1.15rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
 }
 
-.login-card label {
+.login-card p.error {
+  margin: 0.15rem 0 0.55rem;
+}
+
+.login-field {
+  position: relative;
   display: block;
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin-bottom: 0.35rem;
+  margin: 0 0 0.85rem;
 }
 
-.login-card input {
+.login-field span {
+  position: absolute;
+  left: 0.85rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.92rem;
+  font-weight: 550;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.login-card .login-field input {
   width: 100%;
-  margin-bottom: 0.85rem;
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+.login-field input:not(:placeholder-shown) + span {
+  display: none;
+}
+
+.login-card input:focus {
+  outline: 2px solid rgba(var(--accent-rgb), 0.45);
+  outline-offset: 1px;
+  border-color: var(--accent);
 }
 
 .login-card .btn {
   width: 100%;
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
   min-height: 48px;
+}
+
+@media (max-width: 820px) {
+  .login-page {
+    display: block;
+    padding: 0;
+    overflow: auto;
+    overflow-x: hidden;
+    background: var(--surface);
+  }
+
+  .login-backdrop {
+    display: none;
+  }
+
+  .login-shell {
+    width: 100%;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    animation: none;
+  }
+
+  .login-art-wrap {
+    position: relative;
+    flex: 0 0 auto;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    min-height: 0;
+    background: #3aa0e4;
+    overflow: hidden;
+  }
+
+  .login-art-fade {
+    display: none;
+  }
+
+  .login-card {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+    margin: 0;
+    padding: 1.2rem 1.25rem calc(1.3rem + var(--safe-bottom));
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--surface);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  html[data-appearance='dark'] .login-card {
+    background: var(--surface);
+  }
+
+  .login-copy {
+    display: none;
+  }
+
+  .login-shell-boot .login-card {
+    justify-content: center;
+    min-height: 10rem;
+  }
+
+  .login-field {
+    margin-bottom: 0.75rem;
+  }
+
+  .login-card .btn {
+    margin-top: 0.35rem;
+  }
 }
 
 .hint {
@@ -2081,10 +2260,10 @@ th {
     display: grid !important;
     grid-template-columns: repeat(5, 1fr);
     gap: 0.1rem;
-    background: rgba(255, 255, 255, 0.96);
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
     backdrop-filter: blur(18px);
     border-top: 1px solid var(--border);
-    box-shadow: 0 -8px 24px rgba(30, 64, 120, 0.1);
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.12);
   }
 
   .bottom-nav a,
@@ -2129,7 +2308,12 @@ th {
 
   .bottom-nav a:active,
   .bottom-more:active {
-    background: var(--surface);
+    background: var(--bg-soft);
+  }
+
+  .app-shell[data-appearance='dark'] .bottom-nav {
+    background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
   }
 
   .sheet-root {
@@ -2278,11 +2462,6 @@ th {
     margin-top: 0.75rem;
     padding-top: 0.65rem;
     border-top: 1px solid var(--border);
-  }
-
-  .login-card {
-    border-radius: 18px;
-    padding: 1.35rem 1.15rem;
   }
 
   .home-actions .btn {
