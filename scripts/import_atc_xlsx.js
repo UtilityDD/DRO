@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const XLSX = require(path.join(__dirname, '..', 'server', 'node_modules', 'xlsx'));
-const { parseAtcWorkbook } = require('../server/src/atc_parse');
+const { parseAtcWorkbook, mergeAtcSnapshots } = require('../server/src/atc_parse');
 const { writeCollectionSync, readCollectionSync, nextId, initStore } = require('../server/src/store');
 
 const DEFAULT =
@@ -26,32 +26,17 @@ async function main() {
   console.log('Period:', parsed.period_label, 'FY target:', parsed.target_fy, 'counts', parsed.counts);
 
   const existing = readCollectionSync('atc_snapshots', []);
-  const keyFn = (r) => `${r.period_label}|${r.source_format || 'IA'}|${r.office_code}`;
-  const index = new Map(existing.map((r) => [keyFn(r), r]));
-  let upserted = 0;
   const now = new Date().toISOString();
-
-  for (const row of parsed.rows) {
-    const mapped = {
-      ...row,
-      batch_id: null,
-      updated_at: now,
-      created_at: now,
-    };
-    const key = keyFn(mapped);
-    const prev = index.get(key);
-    if (prev) {
-      Object.assign(prev, mapped, { id: prev.id, created_at: prev.created_at || now });
-    } else {
-      mapped.id = nextId(existing);
-      existing.push(mapped);
-      index.set(key, mapped);
-    }
-    upserted += 1;
-  }
-
+  const incoming = parsed.rows.map((row) => ({
+    ...row,
+    batch_id: null,
+    updated_at: now,
+  }));
+  const { applied, skippedHeader } = mergeAtcSnapshots(existing, incoming, { now, nextId });
   writeCollectionSync('atc_snapshots', existing);
-  console.log(`Upserted ${upserted} ATC rows → server/data/atc_snapshots.json (total ${existing.length})`);
+  console.log(
+    `Upserted ${applied.length} ATC rows (${skippedHeader} header months kept as existing achievement) → server/data/atc_snapshots.json (total ${existing.length})`
+  );
 }
 
 main().catch((e) => {

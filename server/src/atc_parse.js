@@ -489,7 +489,7 @@ function parseFormatIA(aoa, opts = {}) {
       period_sort: periodSortKey(periodCur || period_label),
       target_fy,
       source_format: 'IA',
-      basis_label: 'Format-IA (CCC path)',
+      basis_label: 'Excl. Bulk (CCC)',
       office_type,
       office_code: code,
       office_name,
@@ -533,7 +533,7 @@ function parseFormatIA(aoa, opts = {}) {
 }
 
 /**
- * Format-IB: Division / Region losses (different basis — typically excl. bulk path).
+ * Format-IB: Division / Region losses (Incl. Bulk basis — no CCC rows).
  */
 function parseFormatIB(aoa, opts = {}) {
   const period_label = opts.period_label || findPeriodInSheet(aoa) || '';
@@ -594,7 +594,7 @@ function parseFormatIB(aoa, opts = {}) {
       period_sort: periodSortKey(periodCur || period_label),
       target_fy,
       source_format: 'IB',
-      basis_label: 'Format-IB (Div/Reg excl. bulk path)',
+      basis_label: 'Incl. Bulk (Division)',
       office_type,
       office_code: code,
       office_name,
@@ -704,6 +704,8 @@ function parseAtcWorkbook(wb, sheetToAoa, opts = {}) {
 
   const scoped = all.filter((r) => isDroScopedOffice(r.office_code));
   const filtered_out = all.length - scoped.length;
+  const achievement = scoped.filter((r) => !isHeaderMonthPoint(r));
+  const header = scoped.filter(isHeaderMonthPoint);
 
   return {
     period_label,
@@ -713,8 +715,99 @@ function parseAtcWorkbook(wb, sheetToAoa, opts = {}) {
     counts: {
       IA: scoped.filter((r) => r.source_format === 'IA').length,
       IB: scoped.filter((r) => r.source_format === 'IB').length,
+      achievement: achievement.length,
+      header_month: header.length,
     },
   };
+}
+
+function atcNaturalKey(r) {
+  const fmt = String(r?.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
+  return `${String(r?.period_label || '')}|${fmt}|${String(r?.office_code || '')}`;
+}
+
+function isHeaderMonthPoint(r) {
+  return String(r?.point_source || '') === 'header_month';
+}
+
+/** Full circular row — never overwrite with a YoY / prior-March stub. */
+function isFullAchievement(r) {
+  if (!r) return false;
+  if (isHeaderMonthPoint(r)) return false;
+  if (String(r.point_source || '') === 'achievement') return true;
+  return [r.input_mu, r.demand_mu, r.collection_mu, r.consumer_count].some((v) => v != null && v !== '');
+}
+
+function formatAtcBasis(fmt) {
+  return String(fmt || 'IA').toUpperCase() === 'IB' ? 'Incl. Bulk (Division)' : 'Excl. Bulk (CCC)';
+}
+
+/**
+ * One row per period|format|office. Achievement beats a header stub; later
+ * rows win among the same class. Postgres ON CONFLICT cannot update a key twice.
+ */
+function dedupeAtcRows(rows) {
+  const map = new Map();
+  for (const r of rows || []) {
+    if (!r || !r.office_code || !r.period_label) continue;
+    const key = atcNaturalKey(r);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, r);
+      continue;
+    }
+    if (isHeaderMonthPoint(r) && isFullAchievement(prev)) continue;
+    if (isHeaderMonthPoint(prev) && !isHeaderMonthPoint(r)) {
+      map.set(key, r);
+      continue;
+    }
+    map.set(key, r);
+  }
+  return [...map.values()];
+}
+
+/**
+ * Merge incoming ATC rows. Header-month points fill gaps only — they never
+ * replace a full achievement snapshot for the same period|format|office.
+ */
+function mergeAtcSnapshots(existing, incoming, opts = {}) {
+  const now = opts.now || new Date().toISOString();
+  const idFn =
+    opts.nextId ||
+    ((rows) => rows.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0) + 1);
+  const rows = Array.isArray(existing) ? existing : [];
+  const index = new Map(rows.map((r) => [atcNaturalKey(r), r]));
+  const appliedByKey = new Map();
+  let skippedHeader = 0;
+
+  for (const mapped of dedupeAtcRows(incoming)) {
+    if (!mapped || !mapped.office_code || !mapped.period_label) continue;
+    const key = atcNaturalKey(mapped);
+    const prev = index.get(key);
+    if (isHeaderMonthPoint(mapped) && isFullAchievement(prev)) {
+      skippedHeader += 1;
+      continue;
+    }
+    if (prev) {
+      Object.assign(prev, mapped, {
+        id: prev.id,
+        created_at: prev.created_at || mapped.created_at || now,
+        updated_at: mapped.updated_at || now,
+      });
+      appliedByKey.set(key, prev);
+    } else {
+      const row = {
+        ...mapped,
+        id: idFn(rows),
+        created_at: mapped.created_at || now,
+        updated_at: mapped.updated_at || now,
+      };
+      rows.push(row);
+      index.set(key, row);
+      appliedByKey.set(key, row);
+    }
+  }
+  return { existing: rows, applied: [...appliedByKey.values()], skippedHeader };
 }
 
 module.exports = {
@@ -728,4 +821,10 @@ module.exports = {
   parseAtcWorkbook,
   detectSheetKind,
   expandMonthPoints,
+  atcNaturalKey,
+  isHeaderMonthPoint,
+  isFullAchievement,
+  formatAtcBasis,
+  mergeAtcSnapshots,
+  dedupeAtcRows,
 };

@@ -1741,6 +1741,48 @@ html[data-appearance='dark'] .login-card {
   background: rgba(26, 115, 232, 0.06);
 }
 
+.upload-slot-wide {
+  min-height: 8.25rem;
+}
+
+.upload-slot.is-busy {
+  opacity: 0.7;
+}
+
+.upload-atc-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.upload-atc-keep {
+  max-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.upload-atc-keep table {
+  font-size: 0.8rem;
+}
+
+.upload-atc-skip {
+  font-size: 0.8rem;
+}
+
+.upload-atc-skip strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.upload-atc-skip ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
 .upload-slot input[type='file'] {
   position: absolute;
   inset: 0;
@@ -2498,6 +2540,20 @@ html[data-appearance='dark'] .login-card {
 
 .atc-edit-sidebar {
   width: 100%;
+}
+
+.atc-block-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.atc-block-actions .btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  box-sizing: border-box;
 }
 
 /* Analytic tab */

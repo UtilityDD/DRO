@@ -495,7 +495,59 @@ async function persistCollection(name, copy) {
     await sb.upsertRows(table, mapped, 'id');
     return;
   }
+  if (name === 'atc_snapshots') {
+    const { dedupeAtcRows } = require('./atc_parse');
+    const unique = dedupeAtcRows(mapped);
+    const chunk = 200;
+    for (let i = 0; i < unique.length; i += chunk) {
+      await sb.upsertRows(table, unique.slice(i, i + chunk), 'period_label,source_format,office_code', {
+        silent: true,
+      });
+    }
+    return;
+  }
   await sb.replaceTable(table, mapped);
+}
+
+/** Persist only changed AT&C rows. Cloud write happens before cache update. */
+async function persistAtcApplied(fullRows, appliedRows) {
+  const { dedupeAtcRows } = require('./atc_parse');
+  const full = cloneRows('atc_snapshots', fullRows);
+  const applied = dedupeAtcRows(cloneRows('atc_snapshots', appliedRows).map(sanitizeRow));
+  if (!useSupabase()) {
+    cache.atc_snapshots = full;
+    writeLocal('atc_snapshots', full);
+    return { store: 'local', persisted: true, rows: applied.length };
+  }
+  try {
+    const chunk = 200;
+    for (let i = 0; i < applied.length; i += chunk) {
+      await sb.upsertRows(
+        'atc_snapshots',
+        applied.slice(i, i + chunk),
+        'period_label,source_format,office_code',
+        { silent: true }
+      );
+    }
+    cache.atc_snapshots = full;
+    writeLocal('atc_snapshots', full);
+    return {
+      store: 'supabase',
+      persisted: true,
+      host: sb.status().host,
+      table: 'atc_snapshots',
+      rows: applied.length,
+    };
+  } catch (e) {
+    console.error('[store] atc upsert failed:', e.message);
+    return {
+      store: 'supabase',
+      persisted: false,
+      host: sb.status().host,
+      table: 'atc_snapshots',
+      error: e.message,
+    };
+  }
 }
 
 const readCollectionSync = readCollection;
@@ -599,6 +651,7 @@ module.exports = {
   readCollection,
   writeCollection,
   writeCollectionAndPersist,
+  persistAtcApplied,
   readCollectionSync,
   writeCollectionSync,
   nextId,

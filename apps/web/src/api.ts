@@ -313,7 +313,7 @@ export const api = {
       target_fy?: string;
       rows: Record<string, unknown>[];
       filtered_out?: number;
-      counts: { IA: number; IB: number };
+      counts: { IA: number; IB: number; achievement?: number; header_month?: number };
       error?: string;
     }>('/api/atc/parse', { method: 'POST', body: JSON.stringify(body) }),
   patchAtc: (body: {
@@ -335,7 +335,7 @@ export const api = {
     request<{ user: User }>(`/api/users/${username}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteUser: (username: string) =>
     request<{ ok: boolean }>(`/api/users/${username}`, { method: 'DELETE' }),
-  upload: (module: string, body: { rows: Record<string, unknown>[]; filename?: string; period_label?: string; notes?: string }) =>
+  upload: (module: string, body: { rows: Record<string, unknown>[]; filename?: string; period_label?: string; notes?: string; fill_header_months?: boolean }) =>
     request<{
       ok: boolean;
       upserted: number;

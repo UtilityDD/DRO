@@ -14,6 +14,7 @@ const {
   readCollection,
   writeCollection,
   writeCollectionAndPersist,
+  persistAtcApplied,
   nextId,
   scopeFilter,
   readUsers,
@@ -1924,7 +1925,7 @@ async function upsertByKeyPersisted(collection, rows, keyFn, mapFn) {
     try {
       await refreshFromSupabase('atc_snapshots');
     } catch (e) {
-      console.error('[upload] refresh atc_snapshots failed:', e.message);
+      throw new Error(`Cannot publish AT&C — live snapshot refresh failed: ${e.message}`);
     }
   }
   const existing = readCollection(collection, []);
@@ -2007,9 +2008,11 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
   if (!rows.length) return res.status(400).json({ error: 'No rows' });
 
   if (module === 'atc') {
+    const { isHeaderMonthPoint } = require('./atc_parse');
     const iaCccPeriods = new Set();
     const iaDivPeriods = new Set();
     for (const raw of rows) {
+      if (isHeaderMonthPoint(raw)) continue;
       const fmt = String(raw.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
       if (fmt !== 'IA') continue;
       const period_label = String(raw.period_label || req.body.period_label || '').trim();
@@ -2019,11 +2022,9 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
       if (office_type === 'division') iaDivPeriods.add(period_label);
     }
     const missingDiv = [...iaCccPeriods].filter((p) => !iaDivPeriods.has(p));
-    const focus = String(req.body.period_label || '').trim();
-    const badFocus = focus ? missingDiv.filter((p) => p === focus) : missingDiv;
-    if (badFocus.length) {
+    if (missingDiv.length) {
       return res.status(400).json({
-        error: `Excl. Bulk missing Division TOTAL for ${badFocus.join(', ')}. Hard-refresh Upload (Ctrl+F5), re-drop the Format-IA file, and confirm the parse message shows division rows.`,
+        error: `Excl. Bulk (CCC) is missing Division TOTAL rows for ${missingDiv.join(', ')}. Re-drop the official workbook and confirm the preview shows division totals.`,
       });
     }
   }
@@ -2241,64 +2242,90 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
       }
     );
   } else if (module === 'atc') {
-    const { periodSortKey, isDroScopedOffice } = require('./atc_parse');
-    await run(
-      'atc_snapshots',
-      (r) => `${r.period_label}|${r.source_format || 'IA'}|${r.office_code}`,
-      (raw) => {
-        const office_code = String(raw.office_code || raw.Code || raw['CCC Code'] || '').trim();
-        const period_label = String(raw.period_label || req.body.period_label || '').trim();
-        if (!office_code || !period_label) return null;
-        if (!isDroScopedOffice(office_code)) return null;
-        const source_format = String(raw.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
-        const office_type = raw.office_type || raw.Type || 'ccc';
-        const now = new Date().toISOString();
-        const n = (v) => {
-          if (v == null || v === '') return null;
-          const x = Number(v);
-          return Number.isFinite(x) ? x : null;
-        };
-        return {
-          period_label,
-          period_sort: raw.period_sort || periodSortKey(period_label),
-          target_fy: raw.target_fy || '',
-          source_format,
-          basis_label:
-            raw.basis_label ||
-            (source_format === 'IB'
-              ? 'Format-IB (Div/Reg excl. bulk path)'
-              : 'Format-IA (CCC path)'),
-          office_type,
-          office_code,
-          office_name: raw.office_name || raw.Name || officeName(office_code),
-          division_code:
-            raw.division_code ||
-            (office_type === 'division' ? office_code : office_type === 'ccc' ? office_code.slice(0, 4) : ''),
-          division_name: raw.division_name || '',
-          region_code: raw.region_code || '341',
-          ccc_code: raw.ccc_code || (office_type === 'ccc' ? office_code : ''),
-          consumer_count: n(raw.consumer_count ?? raw.Consumers),
-          target_atc: n(raw.target_atc),
-          target_dist: n(raw.target_dist),
-          atc_mar: n(raw.atc_mar),
-          dist_mar: n(raw.dist_mar),
-          atc_yoy: n(raw.atc_yoy),
-          dist_yoy: n(raw.dist_yoy),
-          input_mu: n(raw.input_mu),
-          demand_mu: n(raw.demand_mu),
-          collection_mu: n(raw.collection_mu),
-          atc_loss: n(raw.atc_loss ?? raw.ATC),
-          dist_loss: n(raw.dist_loss ?? raw.Dist),
-          coll_eff: n(raw.coll_eff ?? raw.CollEff),
-          coll_eff_mar: n(raw.coll_eff_mar),
-          coll_eff_yoy: n(raw.coll_eff_yoy),
-          point_source: raw.point_source || null,
-          batch_id: batch.id,
-          updated_at: now,
-          created_at: now,
-        };
+    const {
+      periodSortKey,
+      isDroScopedOffice,
+      isHeaderMonthPoint,
+      mergeAtcSnapshots,
+      dedupeAtcRows,
+    } = require('./atc_parse');
+    const fillHeader = Boolean(req.body.fill_header_months);
+    const now = new Date().toISOString();
+    const n = (v) => {
+      if (v == null || v === '') return null;
+      const x = Number(v);
+      return Number.isFinite(x) ? x : null;
+    };
+    const mapped = [];
+    for (const raw of rows) {
+      if (!fillHeader && isHeaderMonthPoint(raw)) continue;
+      const office_code = String(raw.office_code || raw.Code || raw['CCC Code'] || '').trim();
+      const period_label = String(raw.period_label || req.body.period_label || '').trim();
+      if (!office_code || !period_label) continue;
+      if (!isDroScopedOffice(office_code)) continue;
+      const source_format = String(raw.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
+      const office_type = raw.office_type || raw.Type || 'ccc';
+      mapped.push({
+        period_label,
+        period_sort: raw.period_sort || periodSortKey(period_label),
+        target_fy: raw.target_fy || '',
+        source_format,
+        basis_label:
+          raw.basis_label || (source_format === 'IB' ? 'Incl. Bulk (Division)' : 'Excl. Bulk (CCC)'),
+        office_type,
+        office_code,
+        office_name: raw.office_name || raw.Name || officeName(office_code),
+        division_code:
+          raw.division_code ||
+          (office_type === 'division' ? office_code : office_type === 'ccc' ? office_code.slice(0, 4) : ''),
+        division_name: raw.division_name || '',
+        region_code: raw.region_code || '341',
+        ccc_code: raw.ccc_code || (office_type === 'ccc' ? office_code : ''),
+        consumer_count: n(raw.consumer_count ?? raw.Consumers),
+        target_atc: n(raw.target_atc),
+        target_dist: n(raw.target_dist),
+        atc_mar: n(raw.atc_mar),
+        dist_mar: n(raw.dist_mar),
+        atc_yoy: n(raw.atc_yoy),
+        dist_yoy: n(raw.dist_yoy),
+        input_mu: n(raw.input_mu),
+        demand_mu: n(raw.demand_mu),
+        collection_mu: n(raw.collection_mu),
+        atc_loss: n(raw.atc_loss ?? raw.ATC),
+        dist_loss: n(raw.dist_loss ?? raw.Dist),
+        coll_eff: n(raw.coll_eff ?? raw.CollEff),
+        coll_eff_mar: n(raw.coll_eff_mar),
+        coll_eff_yoy: n(raw.coll_eff_yoy),
+        point_source: raw.point_source || null,
+        batch_id: batch.id,
+        updated_at: now,
+      });
+    }
+    const uniqueMapped = dedupeAtcRows(mapped);
+    if (!uniqueMapped.length) {
+      return res.status(400).json({ error: 'No AT&C achievement rows to publish.' });
+    }
+    if (useSupabase()) {
+      try {
+        await refreshFromSupabase('atc_snapshots');
+      } catch (e) {
+        return res.status(502).json({
+          error: `Cannot publish AT&C — live data could not be loaded: ${e.message}`,
+        });
       }
-    );
+    }
+    const existing = readCollection('atc_snapshots', []);
+    const merged = mergeAtcSnapshots(existing, uniqueMapped, { now, nextId });
+    cloud = await persistAtcApplied(merged.existing, merged.applied);
+    upserted = merged.applied.length;
+    if (useSupabase() && !cloud.persisted) {
+      return res.status(502).json({
+        error: cloud.error
+          ? `AT&C did not save to Supabase: ${cloud.error}`
+          : 'AT&C did not save to Supabase. Nothing was published.',
+        cloud,
+      });
+    }
   }
 
   logActivity(req.user.username, 'upload', `${module}: ${upserted} rows (${req.body.filename || 'file'})`);
