@@ -29,30 +29,6 @@ interface NscDB extends DBSchema {
 
 const queueMem = new Map<string, NscQueueSnap>();
 let liveStamp = '';
-let cacheUser = '';
-
-function queueKey(queue: NscQueue) {
-  return cacheUser ? `${cacheUser}|${queue}` : queue;
-}
-
-function metaKey() {
-  return cacheUser ? `stamp|${cacheUser}` : 'stamp';
-}
-
-/** Bind NSC cache to the signed-in user so another login cannot reuse their rows. */
-export function nscCacheBindUser(username: string | null | undefined) {
-  const next = String(username || '').trim().toLowerCase();
-  if (next === cacheUser) return;
-  cacheUser = next;
-  queueMem.clear();
-  liveStamp = '';
-}
-
-export function nscCacheClear() {
-  queueMem.clear();
-  liveStamp = '';
-  cacheUser = '';
-}
 
 export function nscStampOf(s: NscStamp | null | undefined) {
   if (!s) return '';
@@ -68,32 +44,11 @@ export function nscSetLiveStamp(stamp: string) {
 }
 
 async function db() {
-  return openDB<NscDB>('dro-ops-nsc', 7, {
+  return openDB<NscDB>('dro-ops-nsc', 4, {
     upgrade(database, oldVersion) {
       if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta');
-      // v7: chart rows gained first_seen_on
-      if (oldVersion < 7 && database.objectStoreNames.contains('queue')) database.deleteObjectStore('queue');
-      if (oldVersion < 6 && database.objectStoreNames.contains('queue')) {
-        try {
-          database.deleteObjectStore('queue');
-        } catch {
-          /* already gone */
-        }
-      }
-      if (oldVersion < 5 && database.objectStoreNames.contains('queue')) {
-        try {
-          database.deleteObjectStore('queue');
-        } catch {
-          /* already gone */
-        }
-      }
-      if (oldVersion < 4 && database.objectStoreNames.contains('queue')) {
-        try {
-          database.deleteObjectStore('queue');
-        } catch {
-          /* already gone */
-        }
-      }
+      // row shape gained agency_name: drop cached queues so they refetch once
+      if (oldVersion < 4 && database.objectStoreNames.contains('queue')) database.deleteObjectStore('queue');
       if (!database.objectStoreNames.contains('queue')) database.createObjectStore('queue');
       if (oldVersion < 2 && (database.objectStoreNames as unknown as DOMStringList).contains('nsc')) {
         (database as unknown as { deleteObjectStore(name: string): void }).deleteObjectStore('nsc');
@@ -106,17 +61,16 @@ async function db() {
 }
 
 export function nscQueueMemGet(queue: NscQueue) {
-  return queueMem.get(queueKey(queue)) || null;
+  return queueMem.get(queue) || null;
 }
 
 export async function nscCacheGetQueue(queue: NscQueue): Promise<NscQueueSnap | null> {
-  const key = queueKey(queue);
-  const mem = queueMem.get(key);
+  const mem = queueMem.get(queue);
   if (mem) return mem;
   try {
     const handle = await db();
-    const row = (await handle.get('queue', key)) || null;
-    if (row) queueMem.set(key, row);
+    const row = (await handle.get('queue', queue)) || null;
+    if (row) queueMem.set(queue, row);
     return row;
   } catch {
     return null;
@@ -124,11 +78,10 @@ export async function nscCacheGetQueue(queue: NscQueue): Promise<NscQueueSnap | 
 }
 
 export async function nscCachePutQueue(snap: NscQueueSnap) {
-  const key = queueKey(snap.queue);
-  queueMem.set(key, snap);
+  queueMem.set(snap.queue, snap);
   try {
     const handle = await db();
-    await handle.put('queue', snap, key);
+    await handle.put('queue', snap, snap.queue);
   } catch {
     /* keep memory */
   }
@@ -137,7 +90,7 @@ export async function nscCachePutQueue(snap: NscQueueSnap) {
 export async function nscCacheGetMeta(): Promise<(NscStamp & { fetchedAt: number }) | null> {
   try {
     const handle = await db();
-    return (await handle.get('meta', metaKey())) || null;
+    return (await handle.get('meta', 'stamp')) || null;
   } catch {
     return null;
   }
@@ -146,7 +99,7 @@ export async function nscCacheGetMeta(): Promise<(NscStamp & { fetchedAt: number
 export async function nscCachePutMeta(stamp: NscStamp) {
   try {
     const handle = await db();
-    await handle.put('meta', { ...stamp, fetchedAt: Date.now() }, metaKey());
+    await handle.put('meta', { ...stamp, fetchedAt: Date.now() }, 'stamp');
   } catch {
     /* ignore */
   }

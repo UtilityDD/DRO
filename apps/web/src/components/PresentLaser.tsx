@@ -74,7 +74,7 @@ export function PresentLaser({ active }: { active: boolean }) {
 
     const tick = (now: number) => {
       if (pos.ok) trail.push({ x: pos.x, y: pos.y, t: now });
-      while (trail.length && now - trail[0].t > 160) trail.shift();
+      while (trail.length && now - trail[0].t > 240) trail.shift();
       ctx.clearRect(0, 0, w, h);
       if (trail.length > 1) {
         ctx.lineCap = 'round';
@@ -82,15 +82,21 @@ export function PresentLaser({ active }: { active: boolean }) {
         for (let i = 1; i < trail.length; i++) {
           const a = trail[i - 1];
           const b = trail[i];
-          const fade = 1 - (now - b.t) / 160;
-          ctx.strokeStyle = `rgba(255, 0, 40, ${fade})`;
-          ctx.lineWidth = 3 + fade * 7;
+          const fade = 1 - (now - b.t) / 240;
+          ctx.strokeStyle = `rgba(255, 0, 48, ${fade * 0.95})`;
+          ctx.lineWidth = 8 + fade * 22;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+          ctx.strokeStyle = `rgba(255, 90, 90, ${fade})`;
+          ctx.lineWidth = 4 + fade * 12;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
           ctx.lineTo(b.x, b.y);
           ctx.stroke();
           ctx.strokeStyle = `rgba(255, 255, 255, ${fade})`;
-          ctx.lineWidth = 1.2 + fade * 2.4;
+          ctx.lineWidth = 1.5 + fade * 5;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
           ctx.lineTo(b.x, b.y);

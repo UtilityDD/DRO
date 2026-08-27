@@ -10,31 +10,6 @@ const BUCKET = 'nsc';
 const PART = 2000;
 const UPSERT_CHUNK = 400;
 
-/** Read existing first_seen_on values so a re-upload does not reset them. */
-async function stampIncomingFirstSeen(rows) {
-  const apps = [...new Set((rows || []).map((r) => String(r?.application_no || '').trim()).filter(Boolean))];
-  const existingByApp = new Map();
-  for (let i = 0; i < apps.length; i += 80) {
-    const chunk = apps.slice(i, i + 80);
-    const filter = chunk.map((a) => `"${String(a).replace(/"/g, '')}"`).join(',');
-    try {
-      const found = await sb.querySupabase(
-        `nsc_cases?select=application_no,first_seen_on&application_no=in.(${filter})`
-      );
-      for (const row of Array.isArray(found) ? found : []) {
-        if (row?.application_no && row.first_seen_on) {
-          existingByApp.set(String(row.application_no), row.first_seen_on);
-        }
-      }
-    } catch (e) {
-      // Column may not exist until 019_nsc_first_seen.sql is applied
-      if (!/first_seen_on/i.test(String(e.message || e))) throw e;
-      break;
-    }
-  }
-  return nscLib.mergeFirstSeen(rows, existingByApp);
-}
-
 function jobPath(id, name) {
   return `imports/${id}/${name}`;
 }
@@ -125,8 +100,8 @@ async function tickJob(jobId) {
     await finalizeJob(job);
     return job;
   }
-const raw = await sb.storageDownload(BUCKET, jobPath(job.id, `part-${idx}.json`));
-  const rows = await stampIncomingFirstSeen(JSON.parse(raw.toString('utf8')));
+  const raw = await sb.storageDownload(BUCKET, jobPath(job.id, `part-${idx}.json`));
+  const rows = JSON.parse(raw.toString('utf8'));
   for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
     await sb.upsertRows('nsc_cases', rows.slice(i, i + UPSERT_CHUNK), 'application_no', { silent: true });
   }
