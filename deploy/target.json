@@ -3,8 +3,8 @@
   "description": "Darjeeling Region ops PWA — this repo only. Not Smart Line Man (SLM).",
   "vercel": {
     "productionUrl": "https://dro-insight.vercel.app/",
-    "project": null,
-    "projectNote": "Set vercel.project to the Vercel project that serves dro-insight.vercel.app after logging into the correct account. Do not invent a new project under another team.",
+    "project": "dro-insight",
+    "deployMethod": "Git push to slm remote (smartlinemanapp/dro-insight) triggers Vercel auto-deploy on the account that owns dro-insight.vercel.app. Do not CLI deploy from utilitydd team.",
     "forbiddenProjects": [
       "slm",
       "slm_web",
