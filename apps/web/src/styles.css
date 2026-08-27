@@ -6524,7 +6524,25 @@ th {
 }
 
 .nsc-fu-tab {
-  position: relative;
+  border-color: rgba(234, 88, 12, 0.45) !important;
+  background: rgba(255, 237, 213, 0.65) !important;
+  color: #9a3412 !important;
+  font-weight: 700;
+}
+
+.nsc-grain-tabs button.nsc-fu-tab.on {
+  background: #ea580c !important;
+  border-color: #c2410c !important;
+  color: #fff !important;
+}
+
+.nsc-agency-none {
+  color: #dc2626;
+  font-weight: 650;
+}
+
+.nsc-case-stat strong.nsc-agency-none {
+  color: #dc2626;
 }
 
 .nsc-fu-badge {

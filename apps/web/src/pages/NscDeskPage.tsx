@@ -134,8 +134,8 @@ const TABLE_GRAINS_PENDING: { id: TableGrain; label: string }[] = [
   { id: 'class', label: 'Class' },
   { id: 'work', label: 'Work' },
   { id: 'agency', label: 'Agency' },
-  { id: 'followups', label: 'My follow-up' },
   { id: 'cases', label: 'Cases' },
+  { id: 'followups', label: 'My follow-up' },
 ];
 
 const TABLE_GRAINS_HELD: { id: TableGrain; label: string }[] = [
@@ -146,9 +146,20 @@ const TABLE_GRAINS_HELD: { id: TableGrain; label: string }[] = [
   { id: 'work', label: 'Work' },
   { id: 'agency', label: 'Agency' },
   { id: 'reason', label: 'Reason' },
-  { id: 'followups', label: 'My follow-up' },
   { id: 'cases', label: 'Cases' },
+  { id: 'followups', label: 'My follow-up' },
 ];
+
+const AGENCY_NONE_LABEL = 'WO not issued';
+
+function hasAgency(name?: string | null) {
+  return Boolean(String(name || '').trim());
+}
+
+function AgencyCell({ name }: { name?: string | null }) {
+  if (hasAgency(name)) return <>{String(name).trim()}</>;
+  return <span className="nsc-agency-none">{AGENCY_NONE_LABEL}</span>;
+}
 
 type SortDir = 'asc' | 'desc';
 type Sort<K extends string> = { key: K; dir: SortDir } | null;
@@ -209,6 +220,7 @@ function NscSumTable({
   keepEmpty,
   showTotal = true,
   customKeys,
+  warnKey,
   onPick,
 }: {
   label: string;
@@ -219,6 +231,7 @@ function NscSumTable({
   keepEmpty?: boolean;
   showTotal?: boolean;
   customKeys?: Set<string>;
+  warnKey?: string;
   onPick: (row: NscSumRow) => void;
 }) {
   const [sort, setSort] = useState<Sort<SumSortKey>>(null);
@@ -261,7 +274,7 @@ function NscSumTable({
               onClick={() => onPick(r)}
             >
               <td className="num nsc-sl">{i + 1}</td>
-              <td>
+              <td className={warnKey && r.key === warnKey ? 'nsc-agency-none' : undefined}>
                 {r.label}
                 {customKeys?.has(r.key) ? <span className="nsc-sum-tag">custom</span> : null}
               </td>
@@ -705,7 +718,9 @@ function NscCaseSheet({
               </div>
               <div className="nsc-case-stat">
                 <span>Agency</span>
-                <strong>{row.agency_name || '—'}</strong>
+                <strong className={hasAgency(row.agency_name) ? undefined : 'nsc-agency-none'}>
+                  {hasAgency(row.agency_name) ? row.agency_name : AGENCY_NONE_LABEL}
+                </strong>
                 <small>{row.wo_no ? `WO ${row.wo_no}` : 'No work order'}</small>
               </div>
             </div>
@@ -1057,7 +1072,7 @@ export function NscDeskPage() {
         case 'class':
           return r.consumer_class || '';
         case 'agency':
-          return r.agency_name || '';
+          return hasAgency(r.agency_name) ? String(r.agency_name).trim() : AGENCY_NONE_LABEL;
         case 'reason':
           return r.withheld_reason || '';
         case 'collected':
@@ -1131,7 +1146,7 @@ export function NscDeskPage() {
     () =>
       summarizeBy(agencyFacet, clock, (r) => {
         const name = String(r.agency_name || '').trim();
-        return name ? { key: name, label: name } : { key: NSC_NO_AGENCY, label: 'Not assigned' };
+        return name ? { key: name, label: name } : { key: NSC_NO_AGENCY, label: AGENCY_NONE_LABEL };
       }),
     [agencyFacet, clock]
   );
@@ -1456,7 +1471,7 @@ export function NscDeskPage() {
       qDebounced ||
       reasonPick
   );
-  const agencyLabel = agency === NSC_NO_AGENCY ? 'Not assigned' : agency;
+  const agencyLabel = agency === NSC_NO_AGENCY ? AGENCY_NONE_LABEL : agency;
   const divName = divisions.find((d) => d.code === division)?.name || division;
   const cccName = cccs.find((c) => c.code === ccc)?.name || ccc;
 
@@ -2323,7 +2338,7 @@ export function NscDeskPage() {
                 <button
                   key={g.id}
                   type="button"
-                  className={`${tableGrain === g.id ? 'on' : ''}${g.id === 'followups' && followupAliveCount ? ' nsc-fu-tab' : ''}`}
+                  className={`${tableGrain === g.id ? 'on' : ''}${g.id === 'followups' ? ' nsc-fu-tab' : ''}`}
                   onClick={() => {
                     if (g.id === 'time') {
                       // Year tab shows years; a second click while on months steps back to years
@@ -2411,6 +2426,7 @@ export function NscDeskPage() {
               keepEmpty={tableGrain === 'age'}
               showTotal={tableGrain !== 'age' || band === 'exclusive'}
               customKeys={tableGrain === 'age' ? customIds : undefined}
+              warnKey={tableGrain === 'agency' ? NSC_NO_AGENCY : undefined}
               onPick={(row) => pickSummary(tableGrain, row)}
             />
           ) : (
@@ -2460,7 +2476,7 @@ export function NscDeskPage() {
                         <td>{procedureLabel(r.procedure, r.applicant_type)}</td>
                         <td className={ageTone(age)}>{age ?? '—'}</td>
                         <td>{fmtDay(r.collected_on)}</td>
-                        <td>{r.agency_name || '—'}</td>
+                        <td><AgencyCell name={r.agency_name} /></td>
                         {tableGrain === 'followups' && (
                           <td className="nsc-fu-preview">
                             {fu ? (
