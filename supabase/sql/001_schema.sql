@@ -95,6 +95,7 @@ create table if not exists dro.nsc_cases (
   stage text,
   delay_days integer default 0,
   load_kw numeric,
+  applied_phase text,
   category text,
   remarks text,
   batch_id bigint references dro.upload_batches(id),

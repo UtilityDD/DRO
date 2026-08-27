@@ -453,7 +453,7 @@ async function persistCollection(name, copy) {
     const rd = packed.find((r) => r.report_date)?.report_date;
     if (rd) {
       try {
-        await sb.deleteByFilter(table, `report_date=neq.${rd}`);
+        await sb.deleteAllMatching(table, `or=(report_date.is.null,report_date.neq.${rd})`);
       } catch (e) {
         console.warn('[store] nsc stale delete:', e.message);
       }

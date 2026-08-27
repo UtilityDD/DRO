@@ -31,6 +31,7 @@ export type NscRow = {
   processing_label: string;
   report_date: string | null;
   load_kw?: number;
+  applied_phase?: string;
   pole_count?: number | null;
   pole_kind?: 'pole' | 'non_pole' | 'unknown';
   applicant_type?: string;
@@ -269,6 +270,7 @@ export function asNscRow(raw: Record<string, unknown>): NscRow {
     processing_label: String(raw.processing_label || ''),
     report_date: raw.report_date ? String(raw.report_date).slice(0, 10) : null,
     load_kw: Number(raw.load_kw || 0) || 0,
+    applied_phase: String(raw.applied_phase || raw.phase || ''),
     pole_count: raw.pole_count == null || raw.pole_count === '' ? null : Number(raw.pole_count),
     pole_kind:
       raw.pole_kind === 'pole' || raw.pole_kind === 'non_pole' || raw.pole_kind === 'unknown'

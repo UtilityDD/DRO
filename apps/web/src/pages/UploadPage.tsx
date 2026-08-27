@@ -332,6 +332,7 @@ export function UploadPage() {
     remapped: boolean;
     total: number;
     ccc_count: number;
+    three_phase?: number;
     by_queue: Record<string, number>;
     by_division: { key: string; count: number }[];
     by_quotation_slab: { key: string; count: number }[];
@@ -508,7 +509,7 @@ export function UploadPage() {
         setNscPreview(preview);
         const q = (preview?.by_queue || {}) as Record<string, number>;
         setMessage(
-          `${Number(preview?.total || 0).toLocaleString('en-IN')} applications · pending ${q.pending || 0} · withheld ${q.withheld || 0}${
+          `${Number(preview?.total || 0).toLocaleString('en-IN')} applications · pending ${q.pending || 0} · withheld ${q.withheld || 0} · 3-phase ${Number((preview as { three_phase?: number })?.three_phase || 0).toLocaleString('en-IN')}${
             preview?.remapped ? ' · remapped onto DRO 21 CCCs' : ''
           } · click Save to write in batches`
         );
@@ -520,7 +521,7 @@ export function UploadPage() {
       setNscPreview(parsed.preview);
       const q = parsed.preview.by_queue || {};
       setMessage(
-        `${parsed.preview.total.toLocaleString('en-IN')} applications · pending ${q.pending || 0} · withheld ${q.withheld || 0}${
+        `${parsed.preview.total.toLocaleString('en-IN')} applications · pending ${q.pending || 0} · withheld ${q.withheld || 0} · 3-phase ${Number(parsed.preview.three_phase || 0).toLocaleString('en-IN')}${
           parsed.preview.remapped ? ' · remapped onto DRO 21 CCCs' : ''
         }`
       );
@@ -539,13 +540,30 @@ export function UploadPage() {
       if (nscCloudJob) {
         let upserted = 0;
         let total = nscPreview?.total || 0;
-        for (;;) {
+        let lastIndex = -1;
+        let stall = 0;
+        const maxTicks = Math.max(40, Math.ceil(Number(nscPreview?.total || 0) / 500) + 8);
+        for (let n = 0; n < maxTicks; n += 1) {
           const r = await api.nscImportTick(nscCloudJob);
-          upserted = r.job.upserted || 0;
-          total = r.job.total || total;
-          setMessage(`Saving ${upserted.toLocaleString('en-IN')} / ${total.toLocaleString('en-IN')}…`);
-          if (r.job.status === 'done') break;
-          if (r.job.error) throw new Error(r.job.error);
+          const job = r.job || {};
+          upserted = job.upserted || 0;
+          total = job.total || total;
+          const idx = Number(job.part_index) || 0;
+          const parts = Number(job.part_count) || 0;
+          setMessage(
+            parts
+              ? `Saving ${upserted.toLocaleString('en-IN')} / ${total.toLocaleString('en-IN')} (batch ${Math.min(idx, parts)}/${parts})…`
+              : `Saving ${upserted.toLocaleString('en-IN')} / ${total.toLocaleString('en-IN')}…`
+          );
+          if (job.error) throw new Error(job.error);
+          if (job.status === 'done' || (parts > 0 && idx >= parts)) break;
+          if (idx === lastIndex) {
+            stall += 1;
+            if (stall >= 3) throw new Error('Save stalled — refresh and try again');
+          } else {
+            stall = 0;
+            lastIndex = idx;
+          }
         }
         setMessage(`Saved ${upserted.toLocaleString('en-IN')} pending NSC rows${cloudHost ? ` (${cloudHost})` : ''}`);
         setNscParseId('');
@@ -833,6 +851,9 @@ export function UploadPage() {
               <div className="nsc-preview muted">
                 <p>
                   {nscPreview.filename} · {nscPreview.total.toLocaleString('en-IN')} rows · {nscPreview.ccc_count} CCCs
+                  {nscPreview.three_phase
+                    ? ` · 3-phase ${nscPreview.three_phase.toLocaleString('en-IN')}`
+                    : ''}
                   {nscPreview.remapped ? ' · geography remapped to DRO' : ''}
                 </p>
                 <p>

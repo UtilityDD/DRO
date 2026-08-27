@@ -29,6 +29,7 @@ export type NscChartRow = {
   processing_slab: string;
   pole_count: number | null;
   procedure?: string;
+  applied_phase?: string;
   applicant_type?: string;
   agency_name?: string;
   wo_no?: string;
@@ -36,6 +37,7 @@ export type NscChartRow = {
   withheld_reason: string;
   collected_on: string | null;
   created_on?: string | null;
+  applied_on?: string | null;
   quotation_issue_on: string | null;
   report_date: string | null;
   remarks?: string;
@@ -57,7 +59,10 @@ export type NscDeskQuery = {
   pole_min?: string | number | '';
   pole_max?: string | number | '';
   procedure?: string;
+  phase?: string;
+  agri?: string;
   agency?: string;
+  wo?: string;
   time?: string;
   q?: string;
   apply_time?: string;
@@ -92,6 +97,38 @@ function slabFor(days: number) {
   return SLABS.find((s) => days >= s.min && days <= s.max) || SLABS[SLABS.length - 1];
 }
 
+export function isoDayOf(v: unknown): string | null {
+  if (v == null || v === '') return null;
+  const s = String(v).trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+export function daysBetweenIso(from: unknown, to: unknown): number | null {
+  const a = isoDayOf(from);
+  const b = isoDayOf(to);
+  if (!a || !b) return null;
+  const t0 = Date.parse(`${a}T00:00:00Z`);
+  const t1 = Date.parse(`${b}T00:00:00Z`);
+  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return null;
+  const d = Math.round((t1 - t0) / 86400000);
+  return d >= 0 ? d : null;
+}
+
+/** Days from application to quotation issue — office processing delay. */
+export function quoteProcessDays(
+  row: Pick<NscChartRow, 'created_on' | 'quotation_issue_on'> & { applied_on?: string | null }
+): number | null {
+  return daysBetweenIso(row.created_on || row.applied_on, row.quotation_issue_on);
+}
+
+/** Empty / "null" WO number means the work order has not been issued. */
+export function woNotIssued(row: Pick<NscChartRow, 'wo_no'> & { wo_issued?: string | null }): boolean {
+  const s = String(row.wo_no ?? '').trim();
+  if (!s) return true;
+  const u = s.toLowerCase();
+  return u === 'null' || u === '(null)' || u === 'nil' || u === 'n/a' || u === 'na' || u === '-';
+}
+
 function poleCountOf(row: NscChartRow) {
   if (row.pole_count == null || row.pole_count === ('' as unknown)) return null;
   const n = Number(row.pole_count);
@@ -110,6 +147,37 @@ function procedureOf(row: NscChartRow) {
   if (/PROMOTER|DEVELOPER|HOUSING|COMPLEX/.test(u)) return 'proc_b';
   if (row.applicant_type) return 'proc_a';
   return 'unknown';
+}
+
+export function isAgriClass(row: Pick<NscChartRow, 'consumer_class'> & { class_code?: string; category?: string }) {
+  return isAgriName(row.consumer_class || row.category || '', row.class_code);
+}
+
+export function isAgriName(name: string, code?: string) {
+  const cls = String(name || '').trim().toLowerCase();
+  const c = String(code || '').trim().toUpperCase();
+  if (c === 'A') return true;
+  return cls.includes('agri') || cls === 'stw';
+}
+
+export function mapAppliedPhase(raw: unknown): '' | '1' | '2' | '3' {
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (!s) return '';
+  if (s === 'III' || s === '3' || s === '03' || s === '3PH' || s === '3PHASE' || s === 'THREE' || s === 'THREEPHASE') {
+    return '3';
+  }
+  if (s === 'II' || s === '2' || s === '02' || s === '2PH' || s === '2PHASE') return '2';
+  if (s === 'I' || s === '1' || s === '01' || s === '1PH' || s === '1PHASE' || s === 'SINGLE' || s === 'SINGLEPHASE') {
+    return '1';
+  }
+  return '';
+}
+
+export function phaseOf(row: Pick<NscChartRow, 'applied_phase'> & { phase?: unknown }) {
+  return mapAppliedPhase(row.applied_phase || row.phase);
 }
 
 function poleBinOf(count: number) {
@@ -197,7 +265,20 @@ function daysInRange(days: unknown, min: number | null, max: number | null) {
   return true;
 }
 
+function extraFromRemarks(remarks?: string): Record<string, unknown> {
+  const raw = String(remarks || '');
+  const i = raw.indexOf('\n||NSC||\n');
+  if (i < 0) return {};
+  try {
+    const parsed = JSON.parse(raw.slice(i + '\n||NSC||\n'.length) || '{}');
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function hydrateChartRow(row: NscChartRow): NscChartRow {
+  const extra = extraFromRemarks(row.remarks);
   const out: NscChartRow = {
     application_no: row.application_no || '',
     consumer_id: row.consumer_id || '',
@@ -217,14 +298,20 @@ export function hydrateChartRow(row: NscChartRow): NscChartRow {
     processing_slab: row.processing_slab || '',
     pole_count: row.pole_count == null || Number.isNaN(Number(row.pole_count)) ? null : Number(row.pole_count),
     procedure: row.procedure || 'unknown',
+    applied_phase: mapAppliedPhase(row.applied_phase || extra.applied_phase || extra.phase),
     applicant_type: row.applicant_type || '',
     agency_name: row.agency_name || '',
-    wo_no: row.wo_no || '',
+    wo_no: String(row.wo_no || extra.wo_no || '').trim(),
     withheld_on: row.withheld_on || null,
     withheld_reason: row.withheld_reason || '',
-    collected_on: row.collected_on || null,
-    created_on: row.created_on || null,
-    quotation_issue_on: row.quotation_issue_on || null,
+    collected_on: isoDayOf(row.collected_on) || isoDayOf(extra.collected_on),
+    created_on:
+      isoDayOf(row.created_on) ||
+      isoDayOf(row.applied_on) ||
+      isoDayOf(extra.created_on) ||
+      isoDayOf(extra.applied_on),
+    applied_on: isoDayOf(row.applied_on) || isoDayOf(extra.applied_on),
+    quotation_issue_on: isoDayOf(row.quotation_issue_on) || isoDayOf(extra.quotation_issue_on),
     report_date: row.report_date || null,
     remarks: row.remarks || '',
     first_seen_on: row.first_seen_on || null,
@@ -254,7 +341,10 @@ export function filterNscChartRows(rows: NscChartRow[], q: NscDeskQuery = {}) {
   const poleMin = numOrNull(q.pole_min);
   const poleMax = numOrNull(q.pole_max);
   const procedure = String(q.procedure || '').toLowerCase();
+  const phase = mapAppliedPhase(q.phase);
+  const agri = String(q.agri || '').toLowerCase();
   const agency = String(q.agency || '').trim().toLowerCase();
+  const wo = String(q.wo || '').toLowerCase();
   return rows.filter((r) => {
     if (queue === 'pending' && !isPendingQueue({ status: r.status, sap_status: r.sap_status || '' })) return false;
     if (queue === 'withheld' && String(r.status) !== 'withheld') return false;
@@ -275,6 +365,11 @@ export function filterNscChartRows(rows: NscChartRow[], q: NscDeskQuery = {}) {
     if (procedure === 'proc_a' || procedure === 'proc_b' || procedure === 'unknown') {
       if (procedureOf(r) !== procedure) return false;
     }
+    if (phase && phaseOf(r) !== phase) return false;
+    if (agri === 'agri' && !isAgriClass(r)) return false;
+    if (agri === 'non_agri' && isAgriClass(r)) return false;
+    if (wo === 'none' && !woNotIssued(r)) return false;
+    if (wo === 'issued' && woNotIssued(r)) return false;
     if (agency) {
       const name = String(r.agency_name || '').trim().toLowerCase();
       if (agency === NSC_NO_AGENCY ? name !== '' : name !== agency) return false;

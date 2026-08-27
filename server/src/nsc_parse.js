@@ -93,6 +93,9 @@ const HEADER_ALIASES = {
   WITHHELD_REASON: 'withheld_reason',
   LOAD_WATTS: 'load_watts',
   LOAD_KW: 'load_kw',
+  APPLIED_PHASE: 'applied_phase',
+  PHASE: 'applied_phase',
+  CONN_PHASE: 'applied_phase',
   NO_OF_POLES: 'no_of_poles',
   NO_OF_POLE: 'no_of_poles',
   N_POLE: 'no_of_poles',
@@ -197,6 +200,26 @@ function cleanPhone(v) {
   let d = cleanId(v).replace(/\D/g, '');
   if (d.startsWith('91') && d.length > 10) d = d.slice(-10);
   return d.slice(0, 15);
+}
+
+function mapAppliedPhase(raw) {
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (!s) return '';
+  if (s === 'III' || s === '3' || s === '03' || s === '3PH' || s === '3PHASE' || s === 'THREE' || s === 'THREEPHASE') {
+    return '3';
+  }
+  if (s === 'II' || s === '2' || s === '02' || s === '2PH' || s === '2PHASE') return '2';
+  if (s === 'I' || s === '1' || s === '01' || s === '1PH' || s === '1PHASE' || s === 'SINGLE' || s === 'SINGLEPHASE') {
+    return '1';
+  }
+  return '';
+}
+
+function phaseOf(row) {
+  return mapAppliedPhase(row?.applied_phase || row?.phase);
 }
 
 function mapClass(desc, code) {
@@ -477,7 +500,7 @@ function parseNscWorkbook({ filePath, filename, reportDate, droCccs }) {
     const collected_on = excelSerialToIso(raw.collected_on);
     const withheld_on = excelSerialToIso(raw.withheld_on);
     const quotation_age_days = daysBetween(collected_on, reportIso);
-    const processing_days = daysBetween(created_on, collected_on);
+    const processing_days = daysBetween(created_on, quotation_issue_on);
     const qSlab = slabFor(quotation_age_days);
     const pSlab = slabFor(processing_days);
     const consumer_class = mapClass(raw.class_desc, raw.class_code);
@@ -492,6 +515,7 @@ function parseNscWorkbook({ filePath, filename, reportDate, droCccs }) {
     const pole_count = parsePoleCount(raw.no_of_poles);
     const pole_kind = pole_count > 0 ? 'pole' : 'non_pole';
     const proc = mapProcedure(raw.applicant_type);
+    const applied_phase = mapAppliedPhase(raw.applied_phase);
 
     rows.push({
       application_no,
@@ -518,6 +542,7 @@ function parseNscWorkbook({ filePath, filename, reportDate, droCccs }) {
       withheld_on,
       withheld_reason: withheld_reason.slice(0, 240),
       load_kw,
+      applied_phase,
       pole_count,
       pole_kind,
       applicant_type: proc.applicant_type,
@@ -579,14 +604,19 @@ function buildPreview(rows, meta) {
   const byQueue = new Map();
   const byDivision = new Map();
   const byClass = new Map();
+  const byPhase = new Map();
   const byQSlab = new Map();
   const byPSlab = new Map();
   const byCcc = new Map();
+  let three_phase = 0;
   for (const r of rows) {
     bump(byStatus, r.sap_status);
     bump(byQueue, r.status);
     bump(byDivision, r.division_name);
     bump(byClass, r.consumer_class);
+    const ph = phaseOf(r);
+    if (ph) bump(byPhase, `${ph}-ph`);
+    if (ph === '3') three_phase += 1;
     bump(byQSlab, r.quotation_age_label);
     bump(byPSlab, r.processing_label);
     bump(byCcc, r.ccc_name);
@@ -594,10 +624,12 @@ function buildPreview(rows, meta) {
   return {
     ...meta,
     total: rows.length,
+    three_phase,
     by_status: Object.fromEntries(byStatus),
     by_queue: Object.fromEntries(byQueue),
     by_division: mapToCounts(byDivision),
     by_class: mapToCounts(byClass),
+    by_phase: mapToCounts(byPhase),
     by_quotation_slab: SLABS.map((s) => ({
       key: s.label,
       count: byQSlab.get(s.label) || 0,
@@ -641,6 +673,7 @@ function extraPayload(row) {
     procedure_label: row.procedure_label || mapProcedure(row.applicant_type).procedure_label,
     complex_name: row.complex_name || '',
     complex_id: row.complex_id || '',
+    applied_phase: phaseOf(row),
   };
 }
 
@@ -683,6 +716,7 @@ function packNscCloudRow(row) {
     pole_count: extra.pole_count ?? 0,
     applicant_type: extra.applicant_type || '',
     procedure: extra.procedure || 'proc_a',
+    applied_phase: extra.applied_phase || null,
   };
 }
 
@@ -774,6 +808,7 @@ function hydrateNsc(row) {
   }
   out.procedure_label = out.procedure_label || proc.procedure_label;
   out.complex_name = String(out.complex_name || '').trim();
+  out.applied_phase = mapAppliedPhase(out.applied_phase || out.phase);
   return out;
 }
 
@@ -879,6 +914,17 @@ function daysInRange(days, min, max) {
   return true;
 }
 
+function isAgriClass(row) {
+  return isAgriName(row?.consumer_class || row?.category || '', row?.class_code);
+}
+
+function isAgriName(name, code) {
+  const cls = String(name || '').trim().toLowerCase();
+  const c = String(code || '').trim().toUpperCase();
+  if (c === 'A') return true;
+  return cls.includes('agri') || cls === 'stw';
+}
+
 function filterNscRows(rows, q = {}) {
   const queue = String(q.queue || '').toLowerCase();
   const division = String(q.division || '');
@@ -895,6 +941,8 @@ function filterNscRows(rows, q = {}) {
   const poleMin = numOrNull(q.pole_min);
   const poleMax = numOrNull(q.pole_max);
   const procedure = String(q.procedure || '').toLowerCase();
+  const phase = mapAppliedPhase(q.phase);
+  const agri = String(q.agri || '').toLowerCase();
   const agency = String(q.agency || '').trim().toLowerCase();
   return rows.filter((r) => {
     if (queue === 'pending' && !isPendingQueue(r)) return false;
@@ -916,6 +964,9 @@ function filterNscRows(rows, q = {}) {
     if (procedure === 'proc_a' || procedure === 'proc_b' || procedure === 'unknown') {
       if (procedureOf(r) !== procedure) return false;
     }
+    if (phase && phaseOf(r) !== phase) return false;
+    if (agri === 'agri' && !isAgriClass(r)) return false;
+    if (agri === 'non_agri' && isAgriClass(r)) return false;
     if (agency) {
       const name = String(r.agency_name || '').trim().toLowerCase();
       if (agency === '__none__' ? name !== '' : name !== agency) return false;
@@ -1317,6 +1368,7 @@ function nscExportRow(r) {
     procedure: procedureOf(r),
     procedure_label: r.procedure_label || mapProcedure(r.applicant_type).procedure_label,
     complex_name: r.complex_name || '',
+    applied_phase: phaseOf(r),
   };
 }
 
@@ -1353,4 +1405,6 @@ module.exports = {
   buildNscDesk,
   nscExportRow,
   nscListRow,
+  mapAppliedPhase,
+  phaseOf,
 };

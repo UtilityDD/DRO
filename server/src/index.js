@@ -293,6 +293,7 @@ function toNscChartRow(r) {
     processing_slab: r.processing_slab || '',
     pole_count: r.pole_count == null || r.pole_count === '' ? null : Number(r.pole_count),
     procedure: r.procedure || 'unknown',
+    applied_phase: r.applied_phase || '',
     applicant_type: r.applicant_type || '',
     agency_name: r.agency_name || '',
     wo_no: r.wo_no || '',
@@ -1059,6 +1060,7 @@ app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), async (req, re
             pole_min: '',
             pole_max: '',
             procedure: '',
+            phase: '',
           },
           req.user,
           { chart: true, select: nscQuery.CHART_SELECT }
@@ -1799,8 +1801,8 @@ app.post('/api/nsc/import/parse', requireAuth, requirePerm('nsc', 'upload'), asy
 });
 
 app.post('/api/nsc/import/tick', requireAuth, requirePerm('nsc', 'upload'), async (req, res) => {
-  req.setTimeout(60000);
-  res.setTimeout(60000);
+  req.setTimeout(120000);
+  res.setTimeout(120000);
   try {
     const job = await nscImport.tickJob(String(req.body.job_id || ''));
     res.json({ ok: true, job });
@@ -2055,6 +2057,7 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
           stage: raw.stage || '',
           delay_days: Number(raw.delay_days || raw.Delay || 0),
           load_kw: Number(raw.load_kw || raw.Load || 0),
+          applied_phase: nscLib.mapAppliedPhase(raw.applied_phase || raw.APPLIED_PHASE || raw.Phase || ''),
           category: raw.category || raw.Category || '',
           remarks: raw.remarks || '',
           batch_id: batch.id,

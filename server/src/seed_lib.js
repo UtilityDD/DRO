@@ -322,6 +322,7 @@ function sampleNsc(offices) {
       quotation_age_days: age,
       processing_days: 3 + i,
       load_kw: 1 + (i % 5),
+      applied_phase: i % 5 === 0 ? '3' : '1',
       category: i % 2 ? 'Domestic' : 'Commercial',
       consumer_class: i % 2 ? 'Domestic' : 'Commercial',
       class_code: i % 2 ? 'D' : 'C',

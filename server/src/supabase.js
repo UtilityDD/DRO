@@ -294,6 +294,22 @@ async function deleteByFilter(table, filter) {
   });
 }
 
+/** Repeat DELETE until the filter matches nothing (PostgREST may cap one request). */
+async function deleteAllMatching(table, filter, opts = {}) {
+  const max = opts.max || 400;
+  let removed = 0;
+  for (let i = 0; i < max; i += 1) {
+    const left = await countRows(table, filter);
+    if (!left) return removed;
+    await deleteByFilter(table, filter);
+    const next = await countRows(table, filter);
+    const batch = Math.max(0, left - next);
+    removed += batch;
+    if (!batch) return removed;
+  }
+  return removed;
+}
+
 function powerMapRest() {
   const url = POWERMAP_URL || SUPABASE_URL;
   const key = POWERMAP_ANON_KEY || SUPABASE_ANON_KEY || SUPABASE_KEY;
@@ -449,6 +465,7 @@ module.exports = {
   replaceTable,
   updateByFilter,
   deleteByFilter,
+  deleteAllMatching,
   probePowerMap,
   publicPowerMapConfig,
   querySupabaseMeta,

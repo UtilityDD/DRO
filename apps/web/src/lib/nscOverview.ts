@@ -1,5 +1,5 @@
-import { NSC_SLABS, type DelayCut, type NscClock } from './nsc';
-import { filterNscChartRows, type NscChartRow, type NscDeskQuery } from './nscDesk';
+import { NSC_SLABS, SLAB_COLORS, type DelayCut, type NscClock } from './nsc';
+import { filterNscChartRows, phaseOf, quoteProcessDays, woNotIssued, type NscChartRow, type NscDeskQuery } from './nscDesk';
 
 export type OfficeGrain = 'division' | 'ccc';
 
@@ -52,6 +52,48 @@ export function stackOffices(rows: NscChartRow[], grain: OfficeGrain, clock: Nsc
   return [...map.values()].sort((a, b) => b.total - a.total || String(a.name).localeCompare(String(b.name)));
 }
 
+export type OfficeQuoteRow = {
+  code: string;
+  name: string;
+  avg: number;
+  count: number;
+  fill: string;
+};
+
+export function quoteDelayFill(days: number) {
+  if (days <= 3) return SLAB_COLORS.d0_3;
+  if (days <= 7) return SLAB_COLORS.d3_7;
+  if (days <= 15) return SLAB_COLORS.d7_15;
+  if (days <= 30) return SLAB_COLORS.d15_30;
+  if (days <= 90) return SLAB_COLORS.m1_3;
+  if (days <= 180) return SLAB_COLORS.m3_6;
+  if (days <= 365) return SLAB_COLORS.m6_12;
+  return SLAB_COLORS.y1;
+}
+
+/** Average application → quotation days by Division or CCC. Longer is slower. */
+export function officeQuoteDelay(rows: NscChartRow[], grain: OfficeGrain): OfficeQuoteRow[] {
+  const map = new Map<string, { code: string; name: string; sum: number; n: number }>();
+  for (const r of rows) {
+    const d = quoteProcessDays(r);
+    if (d == null) continue;
+    const code = grain === 'ccc' ? String(r.ccc_code || '') : String(r.division_code || '');
+    const name =
+      grain === 'ccc' ? r.ccc_name || r.ccc_code || 'Unknown' : r.division_name || r.division_code || 'Unknown';
+    const key = code || name;
+    if (!map.has(key)) map.set(key, { code, name, sum: 0, n: 0 });
+    const rec = map.get(key)!;
+    rec.sum += d;
+    rec.n += 1;
+  }
+  return [...map.values()]
+    .map((r) => {
+      const avg = r.n ? Math.round((10 * r.sum) / r.n) / 10 : 0;
+      return { code: r.code, name: r.name, avg, count: r.n, fill: quoteDelayFill(avg) };
+    })
+    .sort((a, b) => b.avg - a.avg || a.name.localeCompare(b.name));
+}
+
 export function countClasses(rows: NscChartRow[]) {
   const map = new Map<string, number>();
   for (const r of rows) {
@@ -87,6 +129,25 @@ export function countProcs(rows: NscChartRow[]) {
   return { proc_a, proc_b };
 }
 
+export function countPhases(rows: NscChartRow[]) {
+  let one = 0;
+  let three = 0;
+  for (const r of rows) {
+    const p = phaseOf(r);
+    if (p === '3') three += 1;
+    else if (p === '1') one += 1;
+  }
+  return { one, three };
+}
+
+export function countWo(rows: NscChartRow[]) {
+  let none = 0;
+  for (const r of rows) {
+    if (woNotIssued(r)) none += 1;
+  }
+  return { none, issued: rows.length - none };
+}
+
 export function countSlabs(rows: NscChartRow[], clock: NscClock) {
   const map = new Map<string, number>();
   for (const s of NSC_SLABS) map.set(s.id, 0);
@@ -109,6 +170,8 @@ export type NscSumRow = {
   proc_b: number;
   hot: number;
   avg_days: number | null;
+  quote_days: number | null;
+  quote_n: number;
 };
 
 type SumAcc = {
@@ -122,10 +185,25 @@ type SumAcc = {
   hot: number;
   daySum: number;
   dayN: number;
+  quoteSum: number;
+  quoteN: number;
 };
 
 function emptyAcc(label: string): SumAcc {
-  return { label, count: 0, non_pole: 0, pole: 0, poles_sum: 0, industrial: 0, proc_b: 0, hot: 0, daySum: 0, dayN: 0 };
+  return {
+    label,
+    count: 0,
+    non_pole: 0,
+    pole: 0,
+    poles_sum: 0,
+    industrial: 0,
+    proc_b: 0,
+    hot: 0,
+    daySum: 0,
+    dayN: 0,
+    quoteSum: 0,
+    quoteN: 0,
+  };
 }
 
 function addToAcc(acc: SumAcc, row: NscChartRow, clock: NscClock) {
@@ -144,6 +222,11 @@ function addToAcc(acc: SumAcc, row: NscChartRow, clock: NscClock) {
     acc.daySum += days;
     acc.dayN += 1;
   }
+  const quote = quoteProcessDays(row);
+  if (quote != null) {
+    acc.quoteSum += quote;
+    acc.quoteN += 1;
+  }
 }
 
 function finishAcc(key: string, acc: SumAcc, total: number): NscSumRow {
@@ -159,6 +242,8 @@ function finishAcc(key: string, acc: SumAcc, total: number): NscSumRow {
     proc_b: acc.proc_b,
     hot: acc.hot,
     avg_days: acc.dayN ? Math.round(acc.daySum / acc.dayN) : null,
+    quote_days: acc.quoteN ? Math.round((10 * acc.quoteSum) / acc.quoteN) / 10 : null,
+    quote_n: acc.quoteN,
   };
 }
 
@@ -242,6 +327,10 @@ export function sumFooter(rows: NscSumRow[], total: number): NscSumRow {
     if (r.avg_days != null && r.count) {
       acc.daySum += r.avg_days * r.count;
       acc.dayN += r.count;
+    }
+    if (r.quote_days != null && r.quote_n) {
+      acc.quoteSum += r.quote_days * r.quote_n;
+      acc.quoteN += r.quote_n;
     }
   }
   return finishAcc('total', acc, total);

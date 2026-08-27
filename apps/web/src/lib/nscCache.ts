@@ -52,6 +52,17 @@ export function nscCacheClear() {
   queueMem.clear();
   liveStamp = '';
   cacheUser = '';
+  void nscCacheDropStores();
+}
+
+async function nscCacheDropStores() {
+  try {
+    const handle = await db();
+    await handle.clear('queue');
+    await handle.clear('meta');
+  } catch {
+    /* ignore */
+  }
 }
 
 export function nscStampOf(s: NscStamp | null | undefined) {
@@ -68,32 +79,36 @@ export function nscSetLiveStamp(stamp: string) {
 }
 
 async function db() {
-  return openDB<NscDB>('dro-ops-nsc', 7, {
+  return openDB<NscDB>('dro-ops-nsc', 8, {
     upgrade(database, oldVersion) {
+      if (oldVersion < 8) {
+        if (database.objectStoreNames.contains('queue')) database.deleteObjectStore('queue');
+        if (database.objectStoreNames.contains('meta')) database.deleteObjectStore('meta');
+      } else {
+        if (oldVersion < 7 && database.objectStoreNames.contains('queue')) database.deleteObjectStore('queue');
+        if (oldVersion < 6 && database.objectStoreNames.contains('queue')) {
+          try {
+            database.deleteObjectStore('queue');
+          } catch {
+            /* already gone */
+          }
+        }
+        if (oldVersion < 5 && database.objectStoreNames.contains('queue')) {
+          try {
+            database.deleteObjectStore('queue');
+          } catch {
+            /* already gone */
+          }
+        }
+        if (oldVersion < 4 && database.objectStoreNames.contains('queue')) {
+          try {
+            database.deleteObjectStore('queue');
+          } catch {
+            /* already gone */
+          }
+        }
+      }
       if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta');
-      // v7: chart rows gained first_seen_on
-      if (oldVersion < 7 && database.objectStoreNames.contains('queue')) database.deleteObjectStore('queue');
-      if (oldVersion < 6 && database.objectStoreNames.contains('queue')) {
-        try {
-          database.deleteObjectStore('queue');
-        } catch {
-          /* already gone */
-        }
-      }
-      if (oldVersion < 5 && database.objectStoreNames.contains('queue')) {
-        try {
-          database.deleteObjectStore('queue');
-        } catch {
-          /* already gone */
-        }
-      }
-      if (oldVersion < 4 && database.objectStoreNames.contains('queue')) {
-        try {
-          database.deleteObjectStore('queue');
-        } catch {
-          /* already gone */
-        }
-      }
       if (!database.objectStoreNames.contains('queue')) database.createObjectStore('queue');
       if (oldVersion < 2 && (database.objectStoreNames as unknown as DOMStringList).contains('nsc')) {
         (database as unknown as { deleteObjectStore(name: string): void }).deleteObjectStore('nsc');

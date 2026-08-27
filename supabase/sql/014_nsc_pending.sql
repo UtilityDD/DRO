@@ -25,6 +25,7 @@ begin
     alter table public.nsc_cases add column if not exists pole_count integer;
     alter table public.nsc_cases add column if not exists applicant_type text;
     alter table public.nsc_cases add column if not exists procedure text;
+    alter table public.nsc_cases add column if not exists applied_phase text;
   end if;
 end $$;
 

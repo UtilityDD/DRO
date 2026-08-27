@@ -8,6 +8,7 @@ import {
   LabelList,
   Legend,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -39,7 +40,7 @@ import {
   poleLabel,
   procedureLabel,
 } from '../lib/nsc';
-import { NSC_NO_AGENCY, buildNscDesk, nscEventOn, overlayNscOffices, type NscChartRow, type NscDeskQuery } from '../lib/nscDesk';
+import { NSC_NO_AGENCY, buildNscDesk, isAgriName, nscEventOn, overlayNscOffices, quoteProcessDays, type NscChartRow, type NscDeskQuery } from '../lib/nscDesk';
 import { nscCacheBindUser, nscCacheGetQueue, nscQueueMemGet } from '../lib/nscCache';
 import {
   nscFollowupsAdd,
@@ -57,7 +58,10 @@ import {
   countClasses,
   countPoles,
   countProcs,
+  countPhases,
+  countWo,
   facetRows,
+  officeQuoteDelay,
   stackOffices,
   summarizeBy,
   summarizeOffices,
@@ -75,6 +79,13 @@ const HELD_CHART_H = 'min(250px, 25vh)';
 const DELAY_H = 'min(230px, 26vh)';
 const TIMELINE_H = 'min(310px, 34vh)';
 const DIV_PALETTE = ['#1565c0', '#039be5', '#00838f', '#7c4dff', '#ef6c00', '#c62828'];
+const QUOTE_SWATCHES = [
+  { label: '≤3d', fill: SLAB_COLORS.d0_3 },
+  { label: '3–7d', fill: SLAB_COLORS.d3_7 },
+  { label: '7–15d', fill: SLAB_COLORS.d7_15 },
+  { label: '15–30d', fill: SLAB_COLORS.d15_30 },
+  { label: '>30d', fill: SLAB_COLORS.m1_3 },
+];
 const TOOLTIP_STYLE = {
   background: '#ffffff',
   border: '1px solid rgba(30,64,120,0.12)',
@@ -86,7 +97,9 @@ type NscDesk = Awaited<ReturnType<typeof api.nscDesk>>;
 type DeskView = 'overview' | 'table';
 type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'agency' | 'time' | 'reason' | 'followups' | 'cases';
 type DelayBand = 'exclusive' | 'cumulative';
+type OfficeMetric = 'cases' | 'quote';
 type TimelineGrain = 'month' | 'year';
+type AgriView = 'all' | 'agri' | 'non_agri';
 type TimelineSeries = 'office' | 'total';
 
 function qsOf(p: Record<string, string | number | undefined>) {
@@ -101,6 +114,12 @@ function qsOf(p: Record<string, string | number | undefined>) {
 
 function rowDays(row: { quotation_age_days: number | null; processing_days: number | null }, clock: NscClock) {
   return clock === 'processing' ? row.processing_days : row.quotation_age_days;
+}
+
+function fmtAvgDays(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const r = Math.round(Number(n) * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
 }
 
 function workKind(row: { pole_count: number | null }) {
@@ -197,7 +216,7 @@ function SortTh<K extends string>({
   );
 }
 
-type SumSortKey = 'label' | 'count' | 'non_pole' | 'pole' | 'industrial' | 'proc_b' | 'hot' | 'avg_days';
+type SumSortKey = 'label' | 'count' | 'non_pole' | 'pole' | 'industrial' | 'proc_b' | 'hot' | 'avg_days' | 'quote_days';
 
 type CaseSortKey =
   | 'app'
@@ -222,6 +241,8 @@ function NscSumTable({
   customKeys,
   warnKey,
   onPick,
+  showQuoteDelay,
+  defaultSort = { key: 'avg_days', dir: 'desc' },
 }: {
   label: string;
   rows: NscSumRow[];
@@ -233,37 +254,41 @@ function NscSumTable({
   customKeys?: Set<string>;
   warnKey?: string;
   onPick: (row: NscSumRow) => void;
+  showQuoteDelay?: boolean;
+  defaultSort?: Sort<SumSortKey>;
 }) {
-  const [sort, setSort] = useState<Sort<SumSortKey>>(null);
+  const [sort, setSort] = useState<Sort<SumSortKey>>(defaultSort);
+  const active = sort ?? defaultSort;
   const foot = sumFooter(customKeys ? rows.filter((r) => !customKeys.has(r.key)) : rows, total);
   const show = useMemo(() => {
     const base = keepEmpty ? rows : rows.filter((r) => r.count > 0);
-    if (!sort) return base;
-    const dir = sort.dir === 'asc' ? 1 : -1;
+    if (!active) return base;
+    const dir = active.dir === 'asc' ? 1 : -1;
     return [...base].sort((a, b) => {
-      if (sort.key === 'label') return a.label.localeCompare(b.label) * dir;
-      const av = sort.key === 'avg_days' ? a.avg_days ?? -1 : a[sort.key];
-      const bv = sort.key === 'avg_days' ? b.avg_days ?? -1 : b[sort.key];
+      if (active.key === 'label') return a.label.localeCompare(b.label) * dir;
+      const av = active.key === 'avg_days' || active.key === 'quote_days' ? a[active.key] ?? -1 : a[active.key];
+      const bv = active.key === 'avg_days' || active.key === 'quote_days' ? b[active.key] ?? -1 : b[active.key];
       return (Number(av) - Number(bv)) * dir;
     });
-  }, [rows, keepEmpty, sort]);
-  const onSort = (key: SumSortKey, first: SortDir) => setSort((prev) => nextSort(prev, key, first));
-  const cols = pending ? 10 : 9;
+  }, [rows, keepEmpty, active]);
+  const onSort = (key: SumSortKey, first: SortDir) => setSort(nextSort(active, key, first));
+  const cols = (pending ? 10 : 9) + (showQuoteDelay ? 1 : 0);
   return (
     <div className="table-wrap nsc-table-wrap">
       <table className="nsc-detail nsc-summary">
         <thead>
           <tr>
             <th className="num nsc-sl">#</th>
-            <SortTh label={label} col="label" sort={sort} onSort={onSort} first="asc" />
-            <SortTh label="Cases" col="count" sort={sort} onSort={onSort} num />
+            <SortTh label={label} col="label" sort={active} onSort={onSort} first="asc" />
+            <SortTh label="Cases" col="count" sort={active} onSort={onSort} num />
             <th className="num">%</th>
-            <SortTh label="Non-pole" col="non_pole" sort={sort} onSort={onSort} num />
-            <SortTh label="Pole" col="pole" sort={sort} onSort={onSort} num />
-            <SortTh label="Ind" col="industrial" sort={sort} onSort={onSort} num />
-            <SortTh label="Proc-B" col="proc_b" sort={sort} onSort={onSort} num />
-            {pending ? <SortTh label=">30d" col="hot" sort={sort} onSort={onSort} num /> : null}
-            <SortTh label="Avg d" col="avg_days" sort={sort} onSort={onSort} num />
+            <SortTh label="Non-pole" col="non_pole" sort={active} onSort={onSort} num />
+            <SortTh label="Pole" col="pole" sort={active} onSort={onSort} num />
+            <SortTh label="Ind" col="industrial" sort={active} onSort={onSort} num />
+            <SortTh label="Proc-B" col="proc_b" sort={active} onSort={onSort} num />
+            {pending ? <SortTh label=">30d" col="hot" sort={active} onSort={onSort} num /> : null}
+            {showQuoteDelay ? <SortTh label="Quote d" col="quote_days" sort={active} onSort={onSort} num /> : null}
+            <SortTh label="Avg d" col="avg_days" sort={active} onSort={onSort} num />
           </tr>
         </thead>
         <tbody>
@@ -285,6 +310,7 @@ function NscSumTable({
               <td className="num">{fmtInt(r.industrial)}</td>
               <td className="num">{fmtInt(r.proc_b)}</td>
               {pending ? <td className="num">{fmtInt(r.hot)}</td> : null}
+              {showQuoteDelay ? <td className="num">{fmtAvgDays(r.quote_days)}</td> : null}
               <td className="num">{r.avg_days ?? '—'}</td>
             </tr>
           ))}
@@ -308,6 +334,7 @@ function NscSumTable({
               <td className="num">{fmtInt(foot.industrial)}</td>
               <td className="num">{fmtInt(foot.proc_b)}</td>
               {pending ? <td className="num">{fmtInt(foot.hot)}</td> : null}
+              {showQuoteDelay ? <td className="num">{fmtAvgDays(foot.quote_days)}</td> : null}
               <td className="num">{foot.avg_days ?? '—'}</td>
             </tr>
           </tfoot>
@@ -414,7 +441,7 @@ function planLabels(width: number, values: number[], present: boolean): ValueLab
   return off;
 }
 
-function labelProps(plan: ValueLabels) {
+function labelProps(plan: ValueLabels, format?: (n: number) => string) {
   return {
     position: 'top' as const,
     fill: '#334155',
@@ -424,6 +451,7 @@ function labelProps(plan: ValueLabels) {
     angle: plan.rotate ? -90 : 0,
     formatter: (v: unknown) => {
       const n = Number(v ?? 0);
+      if (format) return Number.isFinite(n) ? format(n) : '';
       return n ? fmtInt(n) : '';
     },
   };
@@ -433,7 +461,7 @@ function NscSkeleton() {
   return (
     <div className="nsc-skel" aria-busy="true" aria-live="polite">
       <div className="nsc-skel-kpis">
-        {Array.from({ length: 6 }, (_, i) => (
+        {Array.from({ length: 7 }, (_, i) => (
           <div key={i} className="nsc-skel-kpi nsc-skel-pulse" />
         ))}
       </div>
@@ -757,11 +785,13 @@ export function NscDeskPage() {
   const [syncing, setSyncing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [queue, setQueue] = useState<NscQueue>('pending');
+  const [agri, setAgri] = useState<AgriView>('all');
   const clock: NscClock = 'quotation';
   const [view, setView] = useState<DeskView>('overview');
   const [tableGrain, setTableGrain] = useState<TableGrain>(lockedCcc ? 'ccc' : 'division');
   const [officeGrain, setOfficeGrain] = useState<OfficeGrain>(lockedCcc ? 'ccc' : 'division');
   const [officeSlabs, setOfficeSlabs] = useState(false);
+  const [officeMetric, setOfficeMetric] = useState<OfficeMetric>('cases');
   const [division, setDivision] = useState(lockedDiv);
   const [ccc, setCcc] = useState(lockedCcc);
   const [klass, setKlass] = useState('');
@@ -769,6 +799,8 @@ export function NscDeskPage() {
   const [poleMin, setPoleMin] = useState<number | ''>('');
   const [poleMax, setPoleMax] = useState<number | ''>('');
   const [procedure, setProcedure] = useState('');
+  const [phase, setPhase] = useState('');
+  const [wo, setWo] = useState('');
   const [agency, setAgency] = useState('');
   const [slab, setSlab] = useState('');
   const [band, setBand] = useState<DelayBand>('exclusive');
@@ -782,7 +814,7 @@ export function NscDeskPage() {
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
   const [page, setPage] = useState(0);
-  const [caseSort, setCaseSort] = useState<Sort<CaseSortKey>>(null);
+  const [caseSort, setCaseSort] = useState<Sort<CaseSortKey>>({ key: 'age', dir: 'desc' });
   const [caseRow, setCaseRow] = useState<NscChartRow | null>(null);
   const [followupIndex, setFollowupIndex] = useState<Map<string, NscFollowupMeta>>(() => new Map());
   const [followupTick, setFollowupTick] = useState(0);
@@ -855,7 +887,10 @@ export function NscDeskPage() {
       pole_min: poleMin,
       pole_max: poleMax,
       procedure,
+      phase,
+      agri: agri === 'all' ? '' : agri,
       agency,
+      wo,
       slab: delayFilter ? '' : slab,
       delay_min: delayFilter ? delayMin : '',
       delay_max: delayFilter ? delayMax : '',
@@ -863,7 +898,7 @@ export function NscDeskPage() {
       time: timeKey,
       q: qDebounced,
     }),
-    [queue, clock, division, ccc, klass, pole, poleMin, poleMax, procedure, agency, slab, delayFilter, delayMin, delayMax, cutsParam, timeKey, qDebounced]
+    [queue, clock, division, ccc, klass, pole, poleMin, poleMax, procedure, phase, agri, agency, wo, slab, delayFilter, delayMin, delayMax, cutsParam, timeKey, qDebounced]
   );
   const filterQs = useMemo(() => qsOf(deskQuery as Record<string, string | number | undefined>), [deskQuery]);
 
@@ -879,6 +914,10 @@ export function NscDeskPage() {
   useEffect(() => {
     setPage(0);
   }, [filterQs, reasonPick, tableGrain]);
+
+  useEffect(() => {
+    if (tableGrain === 'cases') setCaseSort({ key: 'age', dir: 'desc' });
+  }, [tableGrain]);
 
   useEffect(() => {
     if (tableGrain !== 'cases' && tableGrain !== 'followups') setCaseRow(null);
@@ -906,8 +945,15 @@ export function NscDeskPage() {
       setCumId('');
       setDelayMin('');
       setDelayMax('');
+      setWo('');
       setTlGrain('year');
     }
+  };
+
+  const selectAgri = (next: AgriView) => {
+    setAgri(next);
+    if (next === 'agri' && klass && !isAgriName(klass)) setKlass('');
+    if (next === 'non_agri' && klass && isAgriName(klass)) setKlass('');
   };
 
   const showHeldYears = () => {
@@ -933,11 +979,15 @@ export function NscDeskPage() {
     await warmNscStamp();
     const cached = nscQueueMemGet(queue) || (await nscCacheGetQueue(queue));
     if (id !== deskReq.current) return;
-    if (!force && cached) {
+    const st = await api.nscStatus().catch(() => null);
+    const expected = queue === 'withheld' ? st?.withheld : st?.pending;
+    const staleCache = Boolean(cached && st && expected != null && cached.rows.length !== expected);
+    if (id !== deskReq.current) return;
+    if (!force && !staleCache && cached) {
       setQueueSnap(cached);
       setLoading(false);
       setSyncing(false);
-    } else if (cached) {
+    } else if (cached && !staleCache) {
       setQueueSnap(cached);
       setLoading(false);
       setSyncing(true);
@@ -948,7 +998,7 @@ export function NscDeskPage() {
     setError('');
     try {
       const snap = await ensureNscQueue(queue, {
-        force,
+        force: force || staleCache,
         onUpdate: (next) => {
           if (id !== deskReq.current) return;
           setQueueSnap(next);
@@ -976,7 +1026,12 @@ export function NscDeskPage() {
   const sourceRows = queueSnap?.rows || [];
   const divisions = desk?.divisions || [];
   const cccs = desk?.cccs || [];
-  const classOpts = desk?.classes || [];
+  const classOpts = useMemo(() => {
+    const names = desk?.classes || [];
+    if (agri === 'agri') return names.filter((n) => isAgriName(n));
+    if (agri === 'non_agri') return names.filter((n) => !isAgriName(n));
+    return names;
+  }, [desk?.classes, agri]);
   const timelineYears = desk?.years || [];
   const reasons = desk?.reasons || [];
 
@@ -988,6 +1043,8 @@ export function NscDeskPage() {
         pole_max: '',
         class: '',
         procedure: '',
+        phase: '',
+        wo: '',
       }),
     [sourceRows, deskQuery]
   );
@@ -999,6 +1056,8 @@ export function NscDeskPage() {
   const kpiClasses = useMemo(() => countClasses(kpiBase), [kpiBase]);
   const kpiPoles = useMemo(() => countPoles(kpiBase), [kpiBase]);
   const procCounts = useMemo(() => countProcs(kpiBase), [kpiBase]);
+  const phaseCounts = useMemo(() => countPhases(kpiBase), [kpiBase]);
+  const woCounts = useMemo(() => countWo(kpiBase), [kpiBase]);
   const mixTotal = kpiBase.length;
   const tableRows = useMemo(() => {
     let rows = facetRows(sourceRows, deskQuery);
@@ -1021,10 +1080,11 @@ export function NscDeskPage() {
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE));
   const sortedCases = useMemo(() => {
     if (tableGrain === 'followups' && !caseSort) return tableRows;
-    if (!caseSort) return tableRows;
-    const dir = caseSort.dir === 'asc' ? 1 : -1;
+    const sort = caseSort ?? (tableGrain === 'cases' ? { key: 'age' as const, dir: 'desc' as const } : null);
+    if (!sort) return tableRows;
+    const dir = sort.dir === 'asc' ? 1 : -1;
     const text = (r: NscChartRow) => {
-      switch (caseSort.key) {
+      switch (sort.key) {
         case 'app':
           return r.application_no || '';
         case 'division':
@@ -1046,8 +1106,8 @@ export function NscDeskPage() {
       }
     };
     const num = (r: NscChartRow) => {
-      if (caseSort.key === 'age') return rowDays(r, clock) ?? -1;
-      if (caseSort.key === 'work') return r.pole_count == null ? -1 : Number(r.pole_count);
+      if (sort.key === 'age') return rowDays(r, clock) ?? -1;
+      if (sort.key === 'work') return r.pole_count == null ? -1 : Number(r.pole_count);
       return null;
     };
     return [...tableRows].sort((a, b) => {
@@ -1085,6 +1145,18 @@ export function NscDeskPage() {
   );
 
   const officeStacks = useMemo(() => stackOffices(officeFacet, officeGrain, clock), [officeFacet, officeGrain, clock]);
+  const officeQuoteRows = useMemo(() => officeQuoteDelay(officeFacet, officeGrain), [officeFacet, officeGrain]);
+  const quoteRegionAvg = useMemo(() => {
+    let sum = 0;
+    let n = 0;
+    for (const r of officeFacet) {
+      const d = quoteProcessDays(r);
+      if (d == null) continue;
+      sum += d;
+      n += 1;
+    }
+    return n ? Math.round((10 * sum) / n) / 10 : null;
+  }, [officeFacet]);
 
   const timelineSource = useMemo(
     () => facetRows(sourceRows, deskQuery, { time: '' }),
@@ -1302,31 +1374,42 @@ export function NscDeskPage() {
     setPoleMax('');
     setProcedure('');
     setKlass('');
+    setPhase('');
+    setWo('');
   };
 
   const selectPoleSlice = (id: string) => {
-    const onlyThis = pole === id && !klass && !procedure && poleMin === '';
+    const onlyThis = pole === id && !klass && !procedure && !phase && !wo && poleMin === '';
     clearMixSlice();
     if (!onlyThis) {
       setPole(id);
       setPoleMin('');
       setPoleMax('');
     }
-    setView('overview');
   };
 
   const selectClassSlice = (name: string) => {
-    const onlyThis = klass === name && !pole && !procedure;
+    const onlyThis = klass === name && !pole && !procedure && !phase && !wo;
     clearMixSlice();
     if (!onlyThis) setKlass(name);
-    setView('overview');
   };
 
   const selectProcSlice = (id: string) => {
-    const onlyThis = procedure === id && !pole && !klass;
+    const onlyThis = procedure === id && !pole && !klass && !phase && !wo;
     clearMixSlice();
     if (!onlyThis) setProcedure(id);
-    setView('overview');
+  };
+
+  const selectPhaseSlice = (id: string) => {
+    const onlyThis = phase === id && !pole && !klass && !procedure && !wo;
+    clearMixSlice();
+    if (!onlyThis) setPhase(id);
+  };
+
+  const selectWoSlice = () => {
+    const onlyThis = wo === 'none' && !pole && !klass && !procedure && !phase;
+    clearMixSlice();
+    if (!onlyThis) setWo('none');
   };
 
   const drillOffice = (code: string) => {
@@ -1351,17 +1434,25 @@ export function NscDeskPage() {
   // desktop / present: CSS pins the desk to the viewport; charts flex, tables scroll inside
   const fit = present || wideOverview;
   const delayPlan = planLabels(delayBox.width, mixRows.map((r) => r.count), present);
-  const officePlan = planLabels(officeBox.width, officeStacks.map((o) => o.total), present);
+  const officeQuoteMode = officeMetric === 'quote';
+  const officePlan = planLabels(
+    officeBox.width,
+    officeQuoteMode ? officeQuoteRows.map((o) => o.avg) : officeStacks.map((o) => o.total),
+    present
+  );
   const timePlan = planLabels(timeBox.width, timeline.map((p) => Number(p.added || 0)), present);
   const delayFont = delayPlan.font;
   const officeFont = officePlan.font;
   const timeFont = timePlan.font;
   const delayAxisW = axisWidth(delayFont, mixRows.map((r) => r.count));
-  const officeAxisW = axisWidth(officeFont, officeStacks.map((o) => o.total));
+  const officeAxisW = axisWidth(
+    officeFont,
+    officeQuoteMode ? officeQuoteRows.map((o) => o.avg) : officeStacks.map((o) => o.total)
+  );
   const timeAxisW = axisWidth(timeFont, timeline.map((p) => Number(p.added || 0)));
   const timeRunAxisW = axisWidth(timeFont, timeline.map((p) => Number(p.cumulative || 0)));
-  const officeTickChars = officeStacks.length && officeBox.width
-    ? Math.max(3, Math.floor(officeBox.width / officeStacks.length / (officeFont * 0.62)))
+  const officeTickChars = (officeQuoteMode ? officeQuoteRows.length : officeStacks.length) && officeBox.width
+    ? Math.max(3, Math.floor(officeBox.width / (officeQuoteMode ? officeQuoteRows.length : officeStacks.length) / (officeFont * 0.62)))
     : 32;
 
   const onTimelineClick = (state: { activePayload?: { payload?: { key?: string } }[] }) => {
@@ -1387,8 +1478,7 @@ export function NscDeskPage() {
   };
 
   const industrialCount = kpiClasses.find((c) => c.name.toLowerCase() === 'industrial')?.count || 0;
-  const commercialCount = kpiClasses.find((c) => c.name.toLowerCase() === 'commercial')?.count || 0;
-  const kpiAllOn = !pole && !procedure && !klass;
+  const kpiAllOn = !pole && !procedure && !klass && !phase && !wo;
 
   const onCaseSort = (key: CaseSortKey, first: SortDir) => {
     setCaseSort((prev) => nextSort(prev, key, first));
@@ -1405,6 +1495,8 @@ export function NscDeskPage() {
     setPoleMin('');
     setPoleMax('');
     setProcedure('');
+    setPhase('');
+    setWo('');
     setAgency('');
     setSlab('');
     setCumId('');
@@ -1423,6 +1515,8 @@ export function NscDeskPage() {
       klass ||
       pole ||
       procedure ||
+      phase ||
+      wo ||
       agency ||
       delayActive ||
       timeKey ||
@@ -1438,6 +1532,7 @@ export function NscDeskPage() {
     if (klass) words.push(klass);
     if (pole === 'non_pole' || pole === 'pole') words.push(poleLabel(pole));
     if (procedure === 'proc_b' || procedure === 'proc_a') words.push(procedureLabel(procedure));
+    if (wo === 'none') words.push('WO not issued');
     words.push('NSC');
     const bits = [words.join(' ')];
     if (division) bits.push(`Div ${divName}`);
@@ -1446,7 +1541,7 @@ export function NscDeskPage() {
     const when = timePhrase(timeKey);
     if (when) bits.push(when);
     return bits.join(' · ');
-  }, [queue, klass, pole, procedure, division, ccc, divName, cccName, agency, agencyLabel, timeKey]);
+  }, [queue, klass, pole, procedure, wo, division, ccc, divName, cccName, agency, agencyLabel, timeKey]);
 
   usePageHeading(viewTitle);
 
@@ -1626,6 +1721,19 @@ export function NscDeskPage() {
               Withheld{queueSnap ? ` ${fmtInt(queueSnap.withheld)}` : ''}
             </button>
           </div>
+          <div className="nsc-queue nsc-view-mode" role="tablist" aria-label="Class view">
+            <button type="button" className={agri === 'all' ? 'on' : ''} onClick={() => selectAgri('all')}>
+              All
+            </button>
+            <button type="button" className={agri === 'agri' ? 'on' : ''} onClick={() => selectAgri('agri')}>
+              Agri only
+            </button>
+            <button type="button" className={agri === 'non_agri' ? 'on' : ''} onClick={() => selectAgri('non_agri')}>
+              Non-Agri
+            </button>
+          </div>
+        </div>
+        <div className="nsc-bar-actions">
           <button type="button" className="nsc-bar-btn" onClick={() => loadDesk(true)} disabled={loading && !desk}>
             Refresh
           </button>
@@ -1705,6 +1813,11 @@ export function NscDeskPage() {
           <option value="proc_a">Individual</option>
           <option value="proc_b">Proc. B</option>
         </select>
+        <select className={phase ? 'nsc-filter-on' : ''} value={phase} onChange={(e) => setPhase(e.target.value)}>
+          <option value="">All phases</option>
+          <option value="1">1-phase</option>
+          <option value="3">3-phase</option>
+        </select>
         {queue === 'pending' && (
           <select
             className={slab ? 'nsc-filter-on' : ''}
@@ -1778,7 +1891,6 @@ export function NscDeskPage() {
           aria-pressed={kpiAllOn}
           onClick={() => {
             clearMixSlice();
-            setView('overview');
           }}
         >
           <strong>{fmtInt(mixTotal)}</strong>
@@ -1825,13 +1937,25 @@ export function NscDeskPage() {
         </button>
         <button
           type="button"
-          className={`nsc-kpi k7 ${klass === 'Commercial' ? 'on' : ''}`}
-          aria-pressed={klass === 'Commercial'}
-          onClick={() => selectClassSlice('Commercial')}
+          className={`nsc-kpi k7 ${phase === '3' ? 'on' : ''}`}
+          aria-pressed={phase === '3'}
+          onClick={() => selectPhaseSlice('3')}
         >
-          <strong>{fmtInt(commercialCount)}</strong>
-          <span>Com</span>
+          <strong>{fmtInt(phaseCounts.three)}</strong>
+          <span>3-Phase</span>
         </button>
+        {queue === 'pending' ? (
+          <button
+            type="button"
+            className={`nsc-kpi k4 ${wo === 'none' ? 'on' : ''}`}
+            aria-pressed={wo === 'none'}
+            title="Work order number is empty or null"
+            onClick={selectWoSlice}
+          >
+            <strong>{fmtInt(woCounts.none)}</strong>
+            <span>WO not issued</span>
+          </button>
+        ) : null}
       </div>
       <div className="nsc-pills" role="tablist" aria-label="NSC view">
         <button type="button" className={view === 'overview' ? 'on' : ''} onClick={() => setView('overview')}>
@@ -2035,7 +2159,24 @@ export function NscDeskPage() {
                       CCC
                     </button>
                   </div>
-                  {officeSlabsAvailable && (
+                  <div className="nsc-queue" role="tablist" aria-label="Office measure">
+                    <button
+                      type="button"
+                      className={officeMetric === 'cases' ? 'on' : ''}
+                      onClick={() => setOfficeMetric('cases')}
+                    >
+                      Cases
+                    </button>
+                    <button
+                      type="button"
+                      className={officeMetric === 'quote' ? 'on' : ''}
+                      title="Average days from application to quotation"
+                      onClick={() => setOfficeMetric('quote')}
+                    >
+                      Quote delay
+                    </button>
+                  </div>
+                  {officeSlabsAvailable && officeMetric === 'cases' && (
                     <div className="nsc-queue" role="tablist" aria-label="Age slab split">
                       <button type="button" className={officeSlabs ? 'on' : ''} onClick={() => setOfficeSlabs(true)}>
                         Slabs
@@ -2059,7 +2200,66 @@ export function NscDeskPage() {
                   height: fit ? '100%' : queue === 'withheld' ? HELD_CHART_H : CHART_H,
                 }}
               >
-                {officeStacks.length ? (
+                {officeQuoteMode ? (
+                  officeQuoteRows.length ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={officeQuoteRows}
+                        margin={{ top: officePlan.top, right: 8, left: 0, bottom: 0 }}
+                        onClick={(state) => {
+                          const code = String(state?.activePayload?.[0]?.payload?.code || '');
+                          if (code) drillOffice(code);
+                        }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fill: '#64748b', fontSize: officeFont }}
+                          interval={0}
+                          tickFormatter={(v) => shortName(String(v ?? ''), officeTickChars)}
+                        />
+                        <YAxis
+                          tick={{ fill: '#64748b', fontSize: officeFont }}
+                          width={officeAxisW}
+                          tickFormatter={(v) => fmtAvgDays(Number(v))}
+                        />
+                        <Tooltip
+                          contentStyle={TOOLTIP_STYLE}
+                          formatter={(value, _name, item) => {
+                            const count = Number((item?.payload as { count?: number } | undefined)?.count || 0);
+                            return [`${fmtAvgDays(Number(value))}d · ${fmtInt(count)} quoted`, 'Avg delay'];
+                          }}
+                        />
+                        {quoteRegionAvg != null ? (
+                          <ReferenceLine
+                            y={quoteRegionAvg}
+                            stroke="#94a3b8"
+                            strokeDasharray="5 4"
+                            ifOverflow="extendDomain"
+                            label={{
+                              value: `avg ${fmtAvgDays(quoteRegionAvg)}d`,
+                              fill: '#64748b',
+                              fontSize: officeFont,
+                              position: 'insideTopRight',
+                            }}
+                          />
+                        ) : null}
+                        <Bar dataKey="avg" name="Quote delay" cursor="pointer" radius={[4, 4, 0, 0]}>
+                          {officeQuoteRows.map((o) => (
+                            <Cell
+                              key={o.code}
+                              fill={o.fill}
+                              fillOpacity={dimBar(o.code === officePicked, Boolean(officePicked))}
+                            />
+                          ))}
+                          {officePlan.show ? <LabelList dataKey="avg" {...labelProps(officePlan, fmtAvgDays)} /> : null}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="muted">No quotation dates in this slice.</p>
+                  )
+                ) : officeStacks.length ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={officeStacks}
@@ -2119,7 +2319,24 @@ export function NscDeskPage() {
                   <p className="muted">No office totals in this slice.</p>
                 )}
               </div>
-              <p className="muted tight">Click an office to filter the other charts. Click it again to clear.</p>
+              {officeQuoteMode ? (
+                <p className="muted tight nsc-quote-hint">
+                  <span>
+                    Days from application to quotation
+                    {quoteRegionAvg != null ? ` · region ${fmtAvgDays(quoteRegionAvg)}d` : ''}. Longer is slower.
+                  </span>
+                  <span className="nsc-quote-swatches" aria-hidden="true">
+                    {QUOTE_SWATCHES.map((s) => (
+                      <span key={s.label}>
+                        <i style={{ background: s.fill }} />
+                        {s.label}
+                      </span>
+                    ))}
+                  </span>
+                </p>
+              ) : (
+                <p className="muted tight">Click an office to filter the other charts. Click it again to clear.</p>
+              )}
             </div>
 
             <div className="nsc-overview-side">
@@ -2374,6 +2591,7 @@ export function NscDeskPage() {
           </div>
           {!showCaseTable ? (
             <NscSumTable
+              key={tableGrain}
               label={grainTitle}
               rows={summaryRows}
               total={summaryTotal}
@@ -2383,6 +2601,8 @@ export function NscDeskPage() {
               showTotal={tableGrain !== 'age' || band === 'exclusive'}
               customKeys={tableGrain === 'age' ? customIds : undefined}
               warnKey={tableGrain === 'agency' ? NSC_NO_AGENCY : undefined}
+              showQuoteDelay={tableGrain === 'division' || tableGrain === 'ccc'}
+              defaultSort={tableGrain === 'age' ? null : { key: 'avg_days', dir: 'desc' }}
               onPick={(row) => pickSummary(tableGrain, row)}
             />
           ) : (

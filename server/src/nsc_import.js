@@ -112,6 +112,8 @@ async function parseJob(jobId, droCccs) {
   }
 }
 
+const PARTS_PER_TICK = 3;
+
 async function tickJob(jobId) {
   const job = await loadJob(jobId);
   if (!job) throw new Error('Import job missing');
@@ -119,32 +121,52 @@ async function tickJob(jobId) {
   if (job.status !== 'parsed' && job.status !== 'upserting') {
     throw new Error(`Import is ${job.status}`);
   }
-  job.status = 'upserting';
-  const idx = Number(job.part_index) || 0;
-  if (idx >= Number(job.part_count) || !job.part_count) {
-    await finalizeJob(job);
+
+  const partCount = Number(job.part_count) || 0;
+  let idx = Number(job.part_index) || 0;
+  if (!partCount || idx >= partCount) {
+    markJobDone(job);
     return job;
   }
-const raw = await sb.storageDownload(BUCKET, jobPath(job.id, `part-${idx}.json`));
-  const rows = await stampIncomingFirstSeen(JSON.parse(raw.toString('utf8')));
-  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
-    await sb.upsertRows('nsc_cases', rows.slice(i, i + UPSERT_CHUNK), 'application_no', { silent: true });
+
+  job.status = 'upserting';
+  const until = Math.min(partCount, idx + PARTS_PER_TICK);
+  while (idx < until) {
+    const raw = await sb.storageDownload(BUCKET, jobPath(job.id, `part-${idx}.json`));
+    const rows = JSON.parse(raw.toString('utf8'));
+    for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
+      await sb.upsertRows('nsc_cases', rows.slice(i, i + UPSERT_CHUNK), 'application_no', { silent: true });
+    }
+    idx += 1;
+    job.part_index = idx;
+    job.upserted = Number(job.upserted || 0) + rows.length;
   }
-  job.part_index = idx + 1;
-  job.upserted = Number(job.upserted || 0) + rows.length;
-  if (job.part_index >= job.part_count) {
-    await finalizeJob(job);
-  } else {
-    await saveJob(job);
+
+  if (idx >= partCount) {
+    markJobDone(job);
+    return job;
   }
+  await saveJob(job);
   return job;
+}
+
+function markJobDone(job) {
+  job.status = 'done';
+  job.error = null;
+  saveJob(job).catch((e) => console.warn('[nsc-import] done save:', e.message));
+  setImmediate(() => {
+    finalizeJob(job).catch((e) => console.warn('[nsc-import] finalize:', e.message));
+  });
 }
 
 async function finalizeJob(job) {
   const rd = job.report_date;
   if (rd) {
-      try {
-      await sb.deleteByFilter('nsc_cases', `report_date=neq.${rd}`);
+    try {
+      await sb.deleteAllMatching(
+        'nsc_cases',
+        `or=(report_date.is.null,report_date.neq.${rd})`
+      );
     } catch (e) {
       console.warn('[nsc-import] stale delete:', e.message);
     }
@@ -158,9 +180,6 @@ async function finalizeJob(job) {
   } catch (e) {
     console.warn('[nsc-import] pending csv:', e.message);
   }
-  job.status = 'done';
-  job.error = null;
-  await saveJob(job);
 }
 
 async function exportDownloadUrl(q, user) {

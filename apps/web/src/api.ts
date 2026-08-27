@@ -40,6 +40,7 @@ export type AuthModule = {
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
     credentials: 'include',
+    cache: 'no-store',
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
@@ -224,6 +225,8 @@ export const api = {
         by_queue: Record<string, number>;
         by_division: { key: string; count: number }[];
         by_class: { key: string; count: number }[];
+        by_phase?: { key: string; count: number }[];
+        three_phase?: number;
         by_quotation_slab: { key: string; count: number }[];
         by_processing_slab: { key: string; count: number }[];
       };

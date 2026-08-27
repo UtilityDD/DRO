@@ -19,6 +19,7 @@ const LIST_SELECT = [
   'processing_slab',
   'pole_count',
   'procedure',
+  'applied_phase',
   'applicant_type',
   'wo_no',
   'agency_name',
@@ -46,6 +47,7 @@ const DESK_SELECT = [
   'processing_slab',
   'pole_count',
   'procedure',
+  'applied_phase',
   'applicant_type',
   'agency_name',
   'withheld_on',
@@ -76,6 +78,7 @@ const CHART_SELECT = [
   'processing_slab',
   'pole_count',
   'procedure',
+  'applied_phase',
   'applicant_type',
   'agency_name',
   'wo_no',
@@ -201,6 +204,13 @@ function nscFilterParts(q = {}, user, opts = {}) {
   } else if ((scoped.class || scoped.klass) && skippedCols.has('consumer_class')) {
     parts.push(`category=eq.${enc(scoped.class || scoped.klass)}`);
   }
+  const agri = String(scoped.agri || '').toLowerCase();
+  if (agri === 'agri' || agri === 'non_agri') {
+    const col = canFilter('consumer_class') ? 'consumer_class' : skippedCols.has('consumer_class') ? 'category' : '';
+    if (col) {
+      parts.push(agri === 'agri' ? `${col}=eq.${enc('Agriculture')}` : `${col}=neq.${enc('Agriculture')}`);
+    }
+  }
   if (!chart) {
     const slabCol = clockCol(q.clock, 'slab');
     if (q.slab && canFilter(slabCol)) parts.push(`${slabCol}=eq.${enc(q.slab)}`);
@@ -225,6 +235,10 @@ function nscFilterParts(q = {}, user, opts = {}) {
     if (canFilter('procedure')) {
       if (procedure === 'proc_a' || procedure === 'proc_b') parts.push(`procedure=eq.${enc(procedure)}`);
       if (procedure === 'unknown') parts.push('procedure=is.null');
+    }
+    const phase = nscLib.mapAppliedPhase(q.phase);
+    if (phase && canFilter('applied_phase')) {
+      parts.push(`applied_phase=eq.${enc(phase)}`);
     }
   }
   const timeKey = String(q.time || '');

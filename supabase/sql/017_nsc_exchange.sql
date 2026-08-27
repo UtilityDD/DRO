@@ -31,6 +31,7 @@ begin
     execute format('alter table %I.nsc_cases add column if not exists agency_name text', sch);
     execute format('alter table %I.nsc_cases add column if not exists phone text', sch);
     execute format('alter table %I.nsc_cases add column if not exists consumer_id text', sch);
+    execute format('alter table %I.nsc_cases add column if not exists applied_phase text', sch);
 
     execute format('create unique index if not exists nsc_cases_application_no_uidx on %I.nsc_cases (application_no)', sch);
     execute format('create index if not exists idx_nsc_status on %I.nsc_cases (status)', sch);
@@ -42,6 +43,7 @@ begin
     execute format('create index if not exists idx_nsc_pole on %I.nsc_cases (pole_count)', sch);
     execute format('create index if not exists idx_nsc_proc on %I.nsc_cases (procedure)', sch);
     execute format('create index if not exists idx_nsc_report on %I.nsc_cases (report_date)', sch);
+    execute format('create index if not exists idx_nsc_phase on %I.nsc_cases (applied_phase)', sch);
 
     execute format($t$
       create table if not exists %I.nsc_import_jobs (
