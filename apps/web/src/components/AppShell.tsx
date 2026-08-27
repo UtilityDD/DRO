@@ -62,6 +62,7 @@ const links: LinkItem[] = [
 const PRIMARY = ['/', '/nsc', '/disco', '/upload'];
 const PRESENT_KEY = 'dro.present';
 const LASER_KEY = 'dro.laser';
+const APPEARANCE_KEY = 'dro.appearance';
 const MOBILE_MQ = '(max-width: 960px)';
 
 function isMobileView() {
@@ -107,6 +108,47 @@ function persistPresent(on: boolean) {
     }
   } catch {
     /* ignore quota / private mode */
+  }
+}
+
+function readAppearance(): 'light' | 'dark' {
+  try {
+    const q = new URLSearchParams(window.location.search).get('dark');
+    if (q === '1' || q === 'true' || q === 'on') return 'dark';
+    if (q === '0' || q === 'false' || q === 'off') return 'light';
+    return window.localStorage.getItem(APPEARANCE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function persistAppearance(mode: 'light' | 'dark') {
+  try {
+    window.localStorage.setItem(APPEARANCE_KEY, mode);
+  } catch {
+    /* ignore quota / private mode */
+  }
+  try {
+    document.documentElement.setAttribute('data-appearance', mode);
+    const scheme = document.querySelector('meta[name="color-scheme"]');
+    if (scheme) scheme.setAttribute('content', mode);
+    const theme = document.querySelector('meta[name="theme-color"]');
+    if (theme) theme.setAttribute('content', mode === 'dark' ? '#0b1220' : '#1565c0');
+  } catch {
+    /* ignore */
+  }
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('dark')) {
+      if (mode === 'dark') url.searchParams.set('dark', '1');
+      else url.searchParams.set('dark', '0');
+      const next = `${url.pathname}${url.search}${url.hash}`;
+      if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+        window.history.replaceState(window.history.state, '', next);
+      }
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -238,6 +280,19 @@ function Icon({ name }: { name: string }) {
           <circle cx="12" cy="12" r="7.2" />
         </svg>
       );
+    case 'moon':
+      return (
+        <svg {...common} width={18} height={18}>
+          <path d="M15.2 13.4A6.2 6.2 0 0 1 10.1 4.5 6.4 6.4 0 1 0 18 12.2a6.2 6.2 0 0 1-2.8 1.2z" />
+        </svg>
+      );
+    case 'sun':
+      return (
+        <svg {...common} width={18} height={18}>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>
@@ -260,6 +315,16 @@ export function AppShell() {
   const [present, setPresent] = useState(readPresentFlag);
   const [presentNav, setPresentNav] = useState(false);
   const [laser, setLaser] = useState(() => readPresentFlag() || readLaserFlag());
+  const appearanceBeforePresent = useRef<'light' | 'dark'>(readAppearance());
+  const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
+    const saved = appearanceBeforePresent.current;
+    if (readPresentFlag() && !isMobileView()) {
+      persistAppearance('dark');
+      return 'dark';
+    }
+    persistAppearance(saved);
+    return saved;
+  });
   const [idle, setIdle] = useState(false);
   const laserBeforePresent = useRef(readLaserFlag());
   const [offices, setOffices] = useState<Office[]>([]);
@@ -330,6 +395,15 @@ export function AppShell() {
     persistLaser(on);
   }, []);
 
+  const setAppearanceOn = useCallback((mode: 'light' | 'dark') => {
+    setAppearance(mode);
+    persistAppearance(mode);
+  }, []);
+
+  useEffect(() => {
+    persistAppearance(appearance);
+  }, [appearance]);
+
   const setPresentOn = useCallback(
     (on: boolean, opts?: { fullscreen?: boolean }) => {
       if (on && isMobileView()) return;
@@ -337,13 +411,16 @@ export function AppShell() {
       persistPresent(on);
       if (on) {
         laserBeforePresent.current = laser;
+        appearanceBeforePresent.current = appearance;
         setLaserOn(true);
+        setAppearanceOn('dark');
       } else {
         setLaserOn(laserBeforePresent.current);
+        setAppearanceOn(appearanceBeforePresent.current);
       }
       if (on && opts?.fullscreen !== false) enterFullscreen();
     },
-    [enterFullscreen, laser, setLaserOn]
+    [appearance, enterFullscreen, laser, setAppearanceOn, setLaserOn]
   );
 
   useEffect(() => {
@@ -394,6 +471,13 @@ export function AppShell() {
         setLaserOn(!laser);
         return;
       }
+      if (key === 'd') {
+        e.preventDefault();
+        const next = appearance === 'dark' ? 'light' : 'dark';
+        if (present) appearanceBeforePresent.current = next;
+        setAppearanceOn(next);
+        return;
+      }
       if (key === 'f' && present) {
         e.preventDefault();
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -402,7 +486,7 @@ export function AppShell() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [laser, present, presentNav, setLaserOn, setPresentOn, enterFullscreen]);
+  }, [appearance, laser, present, presentNav, setAppearanceOn, setLaserOn, setPresentOn, enterFullscreen]);
 
   const visible = useMemo(() => {
     if (!user) return [];
@@ -538,12 +622,38 @@ export function AppShell() {
     </button>
   );
 
+  const appearanceBtn = (where: 'sidebar' | 'masthead' | 'fab' | 'sheet') => {
+    const dark = appearance === 'dark';
+    return (
+      <button
+        type="button"
+        className={`${where === 'sidebar' ? 'sidebar-present' : where === 'fab' ? 'present-fab' : where === 'sheet' ? 'btn secondary' : 'present-btn'} appearance-btn${dark ? ' on' : ''}`}
+        aria-pressed={dark}
+        title={dark ? 'Light theme (D)' : 'Dark theme (D)'}
+        onClick={() => {
+          const next = dark ? 'light' : 'dark';
+          if (present) appearanceBeforePresent.current = next;
+          setAppearanceOn(next);
+        }}
+      >
+        {where !== 'sheet' ? (
+          <span className="nav-icon">
+            <Icon name={dark ? 'sun' : 'moon'} />
+          </span>
+        ) : null}
+        <span>{dark ? 'Light' : 'Dark'}</span>
+        {where === 'sidebar' || where === 'masthead' ? <kbd>D</kbd> : null}
+      </button>
+    );
+  };
+
   const mapMode = location.pathname.startsWith('/powermap');
 
   return (
     <div
       className={`app-shell${mapMode ? ' mode-powermap' : ''}${idle && present && !presentNav ? ' present-idle' : ''}`}
       data-theme={theme}
+      data-appearance={appearance}
       data-present={present ? 'on' : 'off'}
       data-laser={laser ? 'on' : 'off'}
     >
@@ -569,6 +679,7 @@ export function AppShell() {
           </div>
           <nav className="nav">{navList(visible)}</nav>
           <div className="sidebar-footer">
+            {appearanceBtn('sidebar')}
             {laserBtn('sidebar')}
             {presentBtn('sidebar')}
             {userCard}
@@ -585,6 +696,7 @@ export function AppShell() {
               </div>
               <div className="page-masthead-actions">
                 {present && <span className="present-chip">Presenting</span>}
+                {appearanceBtn('masthead')}
                 {laserBtn('masthead')}
                 {presentBtn('masthead')}
               </div>
@@ -601,6 +713,7 @@ export function AppShell() {
 
       {mapMode && !present && (
         <div className="present-fab-stack">
+          {appearanceBtn('fab')}
           {laserBtn('fab')}
           {presentBtn('fab')}
         </div>
@@ -622,6 +735,17 @@ export function AppShell() {
             </span>
             <button type="button" className="present-hud-btn" onClick={() => setPresentNav(true)}>
               Modules <kbd>N</kbd>
+            </button>
+            <button
+              type="button"
+              className="present-hud-btn"
+              onClick={() => {
+                const next = appearance === 'dark' ? 'light' : 'dark';
+                appearanceBeforePresent.current = next;
+                setAppearanceOn(next);
+              }}
+            >
+              {appearance === 'dark' ? 'Light' : 'Dark'} <kbd>D</kbd>
             </button>
             <button
               type="button"
@@ -682,6 +806,7 @@ export function AppShell() {
           <div className="sheet-panel">
             <div className="sheet-handle" />
             {userCard}
+            {appearanceBtn('sheet')}
             <div className="sheet-title">More modules</div>
             <div className="sheet-grid">
               {moreLinks.map((l) => (

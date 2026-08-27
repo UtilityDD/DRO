@@ -26,6 +26,7 @@ import {
   encodeCutsParam,
   fmtDay,
   fmtInt,
+  fmtCompact,
   loadCustomDelayCuts,
   monthOfIso,
   yearOfIso,
@@ -87,10 +88,10 @@ const QUOTE_SWATCHES = [
   { label: '>30d', fill: SLAB_COLORS.m1_3 },
 ];
 const TOOLTIP_STYLE = {
-  background: '#ffffff',
-  border: '1px solid rgba(30,64,120,0.12)',
+  background: 'var(--chart-tooltip-bg)',
+  border: '1px solid var(--chart-tooltip-border)',
   borderRadius: 12,
-  color: '#1e293b',
+  color: 'var(--chart-tooltip-text)',
 };
 
 type NscDesk = Awaited<ReturnType<typeof api.nscDesk>>;
@@ -397,7 +398,7 @@ function chartFont(width: number, present: boolean) {
 
 function maxDigitsOf(values: number[]) {
   let max = 1;
-  for (const v of values) max = Math.max(max, fmtInt(Math.round(v || 0)).length);
+  for (const v of values) max = Math.max(max, fmtCompact(Math.round(v || 0)).length);
   return max;
 }
 
@@ -444,7 +445,7 @@ function planLabels(width: number, values: number[], present: boolean): ValueLab
 function labelProps(plan: ValueLabels, format?: (n: number) => string) {
   return {
     position: 'top' as const,
-    fill: '#334155',
+    fill: 'var(--chart-label)',
     fontSize: plan.font,
     fontWeight: 600,
     offset: plan.offset,
@@ -452,7 +453,7 @@ function labelProps(plan: ValueLabels, format?: (n: number) => string) {
     formatter: (v: unknown) => {
       const n = Number(v ?? 0);
       if (format) return Number.isFinite(n) ? format(n) : '';
-      return n ? fmtInt(n) : '';
+      return n ? fmtCompact(n) : '';
     },
   };
 }
@@ -1986,9 +1987,14 @@ export function NscDeskPage() {
               <div ref={delayBox.ref} className="nsc-chart-box" style={{ width: '100%', height: fit ? '100%' : DELAY_H }}>
                 <ResponsiveContainer>
                   <BarChart data={mixRows} margin={{ top: delayPlan.top, right: 8, left: 0, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
-                    <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: delayFont }} interval={0} />
-                    <YAxis tick={{ fill: '#64748b', fontSize: delayFont }} allowDecimals={false} width={delayAxisW} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+                    <XAxis dataKey="name" tick={{ fill: 'var(--chart-tick)', fontSize: delayFont }} interval={0} />
+                    <YAxis
+                      tick={{ fill: 'var(--chart-tick)', fontSize: delayFont }}
+                      allowDecimals={false}
+                      width={delayAxisW}
+                      tickFormatter={(v) => fmtCompact(Number(v))}
+                    />
                     <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => fmtInt(Number(value ?? 0))} />
                     <Bar dataKey="count" name="Cases" cursor="pointer" radius={[4, 4, 0, 0]}>
                       {mixRows.map((s) => {
@@ -2081,22 +2087,22 @@ export function NscDeskPage() {
               <div ref={timeBox.ref} className="nsc-office-chart nsc-chart-box" style={{ width: '100%', height: fit ? '100%' : TIMELINE_H }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={timeline} margin={{ top: Math.max(12, timePlan.top), right: 8, left: 0, bottom: 8 }} onClick={onTimelineClick}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                     <XAxis
                       dataKey="label"
-                      tick={{ fill: '#64748b', fontSize: timeFont }}
+                      tick={{ fill: 'var(--chart-tick)', fontSize: timeFont }}
                       interval={timeline.length > 20 ? Math.ceil(timeline.length / 16) - 1 : 0}
                       minTickGap={8}
                     />
-                    <YAxis yAxisId="left" tick={{ fill: '#64748b', fontSize: timeFont }} allowDecimals={false} width={timeAxisW} tickFormatter={(v) => fmtInt(Number(v))} />
+                    <YAxis yAxisId="left" tick={{ fill: 'var(--chart-tick)', fontSize: timeFont }} allowDecimals={false} width={timeAxisW} tickFormatter={(v) => fmtCompact(Number(v))} />
                     {tlRunning ? (
                       <YAxis
                         yAxisId="right"
                         orientation="right"
-                        tick={{ fill: '#64748b', fontSize: timeFont }}
+                        tick={{ fill: 'var(--chart-tick)', fontSize: timeFont }}
                         allowDecimals={false}
                         width={timeRunAxisW}
-                        tickFormatter={(v) => fmtInt(Number(v))}
+                        tickFormatter={(v) => fmtCompact(Number(v))}
                       />
                     ) : null}
                     <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value, name) => [fmtInt(Number(value ?? 0)), String(name)]} />
@@ -2211,15 +2217,15 @@ export function NscDeskPage() {
                           if (code) drillOffice(code);
                         }}
                       >
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                         <XAxis
                           dataKey="name"
-                          tick={{ fill: '#64748b', fontSize: officeFont }}
+                          tick={{ fill: 'var(--chart-tick)', fontSize: officeFont }}
                           interval={0}
                           tickFormatter={(v) => shortName(String(v ?? ''), officeTickChars)}
                         />
                         <YAxis
-                          tick={{ fill: '#64748b', fontSize: officeFont }}
+                          tick={{ fill: 'var(--chart-tick)', fontSize: officeFont }}
                           width={officeAxisW}
                           tickFormatter={(v) => fmtAvgDays(Number(v))}
                         />
@@ -2238,7 +2244,7 @@ export function NscDeskPage() {
                             ifOverflow="extendDomain"
                             label={{
                               value: `avg ${fmtAvgDays(quoteRegionAvg)}d`,
-                              fill: '#64748b',
+                              fill: 'var(--chart-tick)',
                               fontSize: officeFont,
                               position: 'insideTopRight',
                             }}
@@ -2269,14 +2275,19 @@ export function NscDeskPage() {
                         if (code) drillOffice(code);
                       }}
                     >
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,120,0.08)" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                       <XAxis
                         dataKey="name"
-                        tick={{ fill: '#64748b', fontSize: officeFont }}
+                        tick={{ fill: 'var(--chart-tick)', fontSize: officeFont }}
                         interval={0}
                         tickFormatter={(v) => shortName(String(v ?? ''), officeTickChars)}
                       />
-                      <YAxis tick={{ fill: '#64748b', fontSize: officeFont }} allowDecimals={false} width={officeAxisW} />
+                      <YAxis
+                        tick={{ fill: 'var(--chart-tick)', fontSize: officeFont }}
+                        allowDecimals={false}
+                        width={officeAxisW}
+                        tickFormatter={(v) => fmtCompact(Number(v))}
+                      />
                       <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => fmtInt(Number(Array.isArray(value) ? value[1] ?? value[0] : value ?? 0))} />
                       {officeStacked ? <Legend wrapperStyle={{ fontSize: officeFont + 1 }} /> : null}
                       {officeStacked

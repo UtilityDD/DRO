@@ -150,13 +150,13 @@ function MilestoneLabel({
   const oy = cy - 28 - stagger * 14;
   return (
     <g className="atc-datalabel">
-      <rect x={ox} y={oy} width={w} height={h} rx={9} fill="#ffffff" stroke={color} strokeWidth={1.25} />
+      <rect x={ox} y={oy} width={w} height={h} rx={9} fill="var(--chart-tooltip-bg)" stroke={color} strokeWidth={1.25} />
       <text
         x={cx}
         y={oy + h / 2 + 0.5}
         textAnchor="middle"
         dominantBaseline="middle"
-        fill="#1e293b"
+        fill="var(--chart-tooltip-text)"
         fontSize={10}
         fontWeight={650}
       >
@@ -400,14 +400,14 @@ const LINE_COLORS = [
 
 const CHART_TOOLTIP = {
   contentStyle: {
-    background: '#ffffff',
-    border: '1px solid rgba(30,64,120,0.12)',
+    background: 'var(--chart-tooltip-bg)',
+    border: '1px solid var(--chart-tooltip-border)',
     borderRadius: 12,
-    color: '#1e293b',
-    boxShadow: '0 8px 24px rgba(30,64,120,0.12)',
+    color: 'var(--chart-tooltip-text)',
+    boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
   },
-  labelStyle: { color: '#1e293b', fontWeight: 600, marginBottom: 4 },
-  itemStyle: { color: '#1e293b', padding: '2px 0' },
+  labelStyle: { color: 'var(--chart-tooltip-text)', fontWeight: 600, marginBottom: 4 },
+  itemStyle: { color: 'var(--chart-tooltip-text)', padding: '2px 0' },
   wrapperStyle: { outline: 'none' },
 };
 
@@ -603,7 +603,7 @@ function YAxisTick2({
   const n = Number(payload?.value);
   if (!Number.isFinite(n) || x == null || y == null) return null;
   return (
-    <text x={x} y={y} dy={4} textAnchor="end" fill="#64748b" fontSize={12}>
+    <text x={x} y={y} dy={4} textAnchor="end" fill="var(--chart-tick)" fontSize={12}>
       {n.toFixed(2)}
       {unit}
     </text>
@@ -1773,14 +1773,14 @@ export function AtcPage() {
                           data={trendData}
                           margin={{ top: 28, right: 16, left: 4, bottom: 8 }}
                         >
-                          <CartesianGrid stroke="rgba(30,64,120,0.08)" vertical={false} />
+                          <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
                           <XAxis
                             dataKey="period"
                             type="category"
                             allowDuplicatedCategory={false}
                             padding={{ left: 0, right: 8 }}
                             interval={0}
-                            tick={{ fill: '#64748b', fontSize: 12 }}
+                            tick={{ fill: 'var(--chart-tick)', fontSize: 12 }}
                             minTickGap={0}
                           />
                           <YAxis
@@ -1801,7 +1801,7 @@ export function AtcPage() {
                             {...CHART_TOOLTIP}
                             formatter={(v: number, name: string) => [fmtTip(v), name]}
                           />
-                          <Legend wrapperStyle={{ fontSize: 11, color: '#1e293b', paddingTop: 4 }} />
+                          <Legend wrapperStyle={{ fontSize: 11, color: 'var(--chart-label)', paddingTop: 4 }} />
                           {activeCodes.map((code, si) => (
                             <Line
                               key={code}
@@ -1894,11 +1894,11 @@ export function AtcPage() {
                             barCategoryGap={wideCompareAxis ? '18%' : '12%'}
                             barGap={4}
                           >
-                            <CartesianGrid stroke="rgba(30,64,120,0.08)" vertical={false} />
+                            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
                             <XAxis
                               dataKey="name"
                               tick={{
-                                fill: '#94a3b8',
+                                fill: 'var(--chart-tick)',
                                 fontSize: wideCompareAxis ? 13 : 11,
                                 fontWeight: wideCompareAxis ? 650 : 500,
                               }}
@@ -1928,7 +1928,7 @@ export function AtcPage() {
                               }}
                             />
                             <Legend
-                              wrapperStyle={{ fontSize: 11, color: '#1e293b', paddingTop: 4 }}
+                              wrapperStyle={{ fontSize: 11, color: 'var(--chart-label)', paddingTop: 4 }}
                             />
                             <Bar
                               dataKey="input"
@@ -2013,11 +2013,11 @@ export function AtcPage() {
                               bottom: isMetricCompare ? 16 : wideCompareAxis ? 28 : 48,
                             }}
                           >
-                            <CartesianGrid stroke="rgba(30,64,120,0.08)" vertical={false} />
+                            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
                             <XAxis
                               dataKey="name"
                               tick={{
-                                fill: '#94a3b8',
+                                fill: 'var(--chart-tick)',
                                 fontSize: wideCompareAxis ? 13 : isMetricCompare ? 12 : 11,
                                 fontWeight: wideCompareAxis ? 650 : 500,
                               }}
@@ -2067,7 +2067,7 @@ export function AtcPage() {
                               />
                             )}
                             <Legend
-                              wrapperStyle={{ fontSize: 11, color: '#1e293b', paddingTop: 4 }}
+                              wrapperStyle={{ fontSize: 11, color: 'var(--chart-label)', paddingTop: 4 }}
                             />
                             <Bar
                               dataKey="value"

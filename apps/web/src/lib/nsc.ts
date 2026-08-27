@@ -329,6 +329,22 @@ export function fmtInt(n: number) {
   return n.toLocaleString('en-IN');
 }
 
+function compactPart(n: number) {
+  const r = Math.round(n * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
+/** Short chart-axis labels: 34,000 → 34k. */
+export function fmtCompact(n: number) {
+  if (!Number.isFinite(n)) return '';
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1e7) return `${sign}${compactPart(abs / 1e7)}Cr`;
+  if (abs >= 1e5) return `${sign}${compactPart(abs / 1e5)}L`;
+  if (abs >= 1000) return `${sign}${compactPart(abs / 1000)}k`;
+  return `${sign}${Math.round(abs)}`;
+}
+
 /** Date used to place a withheld case on the historical timeline. */
 export function withheldEventOn(row: NscRow): string | null {
   return row.withheld_on || row.collected_on || row.created_on || row.quotation_issue_on || null;

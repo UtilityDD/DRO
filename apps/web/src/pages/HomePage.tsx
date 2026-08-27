@@ -46,17 +46,17 @@ export function HomePage() {
           <div className="home-chart" style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer>
               <BarChart data={nscDiv}>
-                <XAxis dataKey="division_name" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#64748b', fontSize: 11 }} allowDecimals={false} />
+                <XAxis dataKey="division_name" tick={{ fill: 'var(--chart-tick)', fontSize: 11 }} />
+                <YAxis tick={{ fill: 'var(--chart-tick)', fontSize: 11 }} allowDecimals={false} />
                 <Tooltip
                   contentStyle={{
-                    background: '#ffffff',
-                    border: '1px solid rgba(30,64,120,0.12)',
+                    background: 'var(--chart-tooltip-bg)',
+                    border: '1px solid var(--chart-tooltip-border)',
                     borderRadius: 12,
-                    color: '#1e293b',
+                    color: 'var(--chart-tooltip-text)',
                   }}
-                  labelStyle={{ color: '#1e293b', fontWeight: 600 }}
-                  itemStyle={{ color: '#1e293b' }}
+                  labelStyle={{ color: 'var(--chart-tooltip-text)', fontWeight: 600 }}
+                  itemStyle={{ color: 'var(--chart-tooltip-text)' }}
                 />
                 <Bar dataKey="pending" fill="var(--accent)" radius={[6, 6, 0, 0]} />
               </BarChart>
