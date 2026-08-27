@@ -411,6 +411,19 @@ async function persistCollection(name, copy) {
     return;
   }
   if (name === 'nsc_cases') {
+    const incoming = Array.isArray(copy) ? copy.length : 0;
+    let live = 0;
+    try {
+      live = await sb.countRows(table);
+    } catch (e) {
+      console.warn('[store] nsc live count failed:', e.message);
+    }
+    if (incoming < 200 && live > 200) {
+      console.error(
+        `[store] refusing nsc persist of ${incoming} rows (live ${live}). Seed/demo writes must not replace the SAP dump.`
+      );
+      return;
+    }
     let useFull = true;
     try {
       await sb.querySupabase('nsc_cases?select=consumer_id,phone,report_date,pole_count,procedure&limit=1');
@@ -560,8 +573,8 @@ async function pushAllLocalToSupabase() {
   if (!useSupabase()) throw new Error('Supabase not configured');
   const report = [];
   for (const [name, table] of Object.entries(TABLES)) {
-    if (CLOUD_ONLY.has(name) || name === 'atc_snapshots') {
-      console.warn(`[supabase:push] skipped ${table} (refusing to replace AT&C / cloud-only data)`);
+    if (CLOUD_ONLY.has(name) || name === 'atc_snapshots' || name === 'nsc_cases') {
+      console.warn(`[supabase:push] skipped ${table} (refusing to replace AT&C / NSC / cloud-only data)`);
       report.push({ table, rows: 0, skipped: true });
       continue;
     }

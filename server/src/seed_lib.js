@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { writeCollectionSync } = require('./store');
+const { writeCollectionSync, useSupabase } = require('./store');
 const { fullPerms, makePerms } = require('./permissions');
 const { hydrateNsc } = require('./nsc_parse');
 
@@ -274,7 +274,11 @@ function seedAll(seedMapOrNull) {
   writeCollectionSync('upload_batches', []);
   writeCollectionSync('consumer_master', []);
   writeCollectionSync('bulk_consumers', []);
-  writeCollectionSync('nsc_cases', sampleNsc(offices));
+  if (useSupabase()) {
+    console.warn('[seed] skipping nsc_cases — live SAP dump stays in Supabase');
+  } else {
+    writeCollectionSync('nsc_cases', sampleNsc(offices));
+  }
   writeCollectionSync('disconnections', sampleDisco(offices));
   writeCollectionSync('grievances', sampleGrievances(offices));
   writeCollectionSync('tech_work_categories', require('./tech_works').defaultCategories());
