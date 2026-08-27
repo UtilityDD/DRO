@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalizeUser } = require('./permissions');
 const sb = require('./supabase');
-const { hydrateNscRows, packNscCloudRow, slimNscCloudRow } = require('./nsc_parse');
+const { hydrateNscRows, packNscCloudRow, slimNscCloudRow, mergeFirstSeen } = require('./nsc_parse');
 const { hydrateFieldNote, packFieldNoteCloudRow } = require('./field_notes');
 const { hydrateTechWork, packTechWorkCloudRow, resolveLoadedWorks } = require('./tech_works');
 
@@ -417,7 +417,35 @@ async function persistCollection(name, copy) {
     } catch {
       useFull = false;
     }
-    const packed = copy.map((row) => sanitizeRow(useFull ? packNscCloudRow(row) : slimNscCloudRow(row)));
+    // Preserve first_seen_on from whatever is already live in the cloud
+    const existingByApp = new Map();
+    const apps = [...new Set(copy.map((r) => String(r?.application_no || '').trim()).filter(Boolean))];
+    for (let i = 0; i < apps.length; i += 80) {
+      const chunk = apps.slice(i, i + 80);
+      const filter = chunk.map((a) => `"${String(a).replace(/"/g, '')}"`).join(',');
+      try {
+        const found = await sb.querySupabase(
+          `nsc_cases?select=application_no,first_seen_on&application_no=in.(${filter})`
+        );
+        for (const row of Array.isArray(found) ? found : []) {
+          if (row?.application_no && row.first_seen_on) {
+            existingByApp.set(String(row.application_no), row.first_seen_on);
+          }
+        }
+      } catch (e) {
+        if (!/first_seen_on/i.test(String(e.message || e))) throw e;
+        break;
+      }
+    }
+    // Also keep whatever was already in the local/cache copy before this write
+    for (const row of Array.isArray(cache.nsc_cases) ? cache.nsc_cases : []) {
+      const app = String(row?.application_no || '').trim();
+      if (app && row.first_seen_on && !existingByApp.has(app)) {
+        existingByApp.set(app, row.first_seen_on);
+      }
+    }
+    const stamped = mergeFirstSeen(copy, existingByApp);
+    const packed = stamped.map((row) => sanitizeRow(useFull ? packNscCloudRow(row) : slimNscCloudRow(row)));
     const chunk = 400;
     for (let i = 0; i < packed.length; i += chunk) {
       await sb.upsertRows(table, packed.slice(i, i + chunk), 'application_no', { silent: true });
@@ -496,10 +524,11 @@ function scopeFilter(user, row) {
   if (role === 'ccc') {
     if (!userCcc && !userDiv) return false;
     if (userCcc) {
-      // Own CCC row, or parent division rollup for context
+      // Own CCC office row, or parent division rollup for context
       if (officeType === 'ccc') return office === userCcc || rowCcc === userCcc;
       if (officeType === 'division' && userDiv) return office === userDiv || inferredDiv === userDiv;
-      return false;
+      // Case-like rows (NSC, disco, …) have no office_type — match by CCC code
+      return rowCcc === userCcc;
     }
     return inferredDiv === userDiv;
   }

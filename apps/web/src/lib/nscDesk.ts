@@ -12,8 +12,12 @@ import {
 
 export type NscChartRow = {
   application_no?: string;
+  consumer_id?: string;
+  consumer_name?: string;
+  phone?: string;
   status: string;
   sap_status?: string;
+  stage?: string;
   division_code: string;
   division_name: string;
   ccc_code: string;
@@ -27,12 +31,15 @@ export type NscChartRow = {
   procedure?: string;
   applicant_type?: string;
   agency_name?: string;
+  wo_no?: string;
   withheld_on: string | null;
   withheld_reason: string;
   collected_on: string | null;
   created_on?: string | null;
   quotation_issue_on: string | null;
   report_date: string | null;
+  remarks?: string;
+  first_seen_on?: string | null;
 };
 
 export type NscDeskQuery = {
@@ -193,8 +200,12 @@ function daysInRange(days: unknown, min: number | null, max: number | null) {
 export function hydrateChartRow(row: NscChartRow): NscChartRow {
   const out: NscChartRow = {
     application_no: row.application_no || '',
+    consumer_id: row.consumer_id || '',
+    consumer_name: row.consumer_name || '',
+    phone: row.phone || '',
     status: String(row.status || 'pending').toLowerCase() === 'withheld' ? 'withheld' : String(row.status || 'pending'),
     sap_status: row.sap_status || '',
+    stage: row.stage || '',
     division_code: row.division_code || '',
     division_name: row.division_name || row.division_code || '',
     ccc_code: row.ccc_code || '',
@@ -208,12 +219,15 @@ export function hydrateChartRow(row: NscChartRow): NscChartRow {
     procedure: row.procedure || 'unknown',
     applicant_type: row.applicant_type || '',
     agency_name: row.agency_name || '',
+    wo_no: row.wo_no || '',
     withheld_on: row.withheld_on || null,
     withheld_reason: row.withheld_reason || '',
     collected_on: row.collected_on || null,
     created_on: row.created_on || null,
     quotation_issue_on: row.quotation_issue_on || null,
     report_date: row.report_date || null,
+    remarks: row.remarks || '',
+    first_seen_on: row.first_seen_on || null,
   };
   if (out.quotation_age_days != null && !out.quotation_age_slab) {
     out.quotation_age_slab = slabFor(Number(out.quotation_age_days)).id;
@@ -271,7 +285,7 @@ export function filterNscChartRows(rows: NscChartRow[], q: NscDeskQuery = {}) {
       if (timeKey.length === 4 && yearOfIso(iso) !== timeKey) return false;
     }
     if (search) {
-      const blob = `${r.application_no || ''} ${r.ccc_name || ''} ${r.withheld_reason || ''} ${r.agency_name || ''}`.toLowerCase();
+      const blob = `${r.application_no || ''} ${r.consumer_id || ''} ${r.consumer_name || ''} ${r.phone || ''} ${r.ccc_name || ''} ${r.withheld_reason || ''} ${r.agency_name || ''} ${r.wo_no || ''}`.toLowerCase();
       if (!blob.includes(search)) return false;
     }
     return true;

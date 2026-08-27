@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   Bar,
   BarChart,
@@ -40,7 +40,17 @@ import {
   procedureLabel,
 } from '../lib/nsc';
 import { NSC_NO_AGENCY, buildNscDesk, nscEventOn, overlayNscOffices, type NscChartRow, type NscDeskQuery } from '../lib/nscDesk';
-import { nscCacheGetQueue, nscQueueMemGet } from '../lib/nscCache';
+import { nscCacheBindUser, nscCacheGetQueue, nscQueueMemGet } from '../lib/nscCache';
+import {
+  nscFollowupsAdd,
+  nscFollowupsBindUser,
+  nscFollowupsIndex,
+  nscFollowupsList,
+  nscFollowupsPrune,
+  nscFollowupsRemove,
+  type NscFollowup,
+  type NscFollowupMeta,
+} from '../lib/nscFollowups';
 import { ensureNscQueue, prefetchNscQueue, warmNscStamp, type NscQueueSnap } from '../lib/nscQueue';
 import { usePageHeading } from '../lib/pageHeading';
 import {
@@ -74,7 +84,7 @@ const TOOLTIP_STYLE = {
 
 type NscDesk = Awaited<ReturnType<typeof api.nscDesk>>;
 type DeskView = 'overview' | 'table';
-type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'agency' | 'time' | 'reason' | 'cases';
+type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'agency' | 'time' | 'reason' | 'followups' | 'cases';
 type DelayBand = 'exclusive' | 'cumulative';
 type TimelineGrain = 'month' | 'year';
 type TimelineSeries = 'office' | 'total';
@@ -124,6 +134,7 @@ const TABLE_GRAINS_PENDING: { id: TableGrain; label: string }[] = [
   { id: 'class', label: 'Class' },
   { id: 'work', label: 'Work' },
   { id: 'agency', label: 'Agency' },
+  { id: 'followups', label: 'My follow-up' },
   { id: 'cases', label: 'Cases' },
 ];
 
@@ -135,6 +146,7 @@ const TABLE_GRAINS_HELD: { id: TableGrain; label: string }[] = [
   { id: 'work', label: 'Work' },
   { id: 'agency', label: 'Agency' },
   { id: 'reason', label: 'Reason' },
+  { id: 'followups', label: 'My follow-up' },
   { id: 'cases', label: 'Cases' },
 ];
 
@@ -460,10 +472,308 @@ function NscSkeleton() {
   );
 }
 
+function CaseField({ label, value }: { label: string; value: ReactNode }) {
+  const empty = value == null || value === '' || value === '—';
+  return (
+    <div className={`nsc-case-field${empty ? ' empty' : ''}`}>
+      <span>{label}</span>
+      <strong>{empty ? '—' : value}</strong>
+    </div>
+  );
+}
+
+function fmtSeen(iso: string | null | undefined) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return fmtDay(iso.slice(0, 10));
+  return d.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function fmtRelative(iso: string) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return fmtSeen(iso);
+  const diff = Date.now() - t;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return fmtSeen(iso);
+}
+
+function NscCaseSheet({
+  row,
+  clock,
+  onClose,
+  onNotesChange,
+}: {
+  row: NscChartRow;
+  clock: NscClock;
+  onClose: () => void;
+  onNotesChange?: () => void;
+}) {
+  const age = rowDays(row, clock);
+  const work = workKind(row);
+  const held = String(row.status).toLowerCase() === 'withheld';
+  const title = row.consumer_name?.trim() || row.application_no || 'Consumer';
+  const appNo = String(row.application_no || '').trim();
+  const [notes, setNotes] = useState<NscFollowup[]>([]);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+
+  const timelineSteps = useMemo(
+    () =>
+      [
+        { label: 'First in DRO', date: row.first_seen_on },
+        { label: 'Applied', date: row.created_on || null },
+        { label: 'Quotation', date: row.quotation_issue_on },
+        { label: 'Collected', date: row.collected_on },
+        ...(held ? [{ label: 'Withheld', date: row.withheld_on }] : []),
+      ].filter((s) => s.date),
+    [row, held],
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    draftRef.current?.focus();
+  }, [appNo]);
+
+  useEffect(() => {
+    let live = true;
+    nscFollowupsList(appNo).then((items) => {
+      if (live) setNotes(items);
+    });
+    return () => {
+      live = false;
+    };
+  }, [appNo]);
+
+  const addNote = async () => {
+    if (!draft.trim() || saving) return;
+    setSaving(true);
+    try {
+      const next = await nscFollowupsAdd(appNo, draft);
+      setNotes(next);
+      setDraft('');
+      onNotesChange?.();
+      draftRef.current?.focus();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeNote = async (id: string) => {
+    const next = await nscFollowupsRemove(appNo, id);
+    setNotes(next);
+    onNotesChange?.();
+  };
+
+  const onDraftKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      void addNote();
+    }
+  };
+
+  return (
+    <div className="nsc-case-back" role="presentation" onClick={onClose}>
+      <div
+        className={`nsc-case-sheet${held ? ' held' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="nsc-case-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className={`nsc-case-hero${held ? ' held' : ''}`}>
+          <div className="nsc-case-hero-text">
+            <p className="nsc-case-kicker">{held ? 'Withheld NSC' : 'Pending NSC'}</p>
+            <h3 id="nsc-case-title">{title}</h3>
+            <div className="nsc-case-chips">
+              {appNo ? <span className="nsc-case-chip">{appNo}</span> : null}
+              {row.consumer_class ? <span className="nsc-case-chip">{row.consumer_class}</span> : null}
+              {age != null ? (
+                <span className={`nsc-case-chip nsc-case-chip-age ${ageTone(age)}`}>{fmtInt(age)} days</span>
+              ) : null}
+              {row.consumer_id ? <span className="nsc-case-chip muted">ID {row.consumer_id}</span> : null}
+            </div>
+          </div>
+          <div className="nsc-case-hero-actions">
+            {row.phone ? (
+              <a className="nsc-case-call" href={`tel:${row.phone}`} onClick={(e) => e.stopPropagation()}>
+                Call {row.phone}
+              </a>
+            ) : null}
+            <button type="button" className="nsc-case-close" aria-label="Close" onClick={onClose}>
+              ×
+            </button>
+          </div>
+        </header>
+
+        <div className="nsc-case-body">
+          <aside className="nsc-case-aside nsc-case-followups">
+            <div className="nsc-case-fu-head">
+              <div>
+                <h4>My follow-up</h4>
+                <p className="nsc-case-local-hint">Saved on this device · cleared when case leaves queue</p>
+              </div>
+              {notes.length ? <em className="nsc-fu-badge">{notes.length}</em> : null}
+            </div>
+
+            <div className="nsc-case-follow-composer">
+              <textarea
+                ref={draftRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onDraftKey}
+                rows={4}
+                placeholder="What did you check? Who did you speak to? What is the next step?"
+                aria-label="Follow-up note"
+              />
+              <div className="nsc-case-follow-actions">
+                <span className="nsc-case-fu-hint">Ctrl+Enter to save</span>
+                <button type="button" className="btn nsc-case-fu-btn" disabled={!draft.trim() || saving} onClick={addNote}>
+                  {saving ? 'Saving…' : 'Log follow-up'}
+                </button>
+              </div>
+            </div>
+
+            {notes.length ? (
+              <ol className="nsc-case-follow-timeline" aria-label="Follow-up history">
+                {[...notes].reverse().map((n, i) => (
+                  <li key={n.id} className={i === 0 ? 'latest' : ''}>
+                    <div className="nsc-case-fu-dot" aria-hidden />
+                    <div className="nsc-case-fu-card">
+                      <div className="nsc-case-fu-meta">
+                        <time dateTime={n.at} title={fmtSeen(n.at)}>
+                          {fmtRelative(n.at)}
+                        </time>
+                        {i === 0 ? <span className="nsc-case-fu-latest">Latest</span> : null}
+                      </div>
+                      <p>{n.text}</p>
+                      <button
+                        type="button"
+                        className="nsc-case-follow-del"
+                        aria-label="Delete note"
+                        onClick={() => removeNote(n.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <div className="nsc-case-fu-empty">
+                <p>No follow-ups logged yet.</p>
+                <p className="muted">Use the box above to record calls, site visits, or next actions.</p>
+              </div>
+            )}
+          </aside>
+
+          <div className="nsc-case-main">
+            <div className="nsc-case-stats">
+              <div className={`nsc-case-stat${age != null ? ` ${ageTone(age)}` : ''}`}>
+                <span>Age</span>
+                <strong>{age != null ? `${fmtInt(age)}d` : '—'}</strong>
+                <small>{clock === 'processing' ? 'Processing' : 'Quotation'}</small>
+              </div>
+              <div className="nsc-case-stat">
+                <span>Work</span>
+                <strong>{poleLabel(work, row.pole_count)}</strong>
+                <small>{procedureLabel(row.procedure, row.applicant_type) || '—'}</small>
+              </div>
+              <div className="nsc-case-stat">
+                <span>Office</span>
+                <strong>{row.ccc_name || row.ccc_code || '—'}</strong>
+                <small>{row.division_name || row.division_code || '—'}</small>
+              </div>
+              <div className="nsc-case-stat">
+                <span>Agency</span>
+                <strong>{row.agency_name || '—'}</strong>
+                <small>{row.wo_no ? `WO ${row.wo_no}` : 'No work order'}</small>
+              </div>
+            </div>
+
+            {timelineSteps.length ? (
+              <div className="nsc-case-milestones" aria-label="Case timeline">
+                {timelineSteps.map((s, i) => (
+                  <div key={s.label} className="nsc-case-milestone">
+                    {i > 0 ? <span className="nsc-case-mile-line" aria-hidden /> : null}
+                    <span className="nsc-case-mile-dot" aria-hidden />
+                    <span className="nsc-case-mile-label">{s.label}</span>
+                    <time dateTime={String(s.date)}>{fmtDay(String(s.date))}</time>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="nsc-case-panels">
+              <section className="nsc-case-panel">
+                <h4>Consumer</h4>
+                <div className="nsc-case-grid">
+                  <CaseField label="Name" value={row.consumer_name} />
+                  <CaseField label="Phone" value={row.phone} />
+                  <CaseField label="Class" value={row.consumer_class} />
+                  <CaseField label="Applicant" value={row.applicant_type} />
+                </div>
+              </section>
+
+              <section className="nsc-case-panel">
+                <h4>Connection</h4>
+                <div className="nsc-case-grid">
+                  <CaseField label="SAP / stage" value={row.sap_status || row.stage} />
+                  <CaseField label="Procedure" value={procedureLabel(row.procedure, row.applicant_type)} />
+                  <CaseField label="Report date" value={fmtDay(row.report_date)} />
+                  <CaseField label="First in DRO" value={fmtSeen(row.first_seen_on)} />
+                </div>
+              </section>
+            </div>
+
+            {held && row.withheld_reason?.trim() ? (
+              <div className="nsc-case-alert held">
+                <strong>Withheld reason</strong>
+                <p>{row.withheld_reason.trim()}</p>
+                {row.withheld_on ? <time dateTime={row.withheld_on}>{fmtDay(row.withheld_on)}</time> : null}
+              </div>
+            ) : null}
+
+            {row.remarks?.trim() ? (
+              <div className="nsc-case-alert">
+                <strong>File remarks</strong>
+                <p>{row.remarks.trim()}</p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function NscDeskPage() {
   const { user } = useAuth();
   const canUpload = canUploadModule(user, 'nsc');
   const present = usePresentMode();
+  const role = String(user?.role || '').toLowerCase();
+  const canPickAllOffices = role === 'admin' || role === 'region';
+  const lockedDiv = !canPickAllOffices ? String(user?.division_code || '').trim() : '';
+  const lockedCcc = !canPickAllOffices ? String(user?.ccc_code || '').trim() : '';
   const [queueSnap, setQueueSnap] = useState<NscQueueSnap | null>(() => nscQueueMemGet('pending'));
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(() => !nscQueueMemGet('pending'));
@@ -472,11 +782,11 @@ export function NscDeskPage() {
   const [queue, setQueue] = useState<NscQueue>('pending');
   const clock: NscClock = 'quotation';
   const [view, setView] = useState<DeskView>('overview');
-  const [tableGrain, setTableGrain] = useState<TableGrain>('division');
-  const [officeGrain, setOfficeGrain] = useState<OfficeGrain>('division');
+  const [tableGrain, setTableGrain] = useState<TableGrain>(lockedCcc ? 'ccc' : 'division');
+  const [officeGrain, setOfficeGrain] = useState<OfficeGrain>(lockedCcc ? 'ccc' : 'division');
   const [officeSlabs, setOfficeSlabs] = useState(false);
-  const [division, setDivision] = useState('');
-  const [ccc, setCcc] = useState('');
+  const [division, setDivision] = useState(lockedDiv);
+  const [ccc, setCcc] = useState(lockedCcc);
   const [klass, setKlass] = useState('');
   const [pole, setPole] = useState('');
   const [poleMin, setPoleMin] = useState<number | ''>('');
@@ -496,6 +806,9 @@ export function NscDeskPage() {
   const [qDebounced, setQDebounced] = useState('');
   const [page, setPage] = useState(0);
   const [caseSort, setCaseSort] = useState<Sort<CaseSortKey>>(null);
+  const [caseRow, setCaseRow] = useState<NscChartRow | null>(null);
+  const [followupIndex, setFollowupIndex] = useState<Map<string, NscFollowupMeta>>(() => new Map());
+  const [followupTick, setFollowupTick] = useState(0);
   const [timeKey, setTimeKey] = useState('');
   const [reasonPick, setReasonPick] = useState('');
   const [tlGrain, setTlGrain] = useState<TimelineGrain>('year');
@@ -507,6 +820,45 @@ export function NscDeskPage() {
   useEffect(() => {
     setCustomCuts(loadCustomDelayCuts(cutStoreKey));
   }, [cutStoreKey]);
+
+  useEffect(() => {
+    nscCacheBindUser(user?.username);
+    nscFollowupsBindUser(user?.username);
+  }, [user?.username]);
+
+  useEffect(() => {
+    let live = true;
+    nscFollowupsIndex().then((idx) => {
+      if (live) setFollowupIndex(idx);
+    });
+    return () => {
+      live = false;
+    };
+  }, [user?.username, queueSnap?.stamp, followupTick]);
+
+  // Drop local follow-ups only once both queues are known, so we do not wipe the other queue's notes
+  useEffect(() => {
+    if (!queueSnap) return;
+    const pending = queue === 'pending' ? queueSnap : nscQueueMemGet('pending');
+    const withheld = queue === 'withheld' ? queueSnap : nscQueueMemGet('withheld');
+    if (!pending || !withheld) return;
+    const alive = new Set<string>();
+    for (const r of [...(pending.rows || []), ...(withheld.rows || [])]) {
+      if (r.application_no) alive.add(String(r.application_no));
+    }
+    nscFollowupsPrune(alive).then(() => setFollowupTick((t) => t + 1));
+  }, [queueSnap, queue]);
+
+  // Keep division / CCC users locked to their office assignment
+  useEffect(() => {
+    if (lockedDiv && division !== lockedDiv) setDivision(lockedDiv);
+    if (lockedCcc) {
+      if (ccc !== lockedCcc) setCcc(lockedCcc);
+      if (officeGrain !== 'ccc') setOfficeGrain('ccc');
+    } else if (lockedDiv && officeGrain === 'division') {
+      setOfficeGrain('ccc');
+    }
+  }, [lockedDiv, lockedCcc, division, ccc, officeGrain]);
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q), 300);
@@ -549,13 +901,17 @@ export function NscDeskPage() {
 
   useEffect(() => {
     setPage(0);
-  }, [filterQs, reasonPick]);
+  }, [filterQs, reasonPick, tableGrain]);
+
+  useEffect(() => {
+    if (tableGrain !== 'cases' && tableGrain !== 'followups') setCaseRow(null);
+  }, [tableGrain, queue]);
 
   useEffect(() => {
     if (queue !== 'withheld') {
       setTimeKey('');
       setReasonPick('');
-      if (tableGrain === 'time' || tableGrain === 'reason') setTableGrain('division');
+      if (tableGrain === 'time' || tableGrain === 'reason') setTableGrain(lockedCcc ? 'ccc' : 'division');
     }
     if (view !== 'overview' && view !== 'table') setView('overview');
   }, [queue, view, tableGrain]);
@@ -668,13 +1024,26 @@ export function NscDeskPage() {
   const procCounts = useMemo(() => countProcs(kpiBase), [kpiBase]);
   const mixTotal = kpiBase.length;
   const tableRows = useMemo(() => {
-    const rows = facetRows(sourceRows, deskQuery);
-    if (!reasonPick) return rows;
-    if (reasonPick === 'Not recorded') return rows.filter((r) => !String(r.withheld_reason || '').trim());
-    return rows.filter((r) => String(r.withheld_reason || '').trim() === reasonPick);
-  }, [sourceRows, deskQuery, reasonPick]);
+    let rows = facetRows(sourceRows, deskQuery);
+    if (reasonPick) {
+      rows =
+        reasonPick === 'Not recorded'
+          ? rows.filter((r) => !String(r.withheld_reason || '').trim())
+          : rows.filter((r) => String(r.withheld_reason || '').trim() === reasonPick);
+    }
+    if (tableGrain === 'followups') {
+      rows = rows.filter((r) => followupIndex.has(String(r.application_no || '').trim()));
+      rows = [...rows].sort((a, b) => {
+        const la = followupIndex.get(String(a.application_no || '').trim())?.latest || '';
+        const lb = followupIndex.get(String(b.application_no || '').trim())?.latest || '';
+        return lb.localeCompare(la);
+      });
+    }
+    return rows;
+  }, [sourceRows, deskQuery, reasonPick, tableGrain, followupIndex]);
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE));
   const sortedCases = useMemo(() => {
+    if (tableGrain === 'followups' && !caseSort) return tableRows;
     if (!caseSort) return tableRows;
     const dir = caseSort.dir === 'asc' ? 1 : -1;
     const text = (r: NscChartRow) => {
@@ -709,9 +1078,10 @@ export function NscDeskPage() {
       if (an != null) return (an - (num(b) as number)) * dir;
       return String(text(a)).localeCompare(String(text(b))) * dir;
     });
-  }, [tableRows, caseSort, clock]);
+  }, [tableRows, caseSort, clock, tableGrain]);
   const tablePage = sortedCases.slice(page * PAGE, page * PAGE + PAGE);
-  const tableCols = queue === 'withheld' ? 12 : 10;
+  const showCaseTable = tableGrain === 'cases' || tableGrain === 'followups';
+  const tableCols = queue === 'withheld' ? (showCaseTable && tableGrain === 'followups' ? 13 : 12) : tableGrain === 'followups' ? 11 : 10;
   const classRows = useMemo(() => countClasses(classFacet), [classFacet]);
   const poleCounts = useMemo(() => countPoles(poleFacet), [poleFacet]);
   // every known class keeps its row (at zero) so filters never reflow the panel
@@ -985,10 +1355,12 @@ export function NscDeskPage() {
   const drillOffice = (code: string) => {
     if (!code) return;
     if (officeGrain === 'division') {
+      if (lockedDiv) return;
       setDivision((prev) => (prev === code ? '' : code));
-      setCcc('');
+      setCcc(lockedCcc || '');
       return;
     }
+    if (lockedCcc) return;
     setCcc((prev) => (prev === code ? '' : code));
   };
 
@@ -1051,8 +1423,10 @@ export function NscDeskPage() {
   };
 
   const clearFilters = () => {
-    setDivision('');
-    setCcc('');
+    if (!lockedDiv) setDivision('');
+    else setDivision(lockedDiv);
+    if (!lockedCcc) setCcc('');
+    else setCcc(lockedCcc);
     setKlass('');
     setPole('');
     setPoleMin('');
@@ -1066,12 +1440,21 @@ export function NscDeskPage() {
     setTimeKey('');
     setQ('');
     setReasonPick('');
-    setOfficeGrain('division');
+    setOfficeGrain(lockedCcc ? 'ccc' : lockedDiv ? 'ccc' : 'division');
     if (queue === 'withheld') setTlGrain('year');
   };
 
   const hasFilters = Boolean(
-    division || ccc || klass || pole || procedure || agency || delayActive || timeKey || qDebounced || reasonPick
+    (!lockedDiv && division) ||
+      (!lockedCcc && ccc) ||
+      klass ||
+      pole ||
+      procedure ||
+      agency ||
+      delayActive ||
+      timeKey ||
+      qDebounced ||
+      reasonPick
   );
   const agencyLabel = agency === NSC_NO_AGENCY ? 'Not assigned' : agency;
   const divName = divisions.find((d) => d.code === division)?.name || division;
@@ -1114,13 +1497,15 @@ export function NscDeskPage() {
 
   const pickSummary = (grain: TableGrain, row: NscSumRow) => {
     if (grain === 'division') {
+      if (lockedDiv && row.key !== lockedDiv) return;
       setDivision(row.key);
-      setCcc('');
+      setCcc(lockedCcc || '');
       setOfficeGrain('ccc');
       setTableGrain('ccc');
       return;
     }
     if (grain === 'ccc') {
+      if (lockedCcc && row.key !== lockedCcc) return;
       setCcc(row.key);
       setTableGrain('cases');
       return;
@@ -1181,13 +1566,24 @@ export function NscDeskPage() {
               ? 'Work'
               : tableGrain === 'agency'
                 ? 'Agency'
-              : tableGrain === 'time'
-                ? timeKey.length === 4
-                  ? 'Month'
-                  : 'Year'
+                : tableGrain === 'time'
+                  ? timeKey.length === 4
+                    ? 'Month'
+                    : 'Year'
                   : tableGrain === 'reason'
-                  ? 'Reason'
-                  : 'Cases';
+                    ? 'Reason'
+                    : tableGrain === 'followups'
+                      ? 'My follow-up'
+                      : 'Cases';
+  const followupAliveCount = useMemo(() => {
+    const scoped = facetRows(sourceRows, deskQuery);
+    let n = 0;
+    for (const r of scoped) {
+      if (followupIndex.has(String(r.application_no || '').trim())) n += 1;
+    }
+    return n;
+  }, [sourceRows, deskQuery, followupIndex]);
+  const refreshFollowups = () => setFollowupTick((t) => t + 1);
   const summaryRows =
     tableGrain === 'division'
       ? divisionSum
@@ -1284,22 +1680,28 @@ export function NscDeskPage() {
         <select
           className={division ? 'nsc-filter-on' : ''}
           value={division}
+          disabled={Boolean(lockedDiv)}
           onChange={(e) => {
             const v = e.target.value;
             setDivision(v);
-            setCcc('');
-            setOfficeGrain(v ? 'ccc' : 'division');
+            setCcc(lockedCcc || '');
+            setOfficeGrain(v || lockedDiv ? 'ccc' : 'division');
           }}
         >
-          <option value="">All divisions</option>
+          {!lockedDiv && <option value="">All divisions</option>}
           {divisions.map((d) => (
             <option key={d.code} value={d.code}>
               {d.name}
             </option>
           ))}
         </select>
-        <select className={ccc ? 'nsc-filter-on' : ''} value={ccc} onChange={(e) => setCcc(e.target.value)}>
-          <option value="">All CCCs</option>
+        <select
+          className={ccc ? 'nsc-filter-on' : ''}
+          value={ccc}
+          disabled={Boolean(lockedCcc)}
+          onChange={(e) => setCcc(e.target.value)}
+        >
+          {!lockedCcc && <option value="">All CCCs</option>}
           {cccs.map((c) => (
             <option key={c.code} value={c.code}>
               {c.name}
@@ -1646,16 +2048,18 @@ export function NscDeskPage() {
                 <h2 style={{ marginBottom: 0 }}>{officeGrain === 'ccc' ? 'CCC' : 'Division'}</h2>
                 <div className="nsc-chart-tools">
                   <div className="nsc-queue" role="tablist" aria-label="Office grain">
-                    <button
-                      type="button"
-                      className={officeGrain === 'division' ? 'on' : ''}
-                      onClick={() => {
-                        setOfficeGrain('division');
-                        setCcc('');
-                      }}
-                    >
-                      Division
-                    </button>
+                    {!lockedDiv && (
+                      <button
+                        type="button"
+                        className={officeGrain === 'division' ? 'on' : ''}
+                        onClick={() => {
+                          setOfficeGrain('division');
+                          setCcc(lockedCcc || '');
+                        }}
+                      >
+                        Division
+                      </button>
+                    )}
                     <button type="button" className={officeGrain === 'ccc' ? 'on' : ''} onClick={() => setOfficeGrain('ccc')}>
                       CCC
                     </button>
@@ -1844,11 +2248,11 @@ export function NscDeskPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setDivision('');
-                  setCcc('');
-                  setOfficeGrain('division');
+                  setDivision(lockedDiv || '');
+                  setCcc(lockedCcc || '');
+                  setOfficeGrain(lockedCcc || lockedDiv ? 'ccc' : 'division');
                   if (queue === 'withheld') setTimeKey('');
-                  setTableGrain('division');
+                  setTableGrain(lockedCcc ? 'ccc' : 'division');
                 }}
               >
                 All
@@ -1859,9 +2263,9 @@ export function NscDeskPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setCcc('');
+                      setCcc(lockedCcc || '');
                       setOfficeGrain('ccc');
-                      setTableGrain('ccc');
+                      setTableGrain(lockedCcc ? 'cases' : 'ccc');
                     }}
                   >
                     Div {divName}
@@ -1913,11 +2317,13 @@ export function NscDeskPage() {
             </nav>
             <div className="nsc-table-nav-row">
             <div className="nsc-queue nsc-grain-tabs" role="tablist" aria-label="Table grain">
-              {(queue === 'withheld' ? TABLE_GRAINS_HELD : TABLE_GRAINS_PENDING).map((g) => (
+              {(queue === 'withheld' ? TABLE_GRAINS_HELD : TABLE_GRAINS_PENDING)
+                .filter((g) => !(lockedCcc && g.id === 'division'))
+                .map((g) => (
                 <button
                   key={g.id}
                   type="button"
-                  className={tableGrain === g.id ? 'on' : ''}
+                  className={`${tableGrain === g.id ? 'on' : ''}${g.id === 'followups' && followupAliveCount ? ' nsc-fu-tab' : ''}`}
                   onClick={() => {
                     if (g.id === 'time') {
                       // Year tab shows years; a second click while on months steps back to years
@@ -1934,6 +2340,9 @@ export function NscDeskPage() {
                   }}
                 >
                   {g.label}
+                  {g.id === 'followups' && followupAliveCount > 0 ? (
+                    <em className="nsc-fu-badge">{followupAliveCount}</em>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -1974,7 +2383,10 @@ export function NscDeskPage() {
                 </div>
               </div>
             ) : null}
-            {tableGrain === 'cases' ? (
+            {showCaseTable && tableGrain === 'followups' && !tablePage.length ? (
+              <p className="muted nsc-fu-empty-hint">Add follow-up notes from any case row — they are saved on this device only.</p>
+            ) : null}
+            {showCaseTable ? (
               <div className="nsc-pager">
                 <span className="muted tight">
                   {fmtInt(tableRows.length)} · {page + 1}/{pageCount}
@@ -1989,7 +2401,7 @@ export function NscDeskPage() {
             ) : null}
             </div>
           </div>
-          {tableGrain !== 'cases' ? (
+          {!showCaseTable ? (
             <NscSumTable
               label={grainTitle}
               rows={summaryRows}
@@ -2016,6 +2428,7 @@ export function NscDeskPage() {
                     <SortTh label="Age" col="age" sort={caseSort} onSort={onCaseSort} />
                     <SortTh label="Collected" col="collected" sort={caseSort} onSort={onCaseSort} />
                     <SortTh label="Agency" col="agency" sort={caseSort} onSort={onCaseSort} first="asc" />
+                    {tableGrain === 'followups' && <th>Follow-up</th>}
                     {queue === 'withheld' && <SortTh label="Withheld" col="withheld" sort={caseSort} onSort={onCaseSort} />}
                     {queue === 'withheld' && <SortTh label="Reason" col="reason" sort={caseSort} onSort={onCaseSort} first="asc" />}
                   </tr>
@@ -2024,10 +2437,22 @@ export function NscDeskPage() {
                   {tablePage.map((r: NscChartRow, i: number) => {
                     const age = rowDays(r, clock);
                     const work = workKind(r);
+                    const app = String(r.application_no || '').trim();
+                    const fu = followupIndex.get(app);
+                    const selected = Boolean(caseRow?.application_no && caseRow.application_no === r.application_no);
                     return (
-                      <tr key={r.application_no || `${r.ccc_code}-${r.collected_on}-${i}`}>
+                      <tr
+                        key={r.application_no || `${r.ccc_code}-${r.collected_on}-${i}`}
+                        className={`${selected ? 'on' : ''}${fu ? ' nsc-fu-row' : ''}`}
+                        onClick={() => setCaseRow(r)}
+                      >
                         <td className="num nsc-sl">{page * PAGE + i + 1}</td>
-                        <td>{r.application_no || '—'}</td>
+                        <td>
+                          <span className="nsc-app-cell">
+                            {fu ? <span className="nsc-fu-mark" title={`${fu.count} follow-up note(s)`} aria-hidden /> : null}
+                            {r.application_no || '—'}
+                          </span>
+                        </td>
                         <td>{r.division_name || r.division_code || '—'}</td>
                         <td>{r.ccc_name || r.ccc_code || '—'}</td>
                         <td>{r.consumer_class || '—'}</td>
@@ -2036,6 +2461,18 @@ export function NscDeskPage() {
                         <td className={ageTone(age)}>{age ?? '—'}</td>
                         <td>{fmtDay(r.collected_on)}</td>
                         <td>{r.agency_name || '—'}</td>
+                        {tableGrain === 'followups' && (
+                          <td className="nsc-fu-preview">
+                            {fu ? (
+                              <>
+                                <small>{fmtSeen(fu.latest)}</small>
+                                <span>{fu.preview || `${fu.count} note(s)`}</span>
+                              </>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                        )}
                         {queue === 'withheld' && <td>{fmtDay(r.withheld_on)}</td>}
                         {queue === 'withheld' && <td>{r.withheld_reason || '—'}</td>}
                       </tr>
@@ -2044,7 +2481,7 @@ export function NscDeskPage() {
                   {!tablePage.length && (
                     <tr>
                       <td colSpan={tableCols} className="muted">
-                        None in this filter
+                        {tableGrain === 'followups' ? 'No local follow-ups in this filter' : 'None in this filter'}
                       </td>
                     </tr>
                   )}
@@ -2054,6 +2491,14 @@ export function NscDeskPage() {
           )}
         </div>
       )}
+      {caseRow ? (
+        <NscCaseSheet
+          row={caseRow}
+          clock={clock}
+          onClose={() => setCaseRow(null)}
+          onNotesChange={refreshFollowups}
+        />
+      ) : null}
         </>
       )}
     </div>
