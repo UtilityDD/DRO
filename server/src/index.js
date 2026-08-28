@@ -191,6 +191,50 @@ app.get('/api/powermap/config', requireAuth, async (req, res) => {
   res.json({ ...pub, schema, live });
 });
 
+/**
+ * Power Map edit rights for the signed-in portal user. Replaces the map's old
+ * standalone name + PIN unlock: `role=admin` is the map's super admin, and the
+ * `powermap.edit` grant makes an editor. An optional powermap.editors row keyed
+ * by portal_username narrows that editor to specific substations / districts;
+ * with no such row the grant applies to the whole network.
+ */
+app.get('/api/powermap/me', requireAuth, async (req, res) => {
+  const user = req.user;
+  const identity = {
+    username: user.username,
+    name: user.name || user.username,
+    role: isAdmin(user) ? 'super' : canEdit(user, 'powermap') ? 'editor' : null,
+    scopeId: null,
+    allowedSubstationIds: [],
+    allowedDistricts: [],
+    unrestricted: true,
+  };
+
+  if (identity.role !== 'editor') return res.json(identity);
+
+  try {
+    const rows = await sb.querySupabase(
+      'pm_editors?select=id,can_edit,allowed_substation_ids,allowed_districts' +
+        `&portal_username=eq.${encodeURIComponent(user.username)}&active=is.true&limit=1`,
+      { schema: 'public' }
+    );
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (row) {
+      if (row.can_edit === false) identity.role = null;
+      identity.scopeId = row.id;
+      identity.allowedSubstationIds = row.allowed_substation_ids || [];
+      identity.allowedDistricts = row.allowed_districts || [];
+      identity.unrestricted = false;
+    }
+  } catch (e) {
+    // Scope table or portal_username column missing (migration 022 not run yet).
+    // The portal grant still stands; it just cannot be narrowed.
+    console.warn('[powermap/me] scope lookup failed:', e.message);
+  }
+
+  res.json(identity);
+});
+
 function publicUser(u) {
   if (!u) return null;
   const normalized = normalizeUser(u);

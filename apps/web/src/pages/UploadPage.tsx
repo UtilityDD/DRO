@@ -277,7 +277,11 @@ export function UploadPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const allowedModules = AUTH_MODULES.filter(
-    (m) => m.id !== 'grievance' && m.id !== 'field_notes' && canUploadModule(user, m.id)
+    (m) =>
+      m.id !== 'grievance' &&
+      m.id !== 'field_notes' &&
+      m.id !== 'powermap' &&
+      canUploadModule(user, m.id)
   );
   const requestedModule = searchParams.get('module') || '';
   const [module, setModule] = useState<string>(

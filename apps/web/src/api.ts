@@ -37,6 +37,17 @@ export type AuthModule = {
   edit?: boolean;
 };
 
+/** Power Map edit rights derived from the portal session — see GET /api/powermap/me. */
+export type PowerMapIdentity = {
+  username: string;
+  name: string;
+  role: 'super' | 'editor' | null;
+  scopeId: string | null;
+  allowedSubstationIds: string[];
+  allowedDistricts: string[];
+  unrestricted: boolean;
+};
+
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
     credentials: 'include',
@@ -333,6 +344,7 @@ export const api = {
   batches: () => request<{ rows: Record<string, unknown>[] }>('/api/batches'),
   activity: () => request<{ rows: Record<string, unknown>[] }>('/api/activity'),
   users: () => request<{ users: User[]; modules: AuthModule[] }>('/api/users'),
+  powerMapIdentity: () => request<PowerMapIdentity>('/api/powermap/me'),
   createUser: (body: Partial<User> & { pin?: string; permissions?: Permissions }) =>
     request<{ user: User }>('/api/users', { method: 'POST', body: JSON.stringify(body) }),
   updateUser: (username: string, body: Partial<User> & { pin?: string; permissions?: Permissions }) =>
@@ -624,6 +636,7 @@ export const AUTH_MODULES = [
   { id: 'consumers', label: 'Consumer Master', uploadKey: 'consumers' },
   { id: 'atc', label: 'AT&C / T&D Losses', uploadKey: 'atc' },
   { id: 'field_notes', label: 'Field Desk', uploadKey: 'field-notes' },
+  { id: 'powermap', label: 'Power Map', uploadKey: 'powermap' },
 ] as const;
 
 export function emptyPermissions(): Permissions {

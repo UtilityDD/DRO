@@ -10,6 +10,9 @@ const MODULES = [
   { id: 'consumers', label: 'Consumer Master', uploadKey: 'consumers' },
   { id: 'atc', label: 'AT&C / T&D Losses', uploadKey: 'atc' },
   { id: 'field_notes', label: 'Field Desk', uploadKey: 'field-notes' },
+  // Power Map has no bulk uploader; only view/edit are meaningful. `edit` grants
+  // the map's editor unlock, which used to be a separate name + PIN.
+  { id: 'powermap', label: 'Power Map', uploadKey: 'powermap' },
 ];
 
 const ACTIONS = ['view', 'upload', 'edit'];

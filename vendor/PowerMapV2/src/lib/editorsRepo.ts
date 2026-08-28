@@ -3,6 +3,8 @@ import { supabase, supabaseConfigured, T } from '@/lib/supabase';
 export interface EditorAccount {
   id: string;
   name: string;
+  /** DRO portal account this scope belongs to; null on legacy PIN rows. */
+  portalUsername: string | null;
   canEdit: boolean;
   active: boolean;
   notes: string;
@@ -42,6 +44,7 @@ function mapEditor(r: Record<string, unknown>): EditorAccount {
   return {
     id: r.id as string,
     name: r.name as string,
+    portalUsername: (r.portal_username as string) ?? null,
     canEdit: Boolean(r.can_edit ?? true),
     active: Boolean(r.active ?? true),
     notes: (r.notes as string) ?? '',
@@ -88,9 +91,14 @@ export async function listEditors(): Promise<{ ok: boolean; editors: EditorAccou
   return { ok: true, editors: (data ?? []).map((r) => mapEditor(r as Record<string, unknown>)) };
 }
 
+/**
+ * Attach an edit scope to a DRO portal account. The account's own portal
+ * permission (`powermap.edit`) is what grants editing; this row only narrows it
+ * to specific substations / districts, so no PIN is involved.
+ */
 export async function authorizeEditor(input: {
+  portalUsername: string;
   name: string;
-  pin: string;
   notes?: string;
   allowedSubstationIds: string[];
   allowedDistricts: string[];
@@ -98,20 +106,18 @@ export async function authorizeEditor(input: {
   if (!supabase || !supabaseConfigured) {
     return { ok: false, message: 'Could not authorize right now' };
   }
-  const name = input.name.trim();
-  const pin = input.pin.trim();
-  if (!name) return { ok: false, message: 'Name is required' };
-  if (pin.length < 4) return { ok: false, message: 'PIN must be at least 4 characters' };
+  const portalUsername = input.portalUsername.trim();
+  const name = input.name.trim() || portalUsername;
+  if (!portalUsername) return { ok: false, message: 'Choose a portal user' };
   if (!input.allowedSubstationIds.length && !input.allowedDistricts.length) {
     return { ok: false, message: 'Select at least one substation or district' };
   }
 
-  const pinHash = await sha256Hex(pin);
   const { data, error } = await supabase
     .from(T.editors)
     .insert({
       name,
-      pin_hash: pinHash,
+      portal_username: portalUsername,
       can_edit: true,
       active: true,
       notes: input.notes?.trim() || null,
@@ -124,7 +130,13 @@ export async function authorizeEditor(input: {
   if (error) {
     console.warn('[PowerMap] authorizeEditor', error.message);
     if (error.message.toLowerCase().includes('duplicate') || error.code === '23505') {
-      return { ok: false, message: 'That name or PIN is already in use' };
+      return { ok: false, message: 'That portal user already has a scope' };
+    }
+    if (error.message.toLowerCase().includes('portal_username')) {
+      return {
+        ok: false,
+        message: 'Database update needed — run migration 022_powermap_portal_editors.sql',
+      };
     }
     if (error.message.toLowerCase().includes('allowed_substation') || error.code === '42703') {
       return {
@@ -153,7 +165,8 @@ export async function revokeEditor(id: string): Promise<{ ok: boolean; message: 
     console.warn('[PowerMap] revokeEditor', error.message);
     return { ok: false, message: 'Could not revoke right now' };
   }
-  return { ok: true, message: 'Editor access revoked' };
+  // Only the area limit goes away; edit rights live on the portal account.
+  return { ok: true, message: 'Area limit removed — this user can now edit anywhere' };
 }
 
 export async function verifyEditorLogin(

@@ -1570,6 +1570,11 @@ function SettingsForm() {
   const substations = useNetworkStore((s) => s.substations);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
   const editableSsIds = useNetworkStore((s) => s.editableSsIds);
+  const portalManaged = useNetworkStore((s) => s.portalManaged);
+  const portalIdentity = useNetworkStore((s) => s.portalIdentity);
+  const editorUnrestricted = useNetworkStore((s) => s.editorUnrestricted);
+  const portalUsers = useNetworkStore((s) => s.portalUsers);
+  const resumePortalEditing = useNetworkStore((s) => s.resumePortalEditing);
   const unlockAdmin = useNetworkStore((s) => s.unlockAdmin);
   const lockAdmin = useNetworkStore((s) => s.lockAdmin);
   const authorizeEditor = useNetworkStore((s) => s.authorizeEditor);
@@ -1587,8 +1592,7 @@ function SettingsForm() {
   const [busy, setBusy] = useState(false);
   const [loginName, setLoginName] = useState('');
   const [pin, setPin] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newPin, setNewPin] = useState('');
+  const [newUsername, setNewUsername] = useState('');
   const [scopeSsIds, setScopeSsIds] = useState<string[]>([]);
   const [scopeDistricts, setScopeDistricts] = useState<string[]>([]);
   const [ssFilter, setSsFilter] = useState('');
@@ -1619,13 +1623,12 @@ function SettingsForm() {
   const tryAuthorize = async () => {
     setBusy(true);
     try {
-      const ok = await authorizeEditor(newName, newPin, {
+      const ok = await authorizeEditor(newUsername, {
         allowedSubstationIds: scopeSsIds,
         allowedDistricts: scopeDistricts,
       });
       if (ok) {
-        setNewName('');
-        setNewPin('');
+        setNewUsername('');
         setScopeSsIds([]);
         setScopeDistricts([]);
       }
@@ -1662,16 +1665,41 @@ function SettingsForm() {
                 : `Editor · ${adminName ?? '—'}`}
           </strong>
         </p>
+        {portalManaged && portalIdentity && (
+          <p className="muted">
+            Signed in as <strong>{portalIdentity.name}</strong> ({portalIdentity.username})
+          </p>
+        )}
         {adminMode ? (
           <>
             <p className="muted">
               {adminRole === 'super'
                 ? 'You can edit the network, authorize editors, and review suggestions.'
-                : `You can suggest edits for ${editableSsIds.length} authorized SS (+ connected feeders).`}
+                : editorUnrestricted
+                  ? 'You can suggest edits anywhere on the network.'
+                  : `You can suggest edits for ${editableSsIds.length} authorized SS (+ connected feeders).`}
             </p>
             <button type="button" className="danger-btn" onClick={lockAdmin}>
-              Lock
+              {portalManaged ? 'Pause editing' : 'Lock'}
             </button>
+          </>
+        ) : portalManaged ? (
+          <>
+            <p className="muted">
+              {portalIdentity?.role
+                ? 'Editing is paused for this session.'
+                : 'Your portal account does not have Power Map edit permission. Ask a DRO admin to grant it under Admin → Users.'}
+            </p>
+            {portalIdentity?.role && (
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={busy}
+                onClick={() => void run(resumePortalEditing)}
+              >
+                Resume editing
+              </button>
+            )}
           </>
         ) : (
           <>
@@ -1778,25 +1806,29 @@ function SettingsForm() {
           </div>
 
           <div className="admin-box">
-            <p className="section-label">Authorize editors</p>
+            <p className="section-label">Limit an editor to an area</p>
             <p className="muted">
-              Name + PIN, then select substations and/or districts they may edit (SS + connected
-              feeders).
+              Edit rights come from the portal (Admin → Users → Power Map → Edit). Add a row here
+              only to restrict someone to certain substations and/or districts (SS + connected
+              feeders); without one their grant covers the whole network.
             </p>
-            <Field label="Name">
-              <input
-                value={newName}
-                placeholder="e.g. Raiganj AE"
-                onChange={(e) => setNewName(e.target.value)}
-              />
-            </Field>
-            <Field label="PIN for them">
-              <input
-                type="password"
-                autoComplete="off"
-                value={newPin}
-                onChange={(e) => setNewPin(e.target.value)}
-              />
+            <Field label="Portal user">
+              {portalUsers.length ? (
+                <select value={newUsername} onChange={(e) => setNewUsername(e.target.value)}>
+                  <option value="">Select a user…</option>
+                  {portalUsers.map((u) => (
+                    <option key={u.username} value={u.username}>
+                      {u.name} ({u.username})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={newUsername}
+                  placeholder="portal username"
+                  onChange={(e) => setNewUsername(e.target.value)}
+                />
+              )}
             </Field>
 
             <p className="section-label">Districts ({scopeDistricts.length} selected)</p>
@@ -1843,13 +1875,12 @@ function SettingsForm() {
               className="primary-btn"
               disabled={
                 busy ||
-                !newName.trim() ||
-                newPin.trim().length < 4 ||
+                !newUsername.trim() ||
                 (scopeSsIds.length === 0 && scopeDistricts.length === 0)
               }
               onClick={() => void tryAuthorize()}
             >
-              Authorize for selective edit
+              Limit to selected area
             </button>
             <button
               type="button"
@@ -1860,12 +1891,13 @@ function SettingsForm() {
               Refresh list
             </button>
             <div className="editor-list">
-              {editors.length === 0 && <p className="muted">No authorized editors yet.</p>}
+              {editors.length === 0 && <p className="muted">No area limits set.</p>}
               {editors.map((ed) => (
                 <div key={ed.id} className="editor-row">
                   <div>
                     <strong>{ed.name}</strong>
                     <span className="muted">
+                      {ed.portalUsername ? ` (${ed.portalUsername})` : ' · legacy PIN'}
                       {' '}
                       · {ed.allowedSubstationIds.length} SS
                       {ed.allowedDistricts.length
@@ -1879,7 +1911,7 @@ function SettingsForm() {
                     disabled={busy}
                     onClick={() => void run(() => revokeEditor(ed.id))}
                   >
-                    Revoke
+                    Remove limit
                   </button>
                 </div>
               ))}

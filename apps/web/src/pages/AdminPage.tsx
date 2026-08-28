@@ -75,7 +75,10 @@ function PermMatrix({
                   <label className="perm-check">
                     <input
                       type="checkbox"
-                      disabled={disabled || (m.id === 'field_notes' && action === 'upload')}
+                      disabled={
+                        disabled ||
+                        ((m.id === 'field_notes' || m.id === 'powermap') && action === 'upload')
+                      }
                       checked={Boolean(value[m.id]?.[action])}
                       onChange={() => toggle(m.id, action)}
                     />

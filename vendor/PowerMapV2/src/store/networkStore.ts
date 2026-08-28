@@ -60,6 +60,27 @@ import {
 
 export type AdminRole = 'super' | 'editor' | null;
 
+/**
+ * Edit rights resolved from the host portal's session rather than the map's own
+ * PIN prompt. The host fetches this (GET /api/powermap/me) and injects it via
+ * `applyPortalIdentity`; standalone builds simply never call it and keep the PIN.
+ */
+export interface PortalIdentity {
+  username: string;
+  name: string;
+  role: AdminRole;
+  allowedSubstationIds: string[];
+  allowedDistricts: string[];
+  /** Editor with no scope row — the portal grant covers the whole network. */
+  unrestricted: boolean;
+}
+
+/** Portal accounts a super admin can attach an edit scope to. */
+export interface PortalUserOption {
+  username: string;
+  name: string;
+}
+
 interface DraftConnect {
   fromId: string | null;
 }
@@ -104,6 +125,13 @@ interface NetworkStore extends UiState {
   editorAccount: EditorAccount | null;
   /** Resolved SS ids this editor may edit (explicit + districts) */
   editableSsIds: string[];
+  /** Host portal supplied identity — hides the standalone name + PIN unlock. */
+  portalManaged: boolean;
+  portalIdentity: PortalIdentity | null;
+  /** Editor whose portal grant is not narrowed by a scope row. */
+  editorUnrestricted: boolean;
+  /** Portal accounts available to scope, injected by the host. */
+  portalUsers: PortalUserOption[];
   editors: EditorAccount[];
   /** Pending suggestions (super admin map + review) */
   suggestions: EditSuggestion[];
@@ -133,14 +161,16 @@ interface NetworkStore extends UiState {
   pushToSupabase: () => Promise<void>;
   checkSupabase: () => Promise<void>;
   unlockAdmin: (pin: string, name?: string) => Promise<boolean>;
+  applyPortalIdentity: (identity: PortalIdentity | null) => Promise<void>;
+  resumePortalEditing: () => Promise<void>;
+  setPortalUsers: (users: PortalUserOption[]) => void;
   lockAdmin: () => void;
   requireAdmin: () => boolean;
   requireSuperAdmin: () => boolean;
   refreshEditors: () => Promise<void>;
   refreshSuggestions: () => Promise<void>;
   authorizeEditor: (
-    name: string,
-    pin: string,
+    portalUsername: string,
     scope: { allowedSubstationIds: string[]; allowedDistricts: string[] },
   ) => Promise<boolean>;
   revokeEditor: (id: string) => Promise<void>;
@@ -275,6 +305,10 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   adminName: initialSession?.name ?? null,
   editorAccount: null,
   editableSsIds: [],
+  portalManaged: false,
+  portalIdentity: null,
+  editorUnrestricted: false,
+  portalUsers: [],
   editors: [],
   suggestions: [],
   showSuggestionsOnMap: true,
@@ -319,6 +353,14 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       tapLaterals: data.tapLaterals,
       orgUnits: data.orgUnits,
     });
+    // When embedded, the host portal owns identity. Re-apply it so an editor's
+    // scope resolves against the substations that just loaded, and ignore any
+    // stale PIN session left in sessionStorage.
+    if (get().portalManaged) {
+      await get().applyPortalIdentity(get().portalIdentity);
+      return;
+    }
+
     const session = readAdminSession();
     if (session?.role === 'super') {
       set({
@@ -434,25 +476,106 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     return true;
   },
 
+  applyPortalIdentity: async (identity) => {
+    // The portal session is the only source of truth once it is in play.
+    writeAdminSession(null);
+
+    if (!identity || !identity.role) {
+      set({
+        portalManaged: true,
+        portalIdentity: identity,
+        adminMode: false,
+        adminRole: null,
+        adminName: identity?.name ?? null,
+        editorAccount: null,
+        editableSsIds: [],
+        editorUnrestricted: false,
+      });
+      return;
+    }
+
+    if (identity.role === 'super') {
+      set({
+        portalManaged: true,
+        portalIdentity: identity,
+        adminMode: true,
+        adminRole: 'super',
+        adminName: identity.name,
+        editorAccount: null,
+        editableSsIds: [],
+        editorUnrestricted: false,
+      });
+      await get().refreshEditors();
+      await get().refreshSuggestions();
+      return;
+    }
+
+    const account: EditorAccount = {
+      id: identity.username,
+      name: identity.name,
+      portalUsername: identity.username,
+      canEdit: true,
+      active: true,
+      notes: '',
+      createdAt: '',
+      allowedSubstationIds: identity.allowedSubstationIds,
+      allowedDistricts: identity.allowedDistricts,
+    };
+    const editable = identity.unrestricted
+      ? new Set<string>()
+      : await resolveEditableSubstationIds(account, get().substations);
+    set({
+      portalManaged: true,
+      portalIdentity: identity,
+      adminMode: true,
+      adminRole: 'editor',
+      adminName: identity.name,
+      editorAccount: account,
+      editableSsIds: [...editable],
+      editorUnrestricted: identity.unrestricted,
+    });
+  },
+
+  resumePortalEditing: async () => {
+    const identity = get().portalIdentity;
+    if (!identity?.role) return;
+    await get().applyPortalIdentity(identity);
+    get().flashStatus('Editing enabled');
+  },
+
+  setPortalUsers: (portalUsers) => set({ portalUsers }),
+
   lockAdmin: () => {
     writeAdminSession(null);
+    const portalManaged = get().portalManaged;
     set({
       adminMode: false,
       adminRole: null,
-      adminName: null,
+      // Keep the portal identity so editing can be resumed without a PIN.
+      adminName: portalManaged ? (get().portalIdentity?.name ?? null) : null,
       editorAccount: null,
       editableSsIds: [],
+      editorUnrestricted: false,
       tool: 'cursor',
       placeDraft: null,
       connectDraft: { fromId: null },
       tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
     });
-    get().flashStatus('Locked — view only');
+    get().flashStatus(
+      portalManaged ? 'Editing paused — resume in Settings' : 'Locked — view only',
+    );
   },
 
   requireAdmin: () => {
     if (get().adminMode) return true;
-    get().flashStatus('Unlock in Settings to edit');
+    const { portalManaged, portalIdentity } = get();
+    get().flashStatus(
+      !portalManaged
+        ? 'Unlock in Settings to edit'
+        : portalIdentity?.role
+          ? 'Editing is paused — resume in Settings'
+          : 'Your portal account has no Power Map edit permission',
+    );
     set({ panel: 'settings' });
     return false;
   },
@@ -466,12 +589,14 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   editorCanEditSs: (ssId) => {
     if (get().adminRole === 'super') return true;
     if (get().adminRole !== 'editor') return false;
+    if (get().editorUnrestricted) return true;
     return canEditorTouchSubstation(new Set(get().editableSsIds), ssId);
   },
 
   editorCanEditLine: (lineId) => {
     if (get().adminRole === 'super') return true;
     if (get().adminRole !== 'editor') return false;
+    if (get().editorUnrestricted) return true;
     const line = get().lines.find((l) => l.id === lineId);
     if (!line) return false;
     return canEditorTouchLine(new Set(get().editableSsIds), line);
@@ -591,11 +716,15 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
 
   setPrintPreviewOpen: (printPreviewOpen) => set({ printPreviewOpen }),
 
-  authorizeEditor: async (name, pin, scope) => {
+  authorizeEditor: async (portalUsername, scope) => {
     if (!get().requireSuperAdmin()) return false;
+    const username = portalUsername.trim();
+    const match = get().portalUsers.find(
+      (u) => u.username.toLowerCase() === username.toLowerCase(),
+    );
     const result = await authorizeEditorRemote({
-      name,
-      pin,
+      portalUsername: username,
+      name: match?.name || username,
       allowedSubstationIds: scope.allowedSubstationIds,
       allowedDistricts: scope.allowedDistricts,
     });
