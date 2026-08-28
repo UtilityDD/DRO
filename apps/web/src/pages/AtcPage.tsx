@@ -9,6 +9,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -27,6 +28,18 @@ import {
   rowTone,
   type FocusLens,
 } from '../lib/atcFocus';
+import {
+  buildTargetScenario,
+  type TargetOffice,
+  type TargetScenario,
+} from '../lib/atcTarget';
+import {
+  appendTargetHistory,
+  formatSavedAt,
+  loadTargetHistory,
+  removeTargetHistory,
+  type SavedAtcTarget,
+} from '../lib/atcTargetStore';
 import { useAuth } from '../auth';
 
 /** Shared plot area height inside the equal workspace panels */
@@ -639,6 +652,387 @@ function compareAxisLabel(name: string, barCount: number, desktop: boolean) {
   return shortLabel(name, 16);
 }
 
+function signedPp(d: number) {
+  const sign = d > 0 ? '+' : '';
+  return `${sign}${d.toFixed(2)} pp`;
+}
+
+function lossTone(d: number) {
+  if (d < -0.03) return 'better';
+  if (d > 0.03) return 'worse';
+  return 'flat';
+}
+
+function CmpLine({
+  label,
+  base,
+  fy,
+  kind,
+}: {
+  label: string;
+  base: number | null | undefined;
+  fy: number;
+  kind: 'pct' | 'mu';
+}) {
+  if (base == null || !Number.isFinite(base)) return null;
+  if (kind === 'mu') {
+    return (
+      <span className="atc-cell-sub">
+        {label} {formatMu(base)}
+      </span>
+    );
+  }
+  const d = fy - base;
+  return (
+    <span className={`atc-cell-sub ${lossTone(d)}`}>
+      {signedPp(d)} vs {label}
+      <span className="atc-cell-base">was {formatPct(base)}</span>
+    </span>
+  );
+}
+
+function MuCell({
+  fy,
+  now,
+  asOf,
+  mar,
+  marLabel,
+  prev,
+  prevLabel,
+  showMar,
+  showMonth,
+}: {
+  fy: number;
+  now: number | null;
+  asOf: string;
+  mar: number | null;
+  marLabel: string;
+  prev: number | null;
+  prevLabel: string;
+  showMar: boolean;
+  showMonth: boolean;
+}) {
+  return (
+    <div className="atc-cell">
+      <strong>{formatMu(fy)}</strong>
+      {showMonth && <CmpLine label={prevLabel} base={prev} fy={fy} kind="mu" />}
+      {showMar && <CmpLine label={marLabel} base={mar} fy={fy} kind="mu" />}
+    </div>
+  );
+}
+
+function PctCell({
+  fy,
+  now,
+  mar,
+  marLabel,
+  prev,
+  prevLabel,
+  showMar,
+  showMonth,
+}: {
+  fy: number;
+  now: number;
+  mar: number | null;
+  marLabel: string;
+  prev: number | null;
+  prevLabel: string;
+  showMar: boolean;
+  showMonth: boolean;
+}) {
+  return (
+    <div className="atc-cell">
+      <strong>{formatPct(fy)}</strong>
+      {showMonth && <CmpLine label={prevLabel} base={prev} fy={fy} kind="pct" />}
+      {showMar && <CmpLine label={marLabel} base={mar} fy={fy} kind="pct" />}
+    </div>
+  );
+}
+
+function sliderPct(value: number, min: number, max: number) {
+  if (!(max > min)) return 0;
+  return Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+}
+
+function targetOnPredicted(s: TargetScenario) {
+  return Math.abs(s.targetAtc - s.predictedAtc) < 0.04;
+}
+
+function targetTopTitle(s: TargetScenario, scope: 'region' | 'division') {
+  const child = scope === 'region' ? 'Division' : 'CCC';
+  if (targetOnPredicted(s)) {
+    return `Predictive ${child}-wise losses for ${s.horizon} if the present trend continues`;
+  }
+  const parent = s.parent.office_name || (scope === 'region' ? 'Region' : 'Division');
+  return `Predictive ${child}-wise targets when ${parent} AT&C set at ${formatPct(s.targetAtc)}`;
+}
+
+function targetSliderRange(s: TargetScenario) {
+  const lastMar = s.parent.atcMar;
+  const vals = [s.feasibleAtc, Math.max(0.5, s.currentAtc - 6), s.currentAtc, s.predictedAtc];
+  if (lastMar != null && Number.isFinite(lastMar)) vals.push(lastMar);
+  const rawMin = Math.min(...vals);
+  const rawMax = Math.max(s.currentAtc, s.predictedAtc, lastMar != null && Number.isFinite(lastMar) ? lastMar : s.currentAtc);
+  const pad = Math.max(0.4, (rawMax - rawMin) * 0.12);
+  return {
+    min: Number(rawMin.toFixed(2)),
+    max: Number((rawMax + pad).toFixed(2)),
+    rawMax,
+  };
+}
+
+const TARGET_CHART_COLORS = {
+  atc: '#1a73e8',
+  td: '#0f9d8e',
+  atcPrev: '#94a3b8',
+  atcMar: '#fb8c00',
+};
+
+function shortOfficeLabel(name: string) {
+  const n = String(name || '')
+    .replace(/\s+(Division|CCC|CC|Region|Area)$/i, '')
+    .trim();
+  return shortLabel(n || name, 14);
+}
+
+function TargetForecastChart({
+  scenario,
+  showMonth,
+  showMar,
+}: {
+  scenario: TargetScenario;
+  showMonth: boolean;
+  showMar: boolean;
+}) {
+  const offices = scenario.children.length ? scenario.children : [scenario.parent];
+  const data = offices.map((o) => ({
+    name: shortOfficeLabel(o.office_name),
+    full: o.office_name,
+    atc: o.atcNew,
+    td: o.tdNew,
+    atcPrev: o.atcPrev,
+    atcMar: o.atcMar,
+  }));
+  const wide = data.length <= 6;
+  const showLabels = data.length <= 8;
+  const horizon = scenario.horizon;
+  const parentAtc = scenario.parent.atcNew;
+  return (
+    <div className="atc-chart-wrap">
+      <div className="atc-chart">
+        <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+          <BarChart
+            data={data}
+            margin={{ top: 28, right: 16, left: 4, bottom: wide ? 28 : 52 }}
+            barCategoryGap={wide ? '22%' : '12%'}
+            barGap={3}
+          >
+            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+            <XAxis
+              dataKey="name"
+              tick={{ fill: 'var(--chart-tick)', fontSize: wide ? 13 : 11, fontWeight: wide ? 650 : 500 }}
+              interval={0}
+              angle={wide ? 0 : -32}
+              textAnchor={wide ? 'middle' : 'end'}
+              height={wide ? 40 : 76}
+            />
+            <YAxis
+              tick={(props) => <YAxisTick2 {...props} unit="%" />}
+              tickFormatter={yTick2}
+              width={56}
+              domain={['auto', 'auto']}
+              allowDecimals
+            />
+            <Tooltip
+              {...CHART_TOOLTIP}
+              cursor={{ fill: 'rgba(180, 220, 210, 0.06)' }}
+              labelFormatter={(_, payload) => {
+                const row = payload?.[0]?.payload as { full?: string } | undefined;
+                return row?.full || '';
+              }}
+              formatter={(v, name) => {
+                const num = typeof v === 'number' ? v : Number(v);
+                return [Number.isFinite(num) ? formatPct(num) : '—', String(name)];
+              }}
+            />
+            <Legend wrapperStyle={{ fontSize: 11, color: 'var(--chart-label)', paddingTop: 4 }} />
+            {scenario.children.length > 0 && Number.isFinite(parentAtc) && (
+              <ReferenceLine
+                y={parentAtc}
+                stroke={TARGET_CHART_COLORS.atc}
+                strokeDasharray="5 4"
+                strokeOpacity={0.7}
+                label={{
+                  value: shortOfficeLabel(scenario.parent.office_name),
+                  position: 'insideTopRight',
+                  fill: 'var(--chart-tick)',
+                  fontSize: 11,
+                }}
+              />
+            )}
+            <Bar dataKey="atc" name={`AT&C ${horizon}`} fill={TARGET_CHART_COLORS.atc} radius={[7, 7, 0, 0]}>
+              {showLabels && (
+                <LabelList
+                  dataKey="atc"
+                  content={(props) => <PctBarLabel {...props} show />}
+                />
+              )}
+            </Bar>
+            <Bar dataKey="td" name={`T&D ${horizon}`} fill={TARGET_CHART_COLORS.td} radius={[7, 7, 0, 0]}>
+              {showLabels && (
+                <LabelList
+                  dataKey="td"
+                  content={(props) => <PctBarLabel {...props} show />}
+                />
+              )}
+            </Bar>
+            {showMonth && (
+              <Bar
+                dataKey="atcPrev"
+                name={`AT&C ${scenario.lastMonth}`}
+                fill={TARGET_CHART_COLORS.atcPrev}
+                radius={[7, 7, 0, 0]}
+              />
+            )}
+            {showMar && (
+              <Bar
+                dataKey="atcMar"
+                name={`AT&C ${scenario.lastMarch}`}
+                fill={TARGET_CHART_COLORS.atcMar}
+                radius={[7, 7, 0, 0]}
+              />
+            )}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function PctBarLabel(props: {
+  x?: number | string;
+  y?: number | string;
+  width?: number | string;
+  value?: number | string | null;
+  show?: boolean;
+}) {
+  const { x, y, width, value, show } = props;
+  if (!show || value == null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const w = Number(width || 0);
+  const cx = Number(x) + w / 2;
+  const top = Number(y);
+  if (!Number.isFinite(cx) || !Number.isFinite(top)) return null;
+  return (
+    <text x={cx} y={top - 4} textAnchor="middle" fill="var(--chart-tick)" fontSize={10} fontWeight={650}>
+      {n.toFixed(1)}
+    </text>
+  );
+}
+
+function TargetTableRow({
+  row,
+  depth,
+  expandable,
+  expanded,
+  onToggle,
+  marLabel,
+  prevLabel,
+  showMar,
+  showMonth,
+}: {
+  row: TargetOffice;
+  depth: 0 | 1 | 2;
+  expandable?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
+  marLabel: string;
+  prevLabel: string;
+  showMar: boolean;
+  showMonth: boolean;
+}) {
+  return (
+    <tr className={`atc-target-row depth-${depth}${row.stretch ? ' stretch' : ''}${depth === 0 ? ' parent' : ''}`}>
+      <td>
+        <div className="atc-target-office">
+          {expandable ? (
+            <button type="button" className="atc-target-exp" onClick={onToggle} aria-expanded={expanded}>
+              {expanded ? '▾' : '▸'}
+            </button>
+          ) : (
+            <span className="atc-target-exp-spacer" />
+          )}
+          <strong title={row.office_code}>{row.office_name}</strong>
+        </div>
+      </td>
+      <td>
+        <MuCell
+          fy={row.inputFy}
+          now={row.inputNow}
+          asOf={prevLabel}
+          mar={row.inputMar}
+          marLabel={marLabel}
+          prev={row.inputPrev}
+          prevLabel={prevLabel}
+          showMar={showMar}
+          showMonth={showMonth}
+        />
+      </td>
+      <td>
+        <MuCell
+          fy={row.demandNew}
+          now={row.demandNow}
+          asOf={prevLabel}
+          mar={row.demandMar}
+          marLabel={marLabel}
+          prev={row.demandPrev}
+          prevLabel={prevLabel}
+          showMar={showMar}
+          showMonth={showMonth}
+        />
+      </td>
+      <td>
+        <MuCell
+          fy={row.collectionNew}
+          now={row.collectionNow}
+          asOf={prevLabel}
+          mar={row.collectionMar}
+          marLabel={marLabel}
+          prev={row.collectionPrev}
+          prevLabel={prevLabel}
+          showMar={showMar}
+          showMonth={showMonth}
+        />
+      </td>
+      <td>
+        <PctCell
+          fy={row.atcNew}
+          now={row.atcNow}
+          mar={row.atcMar}
+          marLabel={marLabel}
+          prev={row.atcPrev}
+          prevLabel={prevLabel}
+          showMar={showMar}
+          showMonth={showMonth}
+        />
+      </td>
+      <td>
+        <PctCell
+          fy={row.tdNew}
+          now={row.tdNow}
+          mar={row.tdMar}
+          marLabel={marLabel}
+          prev={row.tdPrev}
+          prevLabel={prevLabel}
+          showMar={showMar}
+          showMonth={showMonth}
+        />
+      </td>
+    </tr>
+  );
+}
+
 function Seg<T extends string>({
   value,
   onChange,
@@ -665,6 +1059,72 @@ function Seg<T extends string>({
   );
 }
 
+function TargetMethodHelp({
+  horizon,
+  asOf,
+  lastMarch,
+  lastMonth,
+  onClose,
+}: {
+  horizon: string;
+  asOf: string;
+  lastMarch: string;
+  lastMonth: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="upload-modal-root" role="dialog" aria-modal="true" aria-labelledby="atc-help-title">
+      <button type="button" className="upload-modal-backdrop" aria-label="Close" onClick={onClose} />
+      <div className="upload-modal atc-help-modal">
+        <div className="upload-modal-head">
+          <h3 id="atc-help-title">How these figures are worked out</h3>
+          <button type="button" className="linkish" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="atc-help-body">
+          <p>
+            The table is a <b>forecast for {horizon}</b>, using the AT&amp;C you set on the slider. It is not the booked
+            result for {asOf}.
+          </p>
+          <h4>What AT&amp;C means</h4>
+          <p>
+            AT&amp;C is the share of input energy that is not collected. Lower is better. T&amp;D is the share that is not
+            billed. Collection efficiency is how much of the billed energy is collected.
+          </p>
+          <h4>Energy to {horizon}</h4>
+          <p>
+            Input is not frozen at {asOf}. The remaining months to March are estimated from last year’s same months and
+            from recent monthly growth, then scaled so child offices add up to the parent.
+          </p>
+          <h4>If you stay on the predicted path</h4>
+          <p>
+            Each office keeps its {asOf} AT&amp;C and T&amp;D rates. Demand and collection simply grow with the extra
+            input.
+          </p>
+          <h4>If you set a tighter (lower) AT&amp;C</h4>
+          <p>
+            Extra collection is asked first from offices that still have room to improve. Offices already close to their
+            best-ever loss barely move. Part of the extra collection comes from cutting T&amp;D (billing more of the
+            input) and part from collecting a higher share of what was billed.
+          </p>
+          <h4>How low the slider can go</h4>
+          <p>
+            An office is not assumed to go far below the lowest AT&amp;C it has already achieved, and never below about
+            0.5%. If the parent target needs more than that, the row is marked as not feasible.
+          </p>
+          <h4>Green and the compare ticks</h4>
+          <p>
+            Optional ticks show the forecast against <b>{lastMonth}</b> (previous month) and/or <b>{lastMarch}</b> (last
+            March). Green means the {horizon} forecast is lower loss than that month. The small “was …” figure is that
+            month’s actual rate.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AtcPage() {
   const { user } = useAuth();
   const desktopChart = useDesktopChart();
@@ -682,8 +1142,20 @@ export function AtcPage() {
   const [showTarget, setShowTarget] = useState(true);
   const [unitQuery, setUnitQuery] = useState('');
   const [unitsOpen, setUnitsOpen] = useState(true);
-  const [panelTab, setPanelTab] = useState<'chart' | 'table' | 'analytic'>('chart');
+  const [panelTab, setPanelTab] = useState<
+    'chart' | 'table' | 'analytic' | 'target' | 'targetChart'
+  >('chart');
   const [analyticTopic, setAnalyticTopic] = useState<FocusLens | null>(null);
+  const [targetAtc, setTargetAtc] = useState<number | null>(null);
+  const [targetScope, setTargetScope] = useState<'region' | 'division'>('region');
+  const [targetDiv, setTargetDiv] = useState('');
+  const [targetExpanded, setTargetExpanded] = useState('');
+  const [targetCmpMonth, setTargetCmpMonth] = useState(false);
+  const [targetCmpMar, setTargetCmpMar] = useState(false);
+  const [targetHelpOpen, setTargetHelpOpen] = useState(false);
+  const [targetHistory, setTargetHistory] = useState<SavedAtcTarget[]>([]);
+  const [activeSavedId, setActiveSavedId] = useState('');
+  const skipTargetReset = useRef(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
@@ -890,6 +1362,42 @@ export function AtcPage() {
     });
   }, [periods, rows]);
 
+  const targetAsOf = useMemo(() => {
+    const withMu = [...sortedPeriods].reverse().find((p) =>
+      rows.some((r) => r.period_label === p && toNum(r.input_mu) != null)
+    );
+    return withMu || '';
+  }, [sortedPeriods, rows]);
+
+  const periodKind = useMemo(() => {
+    const m = new Map<string, 'full' | 'sparse'>();
+    for (const r of rows) {
+      const p = String(r.period_label || '');
+      if (!p) continue;
+      const isFull =
+        String(r.point_source || '').toLowerCase() === 'achievement' ||
+        toNum(r.input_mu) != null ||
+        toNum(r.demand_mu) != null ||
+        toNum(r.collection_mu) != null;
+      if (isFull) m.set(p, 'full');
+      else if (!m.has(p)) m.set(p, 'sparse');
+    }
+    return m;
+  }, [rows]);
+
+  const coverageCaption = useMemo(() => {
+    const full = sortedPeriods.filter((p) => periodKind.get(p) === 'full');
+    const sparse = sortedPeriods.filter((p) => periodKind.get(p) === 'sparse');
+    const tag = format === 'IA' ? 'IA' : 'IB';
+    const span = (list: string[]) =>
+      list.length > 1 ? `${list[0]}–${list[list.length - 1]}` : list[0] || '';
+    const parts = [
+      full.length ? `${tag} full ${span(full)}` : `${tag} no full months yet`,
+      sparse.length ? `comparison-only ${sparse.join(', ')}` : null,
+    ].filter(Boolean);
+    return parts.join(' · ');
+  }, [sortedPeriods, periodKind, format]);
+
   // MU metrics only exist on achievement months — jump Compare as-of to a month that has values
   useEffect(() => {
     if (mode !== 'compare' || !rows.length) return;
@@ -921,6 +1429,47 @@ export function AtcPage() {
     }
     return list;
   }, [rows, isDivisionScoped, scopedDivision]);
+
+  const targetParentCode =
+    targetScope === 'region' ? '341' : isDivisionScoped ? scopedDivision : targetDiv || divisions[0]?.[0] || '';
+
+  useEffect(() => {
+    if (canPickRegion) return;
+    setTargetScope('division');
+    if (scopedDivision) setTargetDiv(scopedDivision);
+  }, [canPickRegion, scopedDivision]);
+
+  useEffect(() => {
+    if (targetScope !== 'division') return;
+    if (isDivisionScoped) return;
+    if (!targetDiv && divisions[0]) setTargetDiv(divisions[0][0]);
+  }, [targetScope, targetDiv, divisions, isDivisionScoped]);
+
+  useEffect(() => {
+    setTargetHistory(loadTargetHistory());
+  }, []);
+
+  useEffect(() => {
+    if (skipTargetReset.current) {
+      skipTargetReset.current = false;
+      setTargetExpanded('');
+      return;
+    }
+    setTargetAtc(null);
+    setTargetExpanded('');
+    setActiveSavedId('');
+  }, [targetAsOf, format, targetScope, targetParentCode]);
+
+  const targetScenario = useMemo(() => {
+    if (!targetAsOf || !targetParentCode) return null;
+    return buildTargetScenario(rows, {
+      asOf: targetAsOf,
+      format,
+      scope: targetScope,
+      parentCode: targetParentCode,
+      targetAtc,
+    });
+  }, [rows, targetAsOf, format, targetScope, targetParentCode, targetAtc]);
 
   const officeOptions = useMemo(() => {
     let list = rows.filter((r) => r.office_type === level);
@@ -1030,8 +1579,24 @@ export function AtcPage() {
         return typeof v === 'number' && Number.isFinite(v);
       });
 
-    // Only months that actually have a plotted value — no leading/gap blanks
-    const dataPeriods = sortedPeriods.filter(periodHasPlot);
+    // % may use comparison fills. MU charts only include achievement months
+    // (or any month that actually has Input/Demand/Collection) so YoY header
+    // columns don't show as empty MU ticks.
+    const periodHasAchievement = (period: string) =>
+      activeCodes.some((code) =>
+        rows.some(
+          (r) =>
+            String(r.office_code) === code &&
+            r.period_label === period &&
+            r.office_type === level &&
+            String(r.point_source || '').toLowerCase() === 'achievement'
+        )
+      );
+
+    const dataPeriods =
+      param.kind === 'mu'
+        ? sortedPeriods.filter((p) => periodHasAchievement(p) || periodHasPlot(p))
+        : sortedPeriods.filter(periodHasPlot);
     if (!dataPeriods.length) return [];
 
     const points = dataPeriods.map((p) => {
@@ -1459,6 +2024,8 @@ export function AtcPage() {
     setPanelTab('table');
   };
 
+  const onTarget = panelTab === 'target' || panelTab === 'targetChart';
+
   return (
     <div className={`atc-page${canEditAtc ? ' atc-can-edit' : ''}`}>
       {error && <p className="error">{error}</p>}
@@ -1472,7 +2039,223 @@ export function AtcPage() {
       )}
 
       <div className="atc-layout">
-        <aside className="atc-controls panel">
+        <aside className={`atc-controls panel${onTarget ? ' atc-controls-target' : ''}`}>
+          {onTarget ? (
+            <>
+              <section className="atc-block">
+                <Seg
+                  value={targetScope}
+                  onChange={(v) => {
+                    setTargetScope(v);
+                    if (v === 'region') setTargetDiv('');
+                  }}
+                  options={[
+                    { value: 'region', label: 'Region', disabled: !canPickRegion },
+                    { value: 'division', label: 'Division' },
+                  ]}
+                />
+                {targetScope === 'division' && (
+                  <label className="atc-field">
+                    <select
+                      value={isDivisionScoped ? scopedDivision : targetDiv}
+                      disabled={isDivisionScoped}
+                      onChange={(e) => setTargetDiv(e.target.value)}
+                      aria-label="Division for target"
+                    >
+                      {divisions.map(([code, name]) => (
+                        <option key={code} value={code}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </section>
+              <section className="atc-block">
+                <label className="atc-target-side-check">
+                  <input
+                    type="checkbox"
+                    checked={targetCmpMonth}
+                    onChange={(e) => setTargetCmpMonth(e.target.checked)}
+                  />
+                  {targetScenario?.lastMonth || 'Last month'}
+                </label>
+                <label className="atc-target-side-check">
+                  <input
+                    type="checkbox"
+                    checked={targetCmpMar}
+                    onChange={(e) => setTargetCmpMar(e.target.checked)}
+                  />
+                  {targetScenario?.lastMarch || 'Last March'}
+                </label>
+              </section>
+              {targetScenario &&
+                (() => {
+                  const range = targetSliderRange(targetScenario);
+                  const sliderValue = Math.min(
+                    range.max,
+                    Math.max(range.min, targetScenario.targetAtc)
+                  );
+                  const atPredicted =
+                    Math.abs(targetScenario.targetAtc - targetScenario.predictedAtc) < 0.04;
+                  const fillPct = sliderPct(sliderValue, range.min, range.max);
+                  const onTrend =
+                    Math.abs(targetScenario.targetAtc - targetScenario.currentAtc) < 0.04;
+                  return (
+                    <section className="atc-block atc-target-side-slider">
+                      <strong className="atc-target-slider-val">{formatPct(targetScenario.targetAtc)}</strong>
+                      <div
+                        className="atc-target-slider-plot"
+                        style={{ ['--atc-fill' as string]: `${fillPct}%` }}
+                      >
+                        <input
+                          type="range"
+                          min={range.min}
+                          max={Math.max(range.min + 0.05, range.max)}
+                          step={0.05}
+                          value={sliderValue}
+                          onChange={(e) => {
+                            setActiveSavedId('');
+                            setTargetAtc(Math.min(range.max, Math.max(range.min, Number(e.target.value))));
+                          }}
+                          aria-label={`AT&C target for ${targetScenario.horizon}`}
+                        />
+                      </div>
+                      {!onTrend && (
+                        <span className={`atc-feas ${targetScenario.feasible ? 'ok' : 'no'}`}>
+                          {targetScenario.feasible
+                            ? signedPp(targetScenario.targetAtc - targetScenario.currentAtc)
+                            : 'Not feasible'}
+                        </span>
+                      )}
+                      <div className="atc-target-side-actions">
+                        <button
+                          type="button"
+                          className="btn atc-target-save"
+                          onClick={() => {
+                            const list = appendTargetHistory({
+                              asOf: targetScenario.asOf,
+                              horizon: targetScenario.horizon,
+                              format,
+                              scope: targetScope,
+                              parentCode: targetParentCode,
+                              parentName: targetScenario.parent.office_name,
+                              targetAtc: targetScenario.targetAtc,
+                              predictedAtc: targetScenario.predictedAtc,
+                              currentAtc: targetScenario.currentAtc,
+                            });
+                            setTargetHistory(list);
+                            setActiveSavedId(list[0]?.id || '');
+                          }}
+                        >
+                          Save this target
+                        </button>
+                        <button
+                          type="button"
+                          className="atc-target-reset"
+                          disabled={atPredicted}
+                          onClick={() => {
+                            setActiveSavedId('');
+                            setTargetAtc(targetScenario.predictedAtc);
+                          }}
+                        >
+                          Predicted path
+                        </button>
+                      </div>
+                      <div className="atc-target-presets">
+                        {targetScenario.workbookTarget != null && (
+                          <button
+                            type="button"
+                            className="linkish"
+                            onClick={() => {
+                              setActiveSavedId('');
+                              setTargetAtc(targetScenario.workbookTarget as number);
+                            }}
+                          >
+                            Sheet {formatPct(targetScenario.workbookTarget)}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="linkish"
+                          onClick={() => {
+                            setActiveSavedId('');
+                            setTargetAtc(Math.max(range.min, targetScenario.currentAtc - 0.5));
+                          }}
+                        >
+                          −0.5 pp
+                        </button>
+                        <button
+                          type="button"
+                          className="linkish"
+                          onClick={() => {
+                            setActiveSavedId('');
+                            setTargetAtc(Math.max(range.min, targetScenario.currentAtc - 1));
+                          }}
+                        >
+                          −1 pp
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className="linkish atc-target-help-link"
+                        onClick={() => setTargetHelpOpen(true)}
+                      >
+                        How this is worked out
+                      </button>
+                    </section>
+                  );
+                })()}
+              <section className="atc-block atc-target-history">
+                <div className="atc-label">
+                  Saved targets
+                  <span className="atc-count">{targetHistory.length}</span>
+                </div>
+                <div className="atc-target-history-list">
+                  {targetHistory.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`atc-target-history-item${activeSavedId === item.id ? ' on' : ''}`}
+                    >
+                      <button
+                        type="button"
+                        className="atc-target-history-open"
+                        onClick={() => {
+                          const sameContext =
+                            item.scope === targetScope &&
+                            (item.scope !== 'division' || item.parentCode === targetParentCode);
+                          if (!sameContext) skipTargetReset.current = true;
+                          setTargetScope(item.scope);
+                          if (item.scope === 'division') setTargetDiv(item.parentCode);
+                          setTargetAtc(item.targetAtc);
+                          setActiveSavedId(item.id);
+                        }}
+                      >
+                        <strong>{formatPct(item.targetAtc)}</strong>
+                        <span>
+                          {item.parentName} · {item.asOf} → {item.horizon}
+                        </span>
+                        <em>{formatSavedAt(item.savedAt)}</em>
+                      </button>
+                      <button
+                        type="button"
+                        className="atc-target-history-del"
+                        aria-label={`Remove ${formatPct(item.targetAtc)} saved ${formatSavedAt(item.savedAt)}`}
+                        onClick={() => {
+                          const list = removeTargetHistory(item.id);
+                          setTargetHistory(list);
+                          setActiveSavedId((prev) => (prev === item.id ? '' : prev));
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          ) : (
+            <>
           {(canEditAtc || canUploadAtc) && (
             <section className="atc-block atc-block-actions">
               {canUploadAtc && (
@@ -1596,9 +2379,13 @@ export function AtcPage() {
                         <button
                           key={p}
                           type="button"
-                          className={`atc-month ${asOf === p ? 'on' : ''}`}
+                          className={`atc-month ${asOf === p ? 'on' : ''} ${periodKind.get(p) === 'sparse' ? 'sparse' : ''}`}
                           onClick={() => setAsOf(p)}
-                          title={p}
+                          title={
+                            periodKind.get(p) === 'sparse'
+                              ? `${p} · Comparison only — upload that month’s file for MU`
+                              : `${p} · Full snapshot`
+                          }
                           aria-label={p}
                           aria-pressed={asOf === p}
                         >
@@ -1701,16 +2488,33 @@ export function AtcPage() {
               </div>
             )}
           </section>
+            </>
+          )}
         </aside>
 
         <div className="atc-main">
           <div className="panel atc-result-panel">
             <div className="atc-result-head">
               <div className="atc-result-title">
-                <h2>{panelTab === 'analytic' ? 'Weakness analytic' : chartHeadline}</h2>
+                <h2>
+                  {panelTab === 'analytic'
+                    ? 'Weakness analytic'
+                    : onTarget
+                      ? targetScenario
+                        ? targetTopTitle(targetScenario, targetScope)
+                        : 'Target'
+                      : chartHeadline}
+                </h2>
+                {onTarget && targetScenario ? (
+                  <p className="atc-coverage">
+                    {targetScenario.asOf} → {targetScenario.horizon}
+                  </p>
+                ) : panelTab !== 'analytic' && !onTarget && coverageCaption ? (
+                  <p className="atc-coverage">{coverageCaption}</p>
+                ) : null}
               </div>
               <div className="atc-result-tools">
-                {canEditAtc && panelTab !== 'analytic' && (
+                {canEditAtc && panelTab !== 'analytic' && !onTarget && (
                   <button
                     type="button"
                     className="btn atc-edit-toggle"
@@ -1721,7 +2525,7 @@ export function AtcPage() {
                     Edit values
                   </button>
                 )}
-                <div className="atc-tabs" role="tablist" aria-label="Chart, table or analytic">
+                <div className="atc-tabs" role="tablist" aria-label="Chart, table, analytic or target">
                   <button
                     type="button"
                     role="tab"
@@ -1750,6 +2554,24 @@ export function AtcPage() {
                   >
                     Analytic
                   </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'targetChart'}
+                    className={`atc-tab ${panelTab === 'targetChart' ? 'on' : ''}`}
+                    onClick={() => setPanelTab('targetChart')}
+                  >
+                    Target chart
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'target'}
+                    className={`atc-tab ${panelTab === 'target' ? 'on' : ''}`}
+                    onClick={() => setPanelTab('target')}
+                  >
+                    Target
+                  </button>
                 </div>
               </div>
             </div>
@@ -1761,7 +2583,7 @@ export function AtcPage() {
                 {!loading && !rows.length && (
                   <p className="atc-empty">
                     No AT&C snapshots in the database yet. Open{' '}
-                    <a href="/upload?module=atc">Upload Center</a> and publish the monthly workbook.
+                    <a href="/upload">Upload Center</a> and publish Format IA / IB.
                   </p>
                 )}
 
@@ -1818,18 +2640,24 @@ export function AtcPage() {
                               name={nameByCode.get(code) || code}
                               stroke={colorByCode.get(code)}
                               strokeWidth={2.4}
-                              dot={{ r: 3.5, strokeWidth: 0 }}
+                              dot={{
+                                r: 3.5,
+                                fill: colorByCode.get(code),
+                                stroke: colorByCode.get(code),
+                                strokeWidth: 1,
+                              }}
                               activeDot={{
                                 r: 6,
+                                fill: colorByCode.get(code),
                                 strokeWidth: 2,
-                                stroke: '#ffffff',
+                                stroke: 'var(--surface)',
                                 cursor: canEditAtc ? 'pointer' : undefined,
                                 onClick: (_evt: unknown, payload: unknown) => {
                                   if (!canEditAtc) return;
                                   openEditFor(code, periodFromChartClick(payload));
                                 },
                               }}
-                              connectNulls
+                              connectNulls={param.kind !== 'mu'}
                               onClick={(data) => {
                                 if (!canEditAtc) return;
                                 openEditFor(code, periodFromChartClick(data));
@@ -1864,8 +2692,8 @@ export function AtcPage() {
                                 strokeDasharray="7 4"
                                 strokeOpacity={0.95}
                                 dot={false}
-                                activeDot={{ r: 4, fill: TARGET_COLOR, stroke: '#ffffff' }}
-                                connectNulls
+                                activeDot={{ r: 4, fill: TARGET_COLOR, stroke: 'var(--surface)', strokeWidth: 2 }}
+                                connectNulls={param.kind !== 'mu'}
                                 legendType={activeCodes.length <= 4 ? 'line' : 'none'}
                               />
                             ))}
@@ -2122,7 +2950,7 @@ export function AtcPage() {
                                   dot={{
                                     r: 5,
                                     fill: TARGET_COLOR,
-                                    stroke: '#ffffff',
+                                    stroke: 'var(--surface)',
                                     strokeWidth: 1.5,
                                   }}
                                   activeDot={{ r: 6 }}
@@ -2415,9 +3243,194 @@ export function AtcPage() {
                 )}
               </div>
             )}
+
+            {panelTab === 'targetChart' && (
+              <div className="atc-tab-panel atc-tab-panel-target atc-tab-panel-target-chart" role="tabpanel">
+                {loading && <p className="muted">Loading…</p>}
+                {!loading && !targetScenario && (
+                  <p className="atc-empty">No Input MU for the latest month.</p>
+                )}
+                {!loading && targetScenario && (
+                  <TargetForecastChart
+                    scenario={targetScenario}
+                    showMonth={targetCmpMonth}
+                    showMar={targetCmpMar}
+                  />
+                )}
+              </div>
+            )}
+
+            {panelTab === 'target' && (
+              <div className="atc-tab-panel atc-tab-panel-target" role="tabpanel">
+                {loading && <p className="muted">Loading…</p>}
+                {!loading && !targetScenario && (
+                  <p className="atc-empty">No Input MU for the latest month.</p>
+                )}
+                {!loading && targetScenario && (
+                  <>
+                    {(() => {
+                      const s = targetScenario;
+                      const marLabel = s.lastMarch || 'Mar';
+                      return (
+                        <>
+                          <div className="atc-target-kpis">
+                            <div className="atc-target-kpi">
+                              <span>Input expected in {s.horizon}</span>
+                              <strong>{formatMu(s.parent.inputFy)} MU</strong>
+                              {targetCmpMonth && s.parent.inputPrev != null && (
+                                <em>{s.lastMonth} {formatMu(s.parent.inputPrev)} MU</em>
+                              )}
+                              {targetCmpMar && s.parent.inputMar != null && (
+                                <em>{marLabel} {formatMu(s.parent.inputMar)} MU</em>
+                              )}
+                            </div>
+                            <div className="atc-target-kpi">
+                              <span>Collection needed in {s.horizon}</span>
+                              <strong>{formatMu(s.parent.collectionNew)} MU</strong>
+                              {targetCmpMonth && s.parent.collectionPrev != null && (
+                                <em>
+                                  {s.lastMonth} {formatMu(s.parent.collectionPrev)} MU
+                                </em>
+                              )}
+                              {targetCmpMar && s.parent.collectionMar != null && (
+                                <em>{marLabel} {formatMu(s.parent.collectionMar)} MU</em>
+                              )}
+                            </div>
+                            <div className="atc-target-kpi">
+                              <span>AT&amp;C in {s.horizon}</span>
+                              <strong>{formatPct(s.parent.atcNew)}</strong>
+                              {targetCmpMonth && s.parent.dAtcVsPrev != null && (
+                                <em className={lossTone(s.parent.dAtcVsPrev)}>
+                                  {signedPp(s.parent.dAtcVsPrev)} vs {s.lastMonth}
+                                  {s.parent.atcPrev != null
+                                    ? ` · was ${formatPct(s.parent.atcPrev)}`
+                                    : ''}
+                                </em>
+                              )}
+                              {targetCmpMar && s.parent.dAtcVsMar != null && (
+                                <em className={lossTone(s.parent.dAtcVsMar)}>
+                                  {signedPp(s.parent.dAtcVsMar)} vs {marLabel}
+                                  {s.parent.atcMar != null
+                                    ? ` · was ${formatPct(s.parent.atcMar)}`
+                                    : ''}
+                                </em>
+                              )}
+                            </div>
+                            <div className="atc-target-kpi">
+                              <span>T&amp;D in {s.horizon}</span>
+                              <strong>{formatPct(s.parent.tdNew)}</strong>
+                              {targetCmpMonth && s.parent.dTdVsPrev != null && (
+                                <em className={lossTone(s.parent.dTdVsPrev)}>
+                                  {signedPp(s.parent.dTdVsPrev)} vs {s.lastMonth}
+                                  {s.parent.tdPrev != null
+                                    ? ` · was ${formatPct(s.parent.tdPrev)}`
+                                    : ''}
+                                </em>
+                              )}
+                              {targetCmpMar && s.parent.dTdVsMar != null && (
+                                <em className={lossTone(s.parent.dTdVsMar)}>
+                                  {signedPp(s.parent.dTdVsMar)} vs {marLabel}
+                                  {s.parent.tdMar != null
+                                    ? ` · was ${formatPct(s.parent.tdMar)}`
+                                    : ''}
+                                </em>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="table-wrap atc-target-table-wrap">
+                            <table className="atc-target-table">
+                              <thead>
+                                <tr>
+                                  <th>{targetScope === 'region' ? 'Division' : 'CCC'}</th>
+                                  <th>
+                                    Input<em>{s.horizon} MU</em>
+                                  </th>
+                                  <th>
+                                    Demand<em>{s.horizon} MU</em>
+                                  </th>
+                                  <th>
+                                    Collection<em>{s.horizon} MU</em>
+                                  </th>
+                                  <th>
+                                    AT&amp;C<em>{s.horizon}</em>
+                                  </th>
+                                  <th>
+                                    T&amp;D<em>{s.horizon}</em>
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <TargetTableRow
+                                  row={s.parent}
+                                  depth={0}
+                                  marLabel={marLabel}
+                                  prevLabel={s.lastMonth}
+                                  showMar={targetCmpMar}
+                                  showMonth={targetCmpMonth}
+                                />
+                                {s.children.flatMap((child) => {
+                                  const nested = s.nested[child.office_code] || [];
+                                  const canExp = nested.length > 0;
+                                  const open = targetExpanded === child.office_code;
+                                  const out = [
+                                    <TargetTableRow
+                                      key={child.office_code}
+                                      row={child}
+                                      depth={1}
+                                      expandable={canExp}
+                                      expanded={open}
+                                      marLabel={marLabel}
+                                      prevLabel={s.lastMonth}
+                                      showMar={targetCmpMar}
+                                      showMonth={targetCmpMonth}
+                                      onToggle={() =>
+                                        setTargetExpanded((prev) =>
+                                          prev === child.office_code ? '' : child.office_code
+                                        )
+                                      }
+                                    />,
+                                  ];
+                                  if (open) {
+                                    for (const ccc of nested) {
+                                      out.push(
+                                        <TargetTableRow
+                                          key={ccc.office_code}
+                                          row={ccc}
+                                          depth={2}
+                                          marLabel={marLabel}
+                                          prevLabel={s.lastMonth}
+                                          showMar={targetCmpMar}
+                                          showMonth={targetCmpMonth}
+                                        />
+                                      );
+                                    }
+                                  }
+                                  return out;
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {targetHelpOpen && targetScenario && (
+        <TargetMethodHelp
+          horizon={targetScenario.horizon}
+          asOf={targetScenario.asOf}
+          lastMarch={targetScenario.lastMarch}
+          lastMonth={targetScenario.lastMonth}
+          onClose={() => setTargetHelpOpen(false)}
+        />
+      )}
 
       {editOpen && editRow && (
         <div className="upload-modal-root" role="dialog" aria-modal="true" aria-labelledby="atc-edit-title">

@@ -1,6 +1,6 @@
 /**
  * Client-side Format-IA / IB parser (mirrors server/src/atc_parse.js).
- * Kept in sync for Upload Center workbook ingestion.
+ * Upload Center uses the server parser exclusively — do not use this for ingest.
  */
 
 const MONTHS: Record<string, string> = {
@@ -203,16 +203,22 @@ function isHeaderLabelName(name: string) {
 }
 
 function findPeriodInSheet(rows: unknown[][]) {
-  for (const row of rows.slice(0, 8)) {
+  let fromTitle = '';
+  let fromAny = '';
+  for (const row of (rows || []).slice(0, 8)) {
     for (const c of row || []) {
       const t = cellStr(c);
-      if (/UPTO/i.test(t) || /AT&C/i.test(t)) {
-        const p = normalizePeriod(t);
-        if (p) return p;
-      }
+      if (!/UPTO/i.test(t) && !/AT&C/i.test(t)) continue;
+      const p = normalizePeriod(t);
+      if (!p) continue;
+      if (!fromAny) fromAny = p;
+      const looksTitle =
+        /WISE|FORMAT|DIVISIONWISE/i.test(t) ||
+        (/AT&C LOSS UPTO/i.test(t) && !/CUM\./i.test(t));
+      if (looksTitle && !fromTitle) fromTitle = p;
     }
   }
-  return '';
+  return fromTitle || fromAny;
 }
 
 function findTargetFyInSheet(rows: unknown[][]) {
@@ -308,15 +314,29 @@ function expandMonthPoints(
   return out;
 }
 
+function mergeHeaderRows(top: unknown[], sub: unknown[]) {
+  const n = Math.max((top || []).length, (sub || []).length);
+  let lastTop = '';
+  const out: { i: number; t: string; period: string }[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = cellStr((top || [])[i]);
+    const s = cellStr((sub || [])[i]);
+    if (t) lastTop = t;
+    out.push({
+      i,
+      t: `${lastTop} ${s}`.replace(/\s+/g, ' ').trim().toUpperCase(),
+      period: normalizePeriod(s) || normalizePeriod(t) || normalizePeriod(`${lastTop} ${s}`),
+    });
+  }
+  return out;
+}
+
 /**
  * Format-IA column map — March sheets omit YoY loss cols (Input starts earlier).
+ * Current AT&C often sits on the next row under "Achievement" (e.g. May'25).
  */
-function mapFormatIAColumns(header: unknown[]) {
-  const cells = (header || []).map((h, i) => ({
-    i,
-    t: cellStr(h).toUpperCase(),
-    period: normalizePeriod(h),
-  }));
+function mapFormatIAColumns(header: unknown[], sub: unknown[], preferredPeriod: string) {
+  const cells = mergeHeaderRows(header, sub);
 
   let consumers = 4;
   let targetAtc = 5;
@@ -347,8 +367,10 @@ function mapFormatIAColumns(header: unknown[]) {
   }
 
   atcUpto.sort((a, b) => periodSortKey(a.period).localeCompare(periodSortKey(b.period)));
-  const curAtc = atcUpto.length ? atcUpto[atcUpto.length - 1] : null;
-  const curPeriod = curAtc ? curAtc.period : '';
+  const curAtc =
+    (preferredPeriod && atcUpto.find((x) => x.period === preferredPeriod)) ||
+    (atcUpto.length ? atcUpto[atcUpto.length - 1] : null);
+  const curPeriod = curAtc ? curAtc.period : preferredPeriod || '';
   const fyMar = priorFyMarch(curPeriod);
   const priorAtc =
     atcUpto.find((x) => x.period === fyMar) || (atcUpto.length > 1 ? atcUpto[0] : null);
@@ -396,8 +418,11 @@ function cellAt(row: unknown[], idx: number) {
   return row[idx];
 }
 
-function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_fy?: string } = {}) {
-  const period_label = opts.period_label || findPeriodInSheet(aoa) || '';
+function parseFormatIA(
+  aoa: unknown[][],
+  opts: { period_label?: string; target_fy?: string; preferredPeriod?: string } = {}
+) {
+  const period_label = opts.period_label || findPeriodInSheet(aoa) || opts.preferredPeriod || '';
   const target_fy = opts.target_fy || findTargetFyInSheet(aoa);
   let headerIdx = -1;
   for (let i = 0; i < Math.min(aoa.length, 12); i++) {
@@ -409,8 +434,18 @@ function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_f
   if (headerIdx < 0) return { period_label, target_fy, rows: [] as AtcRow[], source_format: 'IA' };
 
   const header = (aoa[headerIdx] || []) as unknown[];
-  const col = mapFormatIAColumns(header);
-  const periodCur = col.curPeriod || normalizePeriod(header[14]) || period_label;
+  let start = headerIdx + 1;
+  let subRow = (aoa[start] || []) as unknown[];
+  const subJoined = subRow.map(cellStr).join('|').toUpperCase();
+  if (subJoined.includes('AT&C') || subJoined.includes('DIST. LOSS') || subJoined.includes('UPTO')) {
+    start += 1;
+  } else {
+    subRow = [];
+  }
+
+  const periodHint = findPeriodInSheet(aoa) || opts.preferredPeriod || period_label;
+  const col = mapFormatIAColumns(header, subRow, periodHint);
+  const periodCur = col.curPeriod || period_label;
   const periodMar = col.priorPeriod || priorFyMarch(periodCur) || '';
   const periodYoy = col.yoyPeriod || '';
 
@@ -418,7 +453,7 @@ function parseFormatIA(aoa: unknown[][], opts: { period_label?: string; target_f
   let currentDiv = '';
   let currentDivCode = '';
 
-  for (let i = headerIdx + 1; i < aoa.length; i++) {
+  for (let i = start; i < aoa.length; i++) {
     const r = (aoa[i] || []) as unknown[];
     if (looksLikeHeaderIA(r)) continue;
     const slCell = cellStr(r[0]);

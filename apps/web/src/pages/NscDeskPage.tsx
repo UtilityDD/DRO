@@ -94,6 +94,20 @@ const TOOLTIP_STYLE = {
   color: 'var(--chart-tooltip-text)',
 };
 
+/** Bar hover: outline only (see .nsc-chart-box CSS), not a fill swap. */
+const NSC_BAR_HOVER = { activeBar: false as const };
+
+const NSC_TOOLTIP = { contentStyle: TOOLTIP_STYLE, cursor: false as const };
+
+/** Selected filter: blue outline; other columns fade when a bar filter is active. */
+function barCellProps(on: boolean, hasSelection: boolean) {
+  return {
+    fillOpacity: hasSelection && !on ? 0.28 : 1,
+    stroke: on ? '#2563eb' : 'transparent',
+    strokeWidth: on ? 2 : 0,
+  };
+}
+
 type NscDesk = Awaited<ReturnType<typeof api.nscDesk>>;
 type DeskView = 'overview' | 'table';
 type TableGrain = 'division' | 'ccc' | 'age' | 'class' | 'work' | 'agency' | 'time' | 'reason' | 'followups' | 'cases';
@@ -1426,7 +1440,6 @@ export function NscDeskPage() {
   };
 
   const officePicked = officeGrain === 'ccc' ? ccc : division;
-  const dimBar = (on: boolean, anyOn: boolean) => (!anyOn || on ? 1 : 0.28);
 
   const delayBox = useBoxWidth<HTMLDivElement>();
   const officeBox = useBoxWidth<HTMLDivElement>();
@@ -1995,15 +2008,15 @@ export function NscDeskPage() {
                       width={delayAxisW}
                       tickFormatter={(v) => fmtCompact(Number(v))}
                     />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => fmtInt(Number(value ?? 0))} />
-                    <Bar dataKey="count" name="Cases" cursor="pointer" radius={[4, 4, 0, 0]}>
+                    <Tooltip {...NSC_TOOLTIP} formatter={(value) => fmtInt(Number(value ?? 0))} />
+                    <Bar dataKey="count" name="Cases" cursor="pointer" radius={[4, 4, 0, 0]} {...NSC_BAR_HOVER}>
                       {mixRows.map((s) => {
                         const on = s.cut ? cumId === s.id : slab === s.id;
                         return (
                           <Cell
                             key={s.id}
                             fill={s.fill}
-                            fillOpacity={dimBar(on, delayActive)}
+                            {...barCellProps(on, !!slab || !!cumId)}
                             cursor="pointer"
                             onClick={() => selectMixRow(s)}
                           />
@@ -2105,16 +2118,16 @@ export function NscDeskPage() {
                         tickFormatter={(v) => fmtCompact(Number(v))}
                       />
                     ) : null}
-                    <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value, name) => [fmtInt(Number(value ?? 0)), String(name)]} />
+                    <Tooltip {...NSC_TOOLTIP} formatter={(value, name) => [fmtInt(Number(value ?? 0)), String(name)]} />
                     {tlStack ? <Legend wrapperStyle={{ fontSize: timeFont + 1 }} /> : null}
                     {tlStack
                       ? timelineDivisions.map((d, i) => (
-                          <Bar key={d} yAxisId="left" dataKey={d} name={d} stackId="held" fill={DIV_PALETTE[i % DIV_PALETTE.length]} cursor="pointer">
+                          <Bar key={d} yAxisId="left" dataKey={d} name={d} stackId="held" fill={DIV_PALETTE[i % DIV_PALETTE.length]} cursor="pointer" {...NSC_BAR_HOVER}>
                             {timeline.map((p) => (
                               <Cell
                                 key={`${d}-${p.key}`}
                                 fill={DIV_PALETTE[i % DIV_PALETTE.length]}
-                                fillOpacity={dimBar(timeKey === p.key, timeKey.length === 7 || (tlGrain === 'year' && timeKey.length === 4))}
+                                {...barCellProps(timeKey === p.key, !!timeKey)}
                               />
                             ))}
                             {timePlan.show && i === timelineDivisions.length - 1 ? (
@@ -2123,12 +2136,12 @@ export function NscDeskPage() {
                           </Bar>
                         ))
                       : (
-                          <Bar yAxisId="left" dataKey="added" name="Withheld" fill="#1565c0" cursor="pointer" radius={[4, 4, 0, 0]}>
+                          <Bar yAxisId="left" dataKey="added" name="Withheld" fill="#1565c0" cursor="pointer" radius={[4, 4, 0, 0]} {...NSC_BAR_HOVER}>
                             {timeline.map((p) => (
                               <Cell
                                 key={p.key}
-                                fill={timeKey === p.key ? '#0d47a1' : '#1565c0'}
-                                fillOpacity={dimBar(timeKey === p.key, timeKey.length === 7 || (tlGrain === 'year' && timeKey.length === 4))}
+                                fill="#1565c0"
+                                {...barCellProps(timeKey === p.key, !!timeKey)}
                               />
                             ))}
                             {timePlan.show ? <LabelList dataKey="added" {...labelProps(timePlan)} /> : null}
@@ -2230,7 +2243,7 @@ export function NscDeskPage() {
                           tickFormatter={(v) => fmtAvgDays(Number(v))}
                         />
                         <Tooltip
-                          contentStyle={TOOLTIP_STYLE}
+                          {...NSC_TOOLTIP}
                           formatter={(value, _name, item) => {
                             const count = Number((item?.payload as { count?: number } | undefined)?.count || 0);
                             return [`${fmtAvgDays(Number(value))}d · ${fmtInt(count)} quoted`, 'Avg delay'];
@@ -2250,12 +2263,12 @@ export function NscDeskPage() {
                             }}
                           />
                         ) : null}
-                        <Bar dataKey="avg" name="Quote delay" cursor="pointer" radius={[4, 4, 0, 0]}>
+                        <Bar dataKey="avg" name="Quote delay" cursor="pointer" radius={[4, 4, 0, 0]} {...NSC_BAR_HOVER}>
                           {officeQuoteRows.map((o) => (
                             <Cell
                               key={o.code}
                               fill={o.fill}
-                              fillOpacity={dimBar(o.code === officePicked, Boolean(officePicked))}
+                              {...barCellProps(o.code === officePicked, !!officePicked)}
                             />
                           ))}
                           {officePlan.show ? <LabelList dataKey="avg" {...labelProps(officePlan, fmtAvgDays)} /> : null}
@@ -2288,16 +2301,16 @@ export function NscDeskPage() {
                         width={officeAxisW}
                         tickFormatter={(v) => fmtCompact(Number(v))}
                       />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => fmtInt(Number(Array.isArray(value) ? value[1] ?? value[0] : value ?? 0))} />
+                      <Tooltip {...NSC_TOOLTIP} formatter={(value) => fmtInt(Number(Array.isArray(value) ? value[1] ?? value[0] : value ?? 0))} />
                       {officeStacked ? <Legend wrapperStyle={{ fontSize: officeFont + 1 }} /> : null}
                       {officeStacked
                         ? NSC_SLABS.map((s, i) => (
-                            <Bar key={s.id} dataKey={s.id} name={s.label} stackId="a" fill={SLAB_COLORS[s.id]} cursor="pointer">
+                            <Bar key={s.id} dataKey={s.id} name={s.label} stackId="a" fill={SLAB_COLORS[s.id]} cursor="pointer" {...NSC_BAR_HOVER}>
                               {officeStacks.map((o) => (
                                 <Cell
                                   key={`${s.id}-${o.code}`}
                                   fill={SLAB_COLORS[s.id]}
-                                  fillOpacity={dimBar(o.code === officePicked, Boolean(officePicked))}
+                                  {...barCellProps(o.code === officePicked, !!officePicked)}
                                 />
                               ))}
                               {officePlan.show && i === NSC_SLABS.length - 1 ? (
@@ -2313,12 +2326,13 @@ export function NscDeskPage() {
                               fill="#2563eb"
                               cursor="pointer"
                               radius={[4, 4, 0, 0]}
+                              {...NSC_BAR_HOVER}
                             >
                               {officeStacks.map((o) => (
                                 <Cell
                                   key={o.code}
                                   fill="#2563eb"
-                                  fillOpacity={dimBar(o.code === officePicked, Boolean(officePicked))}
+                                  {...barCellProps(o.code === officePicked, !!officePicked)}
                                 />
                               ))}
                               {officePlan.show ? <LabelList dataKey="total" {...labelProps(officePlan)} /> : null}
