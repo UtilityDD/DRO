@@ -210,21 +210,63 @@ function isHeaderLabelName(name) {
 }
 
 function looksLikeHeaderIB(row) {
-  const joined = (row || []).map(cellStr).join('|').toUpperCase();
-  return joined.includes('DIVISION') && joined.includes('TARGET');
+  const cells = (row || []).map((c) => cellStr(c).toUpperCase());
+  const joined = cells.join('|');
+  if (looksLikeHeaderIA(row)) return false;
+  if (joined.includes('CUSTOMER CARE CENTRE') || joined.includes('CCC CODE')) return false;
+  const hasDiv = cells.some((c) => c === 'DIVISION' || c === 'DIVISION NAME' || /^DIVISION$/.test(c));
+  const hasSl = cells.some((c) => /SL/.test(c) && /NO/.test(c));
+  if (!hasDiv || !hasSl) return false;
+  const hasTarget = joined.includes('TARGET');
+  const hasAtc = joined.includes('AT&C');
+  const hasInput = /ENERGY INPUT|TOTAL ENERGY/.test(joined);
+  return hasTarget || (hasAtc && hasInput) || (hasAtc && joined.includes('DISTRIBUTION'));
+}
+
+function isJunkSheetName(name) {
+  const n = String(name || '').toUpperCase();
+  if (/ALL\s*CCC\s*ONLY/.test(n)) return true;
+  if (/IIA\s*\(|FORMAT[\s-]*II\s*A|FORMAT[\s-]*IIA/.test(n)) return true;
+  return false;
+}
+
+function sheetBanner(aoa) {
+  return (aoa || [])
+    .slice(0, 16)
+    .map((r) => (r || []).map(cellStr).join(' '))
+    .join('\n')
+    .toUpperCase();
+}
+
+function isSapSheet(name, aoa) {
+  const n = String(name || '').toUpperCase();
+  if (/^0ANALYSIS/.test(n) || /ZQ_REP/.test(n)) return true;
+  const blob = sheetBanner(aoa);
+  if (/PH-1|FORMAT-\s*I/.test(blob)) return false;
+  if (blob.includes('REPORTING MONTH') && blob.includes('ZONE NAME')) return true;
+  if (blob.includes('ZONE NAME') && blob.includes('REGION NAME') && blob.includes('CUSTOMER CARE CENTRE CODE')) {
+    return true;
+  }
+  return false;
 }
 
 function findPeriodInSheet(rows) {
-  for (const row of rows.slice(0, 8)) {
+  let fromTitle = '';
+  let fromAny = '';
+  for (const row of (rows || []).slice(0, 8)) {
     for (const c of row || []) {
       const t = cellStr(c);
-      if (/UPTO/i.test(t) || /AT&C/i.test(t)) {
-        const p = normalizePeriod(t);
-        if (p) return p;
-      }
+      if (!/UPTO/i.test(t) && !/AT&C/i.test(t)) continue;
+      const p = normalizePeriod(t);
+      if (!p) continue;
+      if (!fromAny) fromAny = p;
+      const looksTitle =
+        /WISE|FORMAT|DIVISIONWISE/i.test(t) ||
+        (/AT&C LOSS UPTO/i.test(t) && !/CUM\./i.test(t));
+      if (looksTitle && !fromTitle) fromTitle = p;
     }
   }
-  return '';
+  return fromTitle || fromAny;
 }
 
 function findTargetFyInSheet(rows) {
@@ -316,13 +358,10 @@ function expandMonthPoints(base, points) {
 /**
  * Format-IA column map — March sheets omit YoY loss cols (Input starts earlier).
  * Detect by header text so Apr (with YoY) and Mar (without) both work.
+ * Current AT&C often sits on the next row under "Achievement" (e.g. May'25).
  */
-function mapFormatIAColumns(header) {
-  const cells = (header || []).map((h, i) => ({
-    i,
-    t: cellStr(h).toUpperCase(),
-    period: normalizePeriod(h),
-  }));
+function mapFormatIAColumns(header, sub, preferredPeriod) {
+  const cells = mergeHeaderRows(header, sub);
 
   let consumers = 4;
   let targetAtc = 5;
@@ -353,8 +392,10 @@ function mapFormatIAColumns(header) {
   }
 
   atcUpto.sort((a, b) => periodSortKey(a.period).localeCompare(periodSortKey(b.period)));
-  const curAtc = atcUpto.length ? atcUpto[atcUpto.length - 1] : null;
-  const curPeriod = curAtc ? curAtc.period : '';
+  const curAtc =
+    (preferredPeriod && atcUpto.find((x) => x.period === preferredPeriod)) ||
+    (atcUpto.length ? atcUpto[atcUpto.length - 1] : null);
+  const curPeriod = curAtc ? curAtc.period : preferredPeriod || '';
   const fyMar = priorFyMarch(curPeriod);
   const priorAtc =
     atcUpto.find((x) => x.period === fyMar) ||
@@ -408,7 +449,7 @@ function cellAt(row, idx) {
  * @returns {{ period_label: string, target_fy: string, rows: object[] }}
  */
 function parseFormatIA(aoa, opts = {}) {
-  const period_label = opts.period_label || findPeriodInSheet(aoa) || '';
+  const period_label = opts.period_label || findPeriodInSheet(aoa) || opts.preferredPeriod || '';
   const target_fy = opts.target_fy || findTargetFyInSheet(aoa);
   let headerIdx = -1;
   for (let i = 0; i < Math.min(aoa.length, 12); i++) {
@@ -420,8 +461,18 @@ function parseFormatIA(aoa, opts = {}) {
   if (headerIdx < 0) return { period_label, target_fy, rows: [], source_format: 'IA' };
 
   const header = aoa[headerIdx] || [];
-  const col = mapFormatIAColumns(header);
-  const periodCur = col.curPeriod || normalizePeriod(header[14]) || period_label;
+  let start = headerIdx + 1;
+  let subRow = aoa[start] || [];
+  const subJoined = (subRow || []).map(cellStr).join('|').toUpperCase();
+  if (subJoined.includes('AT&C') || subJoined.includes('DIST. LOSS') || subJoined.includes('UPTO')) {
+    start += 1;
+  } else {
+    subRow = [];
+  }
+
+  const periodHint = findPeriodInSheet(aoa) || opts.preferredPeriod || period_label;
+  const col = mapFormatIAColumns(header, subRow, periodHint);
+  const periodCur = col.curPeriod || period_label;
   const periodMar = col.priorPeriod || priorFyMarch(periodCur) || '';
   const periodYoy = col.yoyPeriod || '';
 
@@ -429,7 +480,7 @@ function parseFormatIA(aoa, opts = {}) {
   let currentDiv = '';
   let currentDivCode = '';
 
-  for (let i = headerIdx + 1; i < aoa.length; i++) {
+  for (let i = start; i < aoa.length; i++) {
     const r = aoa[i] || [];
     if (looksLikeHeaderIA(r)) continue;
     const slCell = cellStr(r[0]);
@@ -489,7 +540,7 @@ function parseFormatIA(aoa, opts = {}) {
       period_sort: periodSortKey(periodCur || period_label),
       target_fy,
       source_format: 'IA',
-      basis_label: 'Excl. Bulk (CCC)',
+      basis_label: 'Format-IA (CCC path)',
       office_type,
       office_code: code,
       office_name,
@@ -532,11 +583,153 @@ function parseFormatIA(aoa, opts = {}) {
   return { period_label: periodCur || period_label, target_fy, rows: out, source_format: 'IA' };
 }
 
+function mergeHeaderRows(top, sub) {
+  const n = Math.max((top || []).length, (sub || []).length);
+  let lastTop = '';
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = cellStr((top || [])[i]);
+    const s = cellStr((sub || [])[i]);
+    if (t) lastTop = t;
+    out.push({
+      i,
+      top: t.toUpperCase(),
+      sub: s.toUpperCase(),
+      t: `${lastTop} ${s}`.replace(/\s+/g, ' ').trim().toUpperCase(),
+      period: normalizePeriod(s) || normalizePeriod(t) || normalizePeriod(`${lastTop} ${s}`),
+    });
+  }
+  return out;
+}
+
+function pickBestMuCol(candidates, preferTotal) {
+  if (!candidates.length) return -1;
+  const total = candidates.filter((c) => /TOTAL/.test(c.t) && !/MODIFIED/.test(c.t) && !/L&MV|L AND MV|\bBULK\b/.test(c.t));
+  if (preferTotal && total.length) return total[0].i;
+  const modified = candidates.filter((c) => /TOTAL/.test(c.t) && /MODIFIED/.test(c.t));
+  if (modified.length) return modified[0].i;
+  const plain = candidates.filter((c) => !/L&MV|L AND MV|\bBULK\b/.test(c.t));
+  if (plain.length) return plain[0].i;
+  return candidates[0].i;
+}
+
+function findIbCodeColumn(cells, dataRows) {
+  for (const c of cells) {
+    if (/\bCODE\b/.test(c.t) && !/CCC/.test(c.t) && !/CONSUMER/.test(c.t)) return c.i;
+  }
+  const width = Math.min(8, Math.max(0, ...dataRows.map((r) => (r || []).length)));
+  let bestCol = -1;
+  let bestScore = 0;
+  for (let col = 0; col < width; col++) {
+    const vals = dataRows.slice(0, 16).map((r) =>
+      String((r || [])[col] ?? '')
+        .replace(/\.0$/, '')
+        .trim()
+    );
+    const seq = vals.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0 && n < 200);
+    let sequential = 0;
+    for (let i = 1; i < seq.length; i++) {
+      if (seq[i] === seq[i - 1] + 1) sequential += 1;
+    }
+    if (sequential >= 8) continue;
+    let score = 0;
+    for (const v of vals) {
+      if (!/^\d{2,4}$/.test(v) || !isLikelyOfficeCode(v)) continue;
+      if (v.length === 4) score += 3;
+      else if (v.length === 3) score += 2;
+      else score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestCol = col;
+    }
+  }
+  return bestScore >= 6 ? bestCol : -1;
+}
+
+function mapFormatIBColumns(header, sub, dataRows, preferredPeriod) {
+  const cells = mergeHeaderRows(header, sub);
+  let nameCol = 1;
+  const inputCands = [];
+  const demandCands = [];
+  const collCands = [];
+  let targetAtc = -1;
+  let targetDist = -1;
+  const atcUpto = [];
+  const distUpto = [];
+  const ceUpto = [];
+
+  for (const c of cells) {
+    const t = c.t;
+    if (c.top === 'DIVISION' || c.top === 'DIVISION NAME') nameCol = c.i;
+    if (/TARGET/.test(t) && /AT&C/.test(t) && !/UPTO|CUM/.test(t)) targetAtc = c.i;
+    if (/TARGET/.test(t) && /DIST/.test(t) && !/UPTO|CUM/.test(t)) targetDist = c.i;
+    if ((/ENERGY INPUT/.test(t) || (/INPUT/.test(t) && /MU/.test(t))) && !/LOSS/.test(t) && !/DEMAND/.test(t)) {
+      inputCands.push(c);
+    }
+    if (/DEMAND/.test(t) && /MU/.test(t) && !/LOSS/.test(t) && !/INPUT/.test(t)) demandCands.push(c);
+    if ((/COLLEC/.test(t) || /COLLECTED/.test(t)) && /MU/.test(t) && !/EFF/.test(t) && !/LOSS/.test(t)) {
+      collCands.push(c);
+    }
+    if (/AT&C/.test(t) && /LOSS/.test(t) && (/UPTO/.test(t) || /CUM/.test(t)) && c.period) {
+      atcUpto.push({ i: c.i, period: c.period });
+    }
+    if (/DIST/.test(t) && /LOSS/.test(t) && (/UPTO/.test(t) || /CUM/.test(t)) && c.period) {
+      distUpto.push({ i: c.i, period: c.period });
+    }
+    if (/COLL/.test(t) && /EFF/.test(t) && c.period) {
+      ceUpto.push({ i: c.i, period: c.period });
+    }
+  }
+
+  atcUpto.sort((a, b) => periodSortKey(a.period).localeCompare(periodSortKey(b.period)));
+  const curAtc =
+    (preferredPeriod && atcUpto.find((x) => x.period === preferredPeriod)) ||
+    (atcUpto.length ? atcUpto[atcUpto.length - 1] : null);
+  const curPeriod = curAtc ? curAtc.period : '';
+  const fyMar = priorFyMarch(curPeriod);
+  const priorAtc =
+    atcUpto.find((x) => x.period === fyMar) || (atcUpto.length > 1 ? atcUpto[0] : null);
+  const curMon = periodMonthAbbr(curPeriod);
+  const yoyAtc = atcUpto.find(
+    (x) =>
+      x.period !== curPeriod &&
+      x.period !== (priorAtc && priorAtc.period) &&
+      periodMonthAbbr(x.period) === curMon
+  );
+  const byPeriod = (list, period) => {
+    const hit = list.find((d) => d.period === period);
+    return hit ? hit.i : -1;
+  };
+
+  return {
+    nameCol,
+    codeCol: findIbCodeColumn(cells, dataRows),
+    targetAtc,
+    targetDist,
+    input: pickBestMuCol(inputCands, true),
+    demand: pickBestMuCol(demandCands, true),
+    collection: pickBestMuCol(collCands, true),
+    curAtc: curAtc ? curAtc.i : -1,
+    curDist: byPeriod(distUpto, curPeriod),
+    curCe: byPeriod(ceUpto, curPeriod),
+    curPeriod,
+    priorAtc: priorAtc ? priorAtc.i : -1,
+    priorDist: priorAtc ? byPeriod(distUpto, priorAtc.period) : -1,
+    priorCe: priorAtc ? byPeriod(ceUpto, priorAtc.period) : -1,
+    priorPeriod: priorAtc ? priorAtc.period : '',
+    yoyAtc: yoyAtc ? yoyAtc.i : -1,
+    yoyDist: yoyAtc ? byPeriod(distUpto, yoyAtc.period) : -1,
+    yoyCe: yoyAtc ? byPeriod(ceUpto, yoyAtc.period) : -1,
+    yoyPeriod: yoyAtc ? yoyAtc.period : '',
+  };
+}
+
 /**
- * Format-IB: Division / Region losses (Incl. Bulk basis — no CCC rows).
+ * Format-IB: Division / Region losses (different basis — typically excl. bulk path).
  */
 function parseFormatIB(aoa, opts = {}) {
-  const period_label = opts.period_label || findPeriodInSheet(aoa) || '';
+  const period_label = opts.period_label || findPeriodInSheet(aoa) || opts.preferredPeriod || '';
   const target_fy = opts.target_fy || findTargetFyInSheet(aoa);
   let headerIdx = -1;
   for (let i = 0; i < Math.min(aoa.length, 12); i++) {
@@ -547,7 +740,6 @@ function parseFormatIB(aoa, opts = {}) {
   }
   if (headerIdx < 0) return { period_label, target_fy, rows: [], source_format: 'IB' };
 
-  // Data usually starts after a sub-header row (holds UPTO month labels)
   let start = headerIdx + 1;
   let subRow = aoa[start] || [];
   const subJoined = subRow.map(cellStr).join('|').toUpperCase();
@@ -557,20 +749,26 @@ function parseFormatIB(aoa, opts = {}) {
     subRow = [];
   }
 
-  const periodCur = normalizePeriod(subRow[10]) || period_label;
-  const periodMar = normalizePeriod(subRow[8]) || priorFyMarch(periodCur) || '';
-  const periodYoy = normalizePeriod(subRow[9]) || '';
+  const dataPreview = aoa.slice(start, start + 20);
+  const periodHint = findPeriodInSheet(aoa) || opts.preferredPeriod || period_label;
+  const col = mapFormatIBColumns(aoa[headerIdx] || [], subRow, dataPreview, periodHint);
+  const periodCur = col.curPeriod || period_label;
+  const periodMar = col.priorPeriod || priorFyMarch(periodCur) || '';
+  const periodYoy = col.yoyPeriod || '';
 
   const out = [];
   for (let i = start; i < aoa.length; i++) {
     const r = aoa[i] || [];
     if (looksLikeHeaderIB(r)) continue;
-    // Region/Zone rows often put the label in col0 and leave col1 empty
-    let name = cleanName(r[1]);
+    let name = cleanName(cellAt(r, col.nameCol));
     if (!name && r[0] != null && !/^\d+$/.test(String(r[0]).trim())) {
       name = cleanName(r[0]);
     }
-    let code = r[2] != null && r[2] !== '' ? String(r[2]).replace(/\.0$/, '') : '';
+    let code =
+      col.codeCol >= 0 && r[col.codeCol] != null && r[col.codeCol] !== ''
+        ? String(r[col.codeCol]).replace(/\.0$/, '').trim()
+        : '';
+    if (!code) code = codeFromOfficeName(name) || '';
     if (!name && !code) continue;
     if (name && isHeaderLabelName(name)) continue;
     if (/ALL ZONE/i.test(name) && !code) {
@@ -580,7 +778,7 @@ function parseFormatIB(aoa, opts = {}) {
     if (!isNumericOfficeCode(code)) continue;
 
     const office_type = inferOfficeType(code, name, '');
-    if (office_type === 'utility') continue; // skip statewide rollup for DRO app
+    if (office_type === 'utility') continue;
 
     const office_name =
       office_type === 'region'
@@ -594,7 +792,7 @@ function parseFormatIB(aoa, opts = {}) {
       period_sort: periodSortKey(periodCur || period_label),
       target_fy,
       source_format: 'IB',
-      basis_label: 'Incl. Bulk (Division)',
+      basis_label: 'Format-IB (Div/Reg excl. bulk path)',
       office_type,
       office_code: code,
       office_name,
@@ -603,20 +801,20 @@ function parseFormatIB(aoa, opts = {}) {
       region_code: '341',
       ccc_code: '',
       consumer_count: null,
-      target_atc: asPercent(r[3]),
-      target_dist: asPercent(r[4]),
-      input_mu: num(r[5]),
-      demand_mu: num(r[6]),
-      collection_mu: num(r[7]),
-      atc_mar: asPercent(r[8]),
-      atc_yoy: asPercent(r[9]),
-      atc_loss: asPercent(r[10]),
-      dist_mar: asPercent(r[11]),
-      dist_yoy: asPercent(r[12]),
-      dist_loss: asPercent(r[13]),
-      coll_eff_mar: asPercent(r[14]),
-      coll_eff_yoy: asPercent(r[15]),
-      coll_eff: asPercent(r[16]),
+      target_atc: asPercent(cellAt(r, col.targetAtc)),
+      target_dist: asPercent(cellAt(r, col.targetDist)),
+      input_mu: num(cellAt(r, col.input)),
+      demand_mu: num(cellAt(r, col.demand)),
+      collection_mu: num(cellAt(r, col.collection)),
+      atc_mar: asPercent(cellAt(r, col.priorAtc)),
+      atc_yoy: asPercent(cellAt(r, col.yoyAtc)),
+      atc_loss: asPercent(cellAt(r, col.curAtc)),
+      dist_mar: asPercent(cellAt(r, col.priorDist)),
+      dist_yoy: asPercent(cellAt(r, col.yoyDist)),
+      dist_loss: asPercent(cellAt(r, col.curDist)),
+      coll_eff_mar: asPercent(cellAt(r, col.priorCe)),
+      coll_eff_yoy: asPercent(cellAt(r, col.yoyCe)),
+      coll_eff: asPercent(cellAt(r, col.curCe)),
     };
 
     out.push(
@@ -638,7 +836,14 @@ function parseFormatIB(aoa, opts = {}) {
 }
 
 function detectSheetKind(name, aoa) {
+  if (!aoa || !aoa.length) return 'skip';
+  if (isJunkSheetName(name)) return 'skip';
+  if (isSapSheet(name, aoa)) return 'sap';
   const n = String(name || '').toUpperCase();
+  const banner = sheetBanner(aoa);
+  if (/FORMAT[\s-]*II\s*A|FORMAT[\s-]*IIA/.test(banner) && !/FORMAT-\s*I\s*B|FORMAT-IB|FORMAT-IA/.test(banner)) {
+    return 'skip';
+  }
   if (/DIVISION|FORMAT[\s-]*I\s*B|FORMAT[\s-]*IB/i.test(n)) return 'IB';
   const title = cellStr((aoa[1] || [])[0] || (aoa[2] || [])[0] || '').toUpperCase();
   if (title.includes('FORMAT- I B') || title.includes('FORMAT-IB') || title.includes('DIVISIONWISE')) {
@@ -647,12 +852,11 @@ function detectSheetKind(name, aoa) {
   if (title.includes('FORMAT-IA') || title.includes('CUSTOMER CARE') || /CCC/i.test(n)) {
     return 'IA';
   }
-  // Heuristic: IA has CCC Code column
   for (let i = 0; i < Math.min(8, aoa.length); i++) {
     if (looksLikeHeaderIA(aoa[i])) return 'IA';
     if (looksLikeHeaderIB(aoa[i]) && !looksLikeHeaderIA(aoa[i])) return 'IB';
   }
-  return 'IA';
+  return 'skip';
 }
 
 /**
@@ -664,15 +868,34 @@ function parseAtcWorkbook(wb, sheetToAoa, opts = {}) {
   const all = [];
   let period_label = opts.period_label || '';
   let target_fy = opts.target_fy || '';
+  const skipped_sheets = [];
+  let sawSap = false;
+  let sawPh1 = false;
+  const sheetOpts = {
+    ...opts,
+    preferredPeriod: opts.period_label || opts.preferredPeriod || normalizePeriod(opts.filename || ''),
+  };
 
   for (const name of wb.SheetNames || []) {
     const aoa = sheetToAoa(wb.Sheets[name]);
-    if (!aoa || !aoa.length) continue;
+    if (!aoa || !aoa.length) {
+      skipped_sheets.push(name);
+      continue;
+    }
     const kind = detectSheetKind(name, aoa);
-    const parsed = kind === 'IB' ? parseFormatIB(aoa, opts) : parseFormatIA(aoa, opts);
+    if (kind === 'skip') {
+      skipped_sheets.push(name);
+      continue;
+    }
+    if (kind === 'sap') {
+      sawSap = true;
+      skipped_sheets.push(name);
+      continue;
+    }
+    sawPh1 = true;
+    const parsed = kind === 'IB' ? parseFormatIB(aoa, sheetOpts) : parseFormatIA(aoa, sheetOpts);
     if (!period_label && parsed.period_label) period_label = parsed.period_label;
     if (!target_fy && parsed.target_fy) target_fy = parsed.target_fy;
-    // If period still missing, try sheet name
     if (!parsed.period_label && period_label) {
       parsed.rows.forEach((r) => {
         r.period_label = period_label;
@@ -691,7 +914,6 @@ function parseAtcWorkbook(wb, sheetToAoa, opts = {}) {
     all.push(...parsed.rows);
   }
 
-  // Fill missing periods only — never flatten header months (May'25 / Mar'26 / …)
   if (opts.period_label) {
     all.forEach((r) => {
       if (!r.period_label) {
@@ -704,110 +926,57 @@ function parseAtcWorkbook(wb, sheetToAoa, opts = {}) {
 
   const scoped = all.filter((r) => isDroScopedOffice(r.office_code));
   const filtered_out = all.length - scoped.length;
-  const achievement = scoped.filter((r) => !isHeaderMonthPoint(r));
-  const header = scoped.filter(isHeaderMonthPoint);
+  const counts = {
+    IA: scoped.filter((r) => r.source_format === 'IA').length,
+    IB: scoped.filter((r) => r.source_format === 'IB').length,
+  };
+
+  const achMonths = (fmt) =>
+    [
+      ...new Set(
+        scoped
+          .filter((r) => r.source_format === fmt && r.point_source === 'achievement')
+          .map((r) => r.period_label)
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => periodSortKey(a).localeCompare(periodSortKey(b)));
+  const extraMonths = (fmt) =>
+    [
+      ...new Set(
+        scoped
+          .filter((r) => r.source_format === fmt && r.point_source !== 'achievement')
+          .map((r) => r.period_label)
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => periodSortKey(a).localeCompare(periodSortKey(b)));
+
+  let error = '';
+  if (!scoped.length) {
+    if (sawSap && !sawPh1) {
+      error = 'This looks like a SAP/BO export, not a Ph-1 Format-IA/IB workbook.';
+    } else {
+      error = 'No Format-IA or Format-IB sheet found in this workbook.';
+    }
+  }
+
+  const iaPrimary = achMonths('IA');
+  const ibPrimary = achMonths('IB');
+  const formats = [];
+  if (counts.IA) formats.push('IA');
+  if (counts.IB) formats.push('IB');
 
   return {
-    period_label,
+    period_label: period_label || iaPrimary[0] || ibPrimary[0] || '',
     target_fy,
     rows: scoped,
     filtered_out,
-    counts: {
-      IA: scoped.filter((r) => r.source_format === 'IA').length,
-      IB: scoped.filter((r) => r.source_format === 'IB').length,
-      achievement: achievement.length,
-      header_month: header.length,
-    },
+    counts,
+    skipped_sheets,
+    formats,
+    primary_months: { IA: iaPrimary, IB: ibPrimary },
+    extra_months: { IA: extraMonths('IA'), IB: extraMonths('IB') },
+    error,
   };
-}
-
-function atcNaturalKey(r) {
-  const fmt = String(r?.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
-  return `${String(r?.period_label || '')}|${fmt}|${String(r?.office_code || '')}`;
-}
-
-function isHeaderMonthPoint(r) {
-  return String(r?.point_source || '') === 'header_month';
-}
-
-/** Full circular row — never overwrite with a YoY / prior-March stub. */
-function isFullAchievement(r) {
-  if (!r) return false;
-  if (isHeaderMonthPoint(r)) return false;
-  if (String(r.point_source || '') === 'achievement') return true;
-  return [r.input_mu, r.demand_mu, r.collection_mu, r.consumer_count].some((v) => v != null && v !== '');
-}
-
-function formatAtcBasis(fmt) {
-  return String(fmt || 'IA').toUpperCase() === 'IB' ? 'Incl. Bulk (Division)' : 'Excl. Bulk (CCC)';
-}
-
-/**
- * One row per period|format|office. Achievement beats a header stub; later
- * rows win among the same class. Postgres ON CONFLICT cannot update a key twice.
- */
-function dedupeAtcRows(rows) {
-  const map = new Map();
-  for (const r of rows || []) {
-    if (!r || !r.office_code || !r.period_label) continue;
-    const key = atcNaturalKey(r);
-    const prev = map.get(key);
-    if (!prev) {
-      map.set(key, r);
-      continue;
-    }
-    if (isHeaderMonthPoint(r) && isFullAchievement(prev)) continue;
-    if (isHeaderMonthPoint(prev) && !isHeaderMonthPoint(r)) {
-      map.set(key, r);
-      continue;
-    }
-    map.set(key, r);
-  }
-  return [...map.values()];
-}
-
-/**
- * Merge incoming ATC rows. Header-month points fill gaps only — they never
- * replace a full achievement snapshot for the same period|format|office.
- */
-function mergeAtcSnapshots(existing, incoming, opts = {}) {
-  const now = opts.now || new Date().toISOString();
-  const idFn =
-    opts.nextId ||
-    ((rows) => rows.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0) + 1);
-  const rows = Array.isArray(existing) ? existing : [];
-  const index = new Map(rows.map((r) => [atcNaturalKey(r), r]));
-  const appliedByKey = new Map();
-  let skippedHeader = 0;
-
-  for (const mapped of dedupeAtcRows(incoming)) {
-    if (!mapped || !mapped.office_code || !mapped.period_label) continue;
-    const key = atcNaturalKey(mapped);
-    const prev = index.get(key);
-    if (isHeaderMonthPoint(mapped) && isFullAchievement(prev)) {
-      skippedHeader += 1;
-      continue;
-    }
-    if (prev) {
-      Object.assign(prev, mapped, {
-        id: prev.id,
-        created_at: prev.created_at || mapped.created_at || now,
-        updated_at: mapped.updated_at || now,
-      });
-      appliedByKey.set(key, prev);
-    } else {
-      const row = {
-        ...mapped,
-        id: idFn(rows),
-        created_at: mapped.created_at || now,
-        updated_at: mapped.updated_at || now,
-      };
-      rows.push(row);
-      index.set(key, row);
-      appliedByKey.set(key, row);
-    }
-  }
-  return { existing: rows, applied: [...appliedByKey.values()], skippedHeader };
 }
 
 module.exports = {
@@ -821,10 +990,6 @@ module.exports = {
   parseAtcWorkbook,
   detectSheetKind,
   expandMonthPoints,
-  atcNaturalKey,
-  isHeaderMonthPoint,
-  isFullAchievement,
-  formatAtcBasis,
-  mergeAtcSnapshots,
-  dedupeAtcRows,
+  isSapSheet,
+  isJunkSheetName,
 };

@@ -3,37 +3,31 @@ import { useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api, AUTH_MODULES, canUploadModule } from '../api';
 import { useAuth } from '../auth';
-import { formatAtcBasis, selectAtcCirculars, type AtcKeepSlot, type AtcSkip } from '../lib/atcSelect';
+import {
+  buildCoverage,
+  collapseIncoming,
+  coverageCaption,
+  filterAgainstStored,
+  isDedicatedIbFilename,
+  periodSortKey,
+  pointSource,
+  stripOrigin,
+  type CoverageCell,
+} from '../lib/atcMerge';
 
-type StagedAtc = {
+type StagedAtcFile = {
   filename: string;
-  files: string[];
-  keep: AtcKeepSlot[];
-  skip: AtcSkip[];
+  mtime: number;
   rows: Record<string, unknown>[];
-  achievementRows: Record<string, unknown>[];
-  headerRows: Record<string, unknown>[];
-  months: string[];
-  achievementMonths: string[];
-  headerMonths: string[];
-  counts: { IA: number; IB: number };
-  filteredOut: number;
-  periodLabel: string;
-  divCount: number;
+  formats: string[];
+  primary: { IA: string[]; IB: string[] };
+  extra: { IA: string[]; IB: string[] };
+  skippedSheets: string[];
+  error?: string;
+  filteredOut?: number;
 };
 
 type Guide = { title: string; dos: string[]; donts: string[] };
-
-function isHeaderPoint(r: Record<string, unknown>) {
-  return String(r.point_source || '') === 'header_month';
-}
-
-function isFullAchievement(r: Record<string, unknown> | undefined) {
-  if (!r) return false;
-  if (isHeaderPoint(r)) return false;
-  if (String(r.point_source || '') === 'achievement') return true;
-  return [r.input_mu, r.demand_mu, r.collection_mu, r.consumer_count].some((v) => v != null && v !== '');
-}
 
 async function fileToBase64(file: File) {
   const buf = await file.arrayBuffer();
@@ -46,24 +40,21 @@ async function fileToBase64(file: File) {
   return btoa(binary);
 }
 
-const ATC_GUIDE: Guide = {
-  title: 'AT&C monthly workbook — Do & Don’t',
-  dos: [
-    'Drop one circular, or Shift-select / drop a folder of mixed months — extras are ignored.',
-    'The app keeps one real circular per month (Excl. Bulk and Incl. Bulk) and skips duplicates.',
-    'Publish writes those achievement months only (comparison columns do not overwrite a full month).',
-    'Statewide sheets are OK — only Darjeeling Region (zone 34 / 341*) is kept.',
-    'Re-upload the same month to correct figures.',
-  ],
-  donts: [
-    'Don’t upload password-protected or scanned PDFs.',
-    'Don’t expect other months already stored to change.',
-    'Don’t tick “fill comparison months” if those months already have a full circular.',
-  ],
-};
-
 const GUIDE: Record<string, Guide> = {
-  atc: ATC_GUIDE,
+  atc: {
+    title: 'AT&C upload — Do & Don’t',
+    dos: [
+      'Drop any mix of Format-IA (CCC / Excl. Bulk) and Format-IB (Division / Incl. Bulk) files — one or many.',
+      'Each file’s UPTO month is the real snapshot. YoY / March columns only fill months you have never uploaded.',
+      'Re-drop a revised May’26 file to fix May’26 only. Other stored months stay.',
+      'Statewide sheets are OK — only Zone 34 / Region 341 offices are kept.',
+    ],
+    donts: [
+      'Don’t expect months missing from the dropped files to change.',
+      'Don’t upload SAP/BO dumps (0ANALYSIS…) — use the Ph-1 workbooks.',
+      'Don’t upload password-protected or scanned PDFs.',
+    ],
+  },
   nsc: {
     title: 'Pending NSC — Do & Don’t',
     dos: [
@@ -174,6 +165,7 @@ type AtcDiffRow = {
   newVal: string;
   delta: string;
   kind: 'change' | 'new';
+  source: 'achievement' | 'header_month';
 };
 
 function atcRowKey(r: Record<string, unknown>) {
@@ -235,6 +227,7 @@ function buildAtcDiff(
           newVal: fmtDiffNum(nv, f.kind),
           delta: 'new',
           kind: 'new',
+          source: pointSource(neu),
         });
       }
       continue;
@@ -260,6 +253,7 @@ function buildAtcDiff(
         newVal: fmtDiffNum(nv, f.kind),
         delta,
         kind: 'change',
+        source: pointSource(neu),
       });
     }
     if (changed) changedOffices += 1;
@@ -305,15 +299,13 @@ export function UploadPage() {
   const [confirmLines, setConfirmLines] = useState<string[]>([]);
   const [confirmDiff, setConfirmDiff] = useState<AtcDiffRow[]>([]);
   const [diffSummary, setDiffSummary] = useState({ newOffices: 0, changedOffices: 0, unchangedOffices: 0 });
-  const [diffFilter, setDiffFilter] = useState<'change' | 'new' | 'all'>('change');
+  const [diffFilter, setDiffFilter] = useState<'change' | 'new' | 'fills' | 'all'>('change');
   const [pendingRows, setPendingRows] = useState<Record<string, unknown>[] | null>(null);
   const [pendingFilename, setPendingFilename] = useState('');
-  const [atcStaged, setAtcStaged] = useState<StagedAtc | null>(null);
-  const [fillHeaderMonths, setFillHeaderMonths] = useState(false);
-  const [existingByFormat, setExistingByFormat] = useState<{ IA: string[]; IB: string[] }>({
-    IA: [],
-    IB: [],
-  });
+  const [stagedFiles, setStagedFiles] = useState<StagedAtcFile[]>([]);
+  const [existingAtc, setExistingAtc] = useState<Record<string, unknown>[]>([]);
+  const [coverage, setCoverage] = useState<CoverageCell[]>([]);
+  const [skippedDupes, setSkippedDupes] = useState(0);
   const [cloudHost, setCloudHost] = useState('');
   const [storeMode, setStoreMode] = useState<'supabase' | 'local'>('local');
   const [nscReportDate, setNscReportDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -364,10 +356,7 @@ export function UploadPage() {
     if (!isAtc || !allowed) return;
     Promise.all([api.atcQuery('format=IA'), api.atcQuery('format=IB')])
       .then(([ia, ib]) => {
-        setExistingByFormat({
-          IA: ia.periods || [],
-          IB: ib.periods || [],
-        });
+        setExistingAtc([...(ia.rows || []), ...(ib.rows || [])]);
       })
       .catch(() => {});
   }, [isAtc, allowed, message]);
@@ -381,87 +370,72 @@ export function UploadPage() {
     );
   }
 
-  const onAtcFiles = async (fileList: File[]) => {
-    const incoming = [...fileList];
+  const onAtcFiles = async (fileList: FileList | File[]) => {
+    const incoming = Array.from(fileList);
     if (!incoming.length) return;
     setError('');
     setMessage('');
     setBusy(true);
+    const added: StagedAtcFile[] = [];
+    const errors: string[] = [];
     try {
-      const parsed: Parameters<typeof selectAtcCirculars>[0] = [];
-      for (let i = 0; i < incoming.length; i += 1) {
-        const file = incoming[i];
-        setMessage(`Reading ${i + 1} of ${incoming.length} · ${file.name}`);
-        const ext = file.name.split('.').pop()?.toLowerCase() || '';
-        if (ext !== 'xlsx' && ext !== 'xls') {
-          parsed.push({ filename: file.name, skipped: 'Not Excel (.xlsx / .xls)' });
-          continue;
-        }
-        if (file.size > 12 * 1024 * 1024) {
-          parsed.push({ filename: file.name, skipped: 'File too large to parse here' });
-          continue;
-        }
+      for (const file of incoming) {
+        const already = stagedFiles.some((s) => s.filename === file.name) || added.some((s) => s.filename === file.name);
+        if (already) continue;
         try {
           const base64 = await fileToBase64(file);
-          const res = await api.atcParse({ base64, filename: file.name });
-          parsed.push({
+          const parsed = await api.atcParse({ base64, filename: file.name });
+          const iaCount = parsed.counts?.IA || 0;
+          const ibCount = parsed.counts?.IB || 0;
+          const hybrid = iaCount > 0 && ibCount > 0;
+          const dedicatedIb = isDedicatedIbFilename(file.name);
+          const tagged = (parsed.rows || []).map((r) => ({
+            ...r,
+            _filename: file.name,
+            _mtime: file.lastModified,
+            _embedded: hybrid && !dedicatedIb && String(r.source_format || '').toUpperCase() === 'IB',
+          }));
+          added.push({
             filename: file.name,
-            lastModified: file.lastModified,
-            period_label: res.period_label,
-            rows: res.rows || [],
-            filtered_out: res.filtered_out || 0,
+            mtime: file.lastModified,
+            rows: tagged,
+            formats: parsed.formats || [
+              ...(iaCount ? ['IA'] : []),
+              ...(ibCount ? ['IB'] : []),
+            ],
+            primary: parsed.primary_months || { IA: [], IB: [] },
+            extra: parsed.extra_months || { IA: [], IB: [] },
+            skippedSheets: parsed.skipped_sheets || [],
+            error: parsed.ok === false || parsed.error ? parsed.error || 'No Format-IA/IB sheet found' : undefined,
+            filteredOut: parsed.filtered_out,
           });
+          if (parsed.period_label) setPeriod(parsed.period_label);
         } catch (e) {
-          parsed.push({
+          const msg = e instanceof Error ? e.message : 'Failed to parse';
+          added.push({
             filename: file.name,
-            error: e instanceof Error ? e.message : 'Could not read this workbook',
+            mtime: file.lastModified,
+            rows: [],
+            formats: [],
+            primary: { IA: [], IB: [] },
+            extra: { IA: [], IB: [] },
+            skippedSheets: [],
+            error: msg,
           });
+          errors.push(`${file.name}: ${msg}`);
         }
       }
-
-      const selected = selectAtcCirculars(parsed);
-      if (!selected.keep.length) {
-        setAtcStaged(null);
-        const why = selected.skip.slice(0, 4).map((s) => `${s.filename}: ${s.reason}`).join(' · ');
-        setError(why || 'No AT&C circulars found in the files you dropped.');
-        setMessage('');
-        return;
-      }
-
-      const periodLabel =
-        selected.periods.length > 1
-          ? `${selected.periods[0]}–${selected.periods[selected.periods.length - 1]}`
-          : selected.periods[0] || '';
-      if (selected.periods.length) setPeriod(selected.periods[selected.periods.length - 1]);
-      const usedNames = [...new Set(selected.keep.map((k) => k.filename))];
-      const iaKeep = selected.keep.filter((k) => k.format !== 'IB');
-      const filteredOut = parsed.reduce((n, f) => n + Number(f.filtered_out || 0), 0);
-      setAtcStaged({
-        filename: usedNames.length === 1 ? usedNames[0] : `${usedNames.length} circulars`,
-        files: usedNames,
-        keep: selected.keep,
-        skip: selected.skip,
-        rows: [...selected.achievementRows, ...selected.headerRows],
-        achievementRows: selected.achievementRows,
-        headerRows: selected.headerRows,
-        months: [...selected.periods, ...selected.headerMonths],
-        achievementMonths: selected.periods,
-        headerMonths: selected.headerMonths,
-        counts: selected.counts,
-        filteredOut,
-        periodLabel,
-        divCount: iaKeep.reduce((n, k) => n + k.divCount, 0),
-      });
-      const parts = [
-        `Keep ${selected.keep.length} circular${selected.keep.length === 1 ? '' : 's'} · ${periodLabel}`,
-        selected.counts.IA ? `Excl. Bulk ${selected.counts.IA}` : null,
-        selected.counts.IB ? `Incl. Bulk ${selected.counts.IB}` : null,
-        selected.skip.length ? `${selected.skip.length} file${selected.skip.length === 1 ? '' : 's'} ignored` : null,
-      ].filter(Boolean);
-      setMessage(parts.join(' · '));
-    } catch (e) {
-      setAtcStaged(null);
-      setError(e instanceof Error ? e.message : 'Failed to parse AT&C files');
+      setStagedFiles((prev) => [...prev, ...added]);
+      const okFiles = added.filter((f) => !f.error);
+      const failFiles = added.filter((f) => f.error);
+      const okMsg = okFiles.length
+        ? `Parsed ${okFiles.length} file${okFiles.length === 1 ? '' : 's'}`
+        : '';
+      const failMsg = failFiles.length
+        ? `${failFiles.length} file${failFiles.length === 1 ? '' : 's'} failed`
+        : '';
+      setMessage([okMsg, failMsg].filter(Boolean).join(' · '));
+      if (errors.length && !okFiles.length) setError(errors[0]);
     } finally {
       setBusy(false);
     }
@@ -619,102 +593,72 @@ export function UploadPage() {
     XLSX.writeFile(wb, `dro_${module}_template.xlsx`);
   };
 
-  const buildConfirmLines = (uploadRows: Record<string, unknown>[]) => {
-    const byFmt: Record<string, string[]> = { IA: [], IB: [] };
-    for (const r of uploadRows) {
-      const f = String(r.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
-      const m = String(r.period_label || '');
-      if (m && !byFmt[f].includes(m)) byFmt[f].push(m);
-    }
-    const lines: string[] = [];
-    const focus = atcStaged?.periodLabel || period;
-    if (focus) {
-      lines.push(
-        atcStaged && atcStaged.keep.length > 1
-          ? `Publish ${atcStaged.keep.length} circulars (${focus}) for Darjeeling Region.`
-          : `Publish ${focus} for Darjeeling Region.`
-      );
-    }
-    if (atcStaged?.keep.length) {
-      for (const k of atcStaged.keep) {
-        lines.push(`${k.period} · ${formatAtcBasis(k.format)} ← ${k.filename}`);
-      }
-    }
-    for (const f of ['IA', 'IB'] as const) {
-      if (!byFmt[f].length) continue;
-      const overlap = byFmt[f].filter((m) => existingByFormat[f].includes(m));
-      const fresh = byFmt[f].filter((m) => !existingByFormat[f].includes(m));
-      const n = uploadRows.filter((r) => {
-        const fmt = String(r.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
-        return fmt === f;
-      }).length;
-      lines.push(`${formatAtcBasis(f)}: ${n} offices · ${byFmt[f].join(', ')}`);
-      if (overlap.length) lines.push(`  → Updates existing ${overlap.join(', ')}`);
-      if (fresh.length) lines.push(`  → New: ${fresh.join(', ')}`);
-    }
-    if (atcStaged?.filteredOut) {
-      lines.push(`${atcStaged.filteredOut} offices outside Darjeeling Region were skipped.`);
-    }
-    if (fillHeaderMonths && atcStaged?.headerMonths.length) {
-      lines.push(
-        `Also fill empty comparison months (${atcStaged.headerMonths.join(', ')}) — months that already have a full circular are left alone.`
-      );
-    } else if (atcStaged?.headerMonths.length) {
-      lines.push(
-        `Comparison months in the sheet (${atcStaged.headerMonths.join(', ')}) will not be written.`
-      );
-    }
-    lines.push('Other months already stored will stay unchanged.');
-    return lines;
+  const buildConfirmLines = (cells: CoverageCell[], skipped: number, fileErrors: number) => {
+    return [coverageCaption(cells, skipped, fileErrors), 'Months not in these files stay unchanged.'];
   };
 
-  const rowsToPublish = (existing: Record<string, unknown>[]) => {
-    if (!atcStaged) return [];
-    const map = new Map(existing.map((r) => [atcRowKey(r), r]));
-    if (!fillHeaderMonths) return atcStaged.achievementRows;
-    return atcStaged.rows.filter((r) => {
-      if (!isHeaderPoint(r)) return true;
-      return !isFullAchievement(map.get(atcRowKey(r)));
-    });
+  const prepareIncoming = () => {
+    const tagged = stagedFiles.flatMap((f) => (f.error ? [] : f.rows));
+    const collapsed = collapseIncoming(tagged);
+    const against = filterAgainstStored(collapsed.rows, existingAtc);
+    const cells = buildCoverage(against.rows, existingAtc, against.skippedHeader);
+    return { collapsed, against, cells };
   };
 
   const runUpload = async (uploadRows: Record<string, unknown>[], name: string) => {
     setBusy(true);
     setError('');
     try {
-      if (isAtc) {
+      const chunkSize = 500;
+      let total = 0;
+      let lastCloud: { persisted?: boolean; host?: string; error?: string } | undefined;
+      for (let i = 0; i < uploadRows.length; i += chunkSize) {
+        const chunk = uploadRows.slice(i, i + chunkSize);
         const res = await api.upload(module, {
-          rows: uploadRows,
+          rows: chunk,
           filename: name,
-          period_label: period,
-          fill_header_months: fillHeaderMonths,
+          period_label: isAtc
+            ? [
+                ...new Set(
+                  uploadRows
+                    .filter((r) => pointSource(r) === 'achievement')
+                    .map((r) => String(r.period_label || ''))
+                    .filter(Boolean)
+                ),
+              ]
+                .sort((a, b) => periodSortKey(a).localeCompare(periodSortKey(b)))
+                .join(', ')
+                .slice(0, 220) || period
+            : period,
         });
-        const host = res.cloud?.host ? ` (${res.cloud.host})` : '';
-        setMessage(`Published ${res.upserted} AT&C rows${host}`);
-      } else {
-        const chunkSize = 500;
-        let total = 0;
-        let lastCloud: { persisted?: boolean; host?: string; error?: string } | undefined;
-        for (let i = 0; i < uploadRows.length; i += chunkSize) {
-          const chunk = uploadRows.slice(i, i + chunkSize);
-          const res = await api.upload(module, {
-            rows: chunk,
-            filename: name,
-            period_label: period,
-          });
-          total += res.upserted;
-          lastCloud = res.cloud;
-        }
-        if (lastCloud?.persisted && (lastCloud.host || storeMode === 'supabase')) {
-          setMessage(`Uploaded ${total} rows to Supabase${lastCloud.host ? ` (${lastCloud.host})` : ''}`);
-        } else if (storeMode === 'supabase' && lastCloud && !lastCloud.persisted) {
-          setMessage(`Saved ${total} rows locally`);
+        total += res.upserted;
+        lastCloud = res.cloud;
+      }
+      if (isAtc && coverage.length) {
+        const failN = stagedFiles.filter((f) => f.error).length;
+        const dest =
+          lastCloud?.persisted && (lastCloud.host || storeMode === 'supabase')
+            ? `Uploaded to Supabase${lastCloud.host ? ` (${lastCloud.host})` : ''}`
+            : 'Saved locally';
+        setMessage(`${dest}. ${coverageCaption(coverage, skippedDupes, failN)} ${total} rows written.`);
+        if (storeMode === 'supabase' && lastCloud && !lastCloud.persisted) {
           setError(
-            lastCloud.error ? `Supabase upload failed: ${lastCloud.error}` : 'Supabase upload failed — data kept locally.'
+            lastCloud.error
+              ? `Supabase upload failed: ${lastCloud.error}`
+              : 'Supabase upload failed — data kept locally. Run 005_atc_expand.sql if this is AT&C.'
           );
-        } else {
-          setMessage(`Saved ${total} rows locally`);
         }
+      } else if (lastCloud?.persisted && (lastCloud.host || storeMode === 'supabase')) {
+        setMessage(`Uploaded ${total} rows to Supabase${lastCloud.host ? ` (${lastCloud.host})` : ''}`);
+      } else if (storeMode === 'supabase' && lastCloud && !lastCloud.persisted) {
+        setMessage(`Saved ${total} rows locally`);
+        setError(
+          lastCloud.error
+            ? `Supabase upload failed: ${lastCloud.error}`
+            : 'Supabase upload failed — data kept locally. Run 005_atc_expand.sql if this is AT&C.'
+        );
+      } else {
+        setMessage(`Saved ${total} rows locally`);
       }
       try {
         const b = await api.batches();
@@ -724,15 +668,17 @@ export function UploadPage() {
       }
       setRows([]);
       setFilename('');
-      setAtcStaged(null);
+      setStagedFiles([]);
       setPendingRows(null);
       setConfirmDiff([]);
+      setCoverage([]);
+      setSkippedDupes(0);
       setConfirmOpen(false);
     } catch (e) {
       const err = e instanceof Error ? e : new Error('Upload failed');
       const status = (err as Error & { status?: number }).status;
       if (status === 401) {
-        setError('Session expired — log in again, then retry upload.');
+        setError('Session expired — log in again (admin / 1234), then retry upload.');
       } else {
         setError(err.message || 'Upload failed');
       }
@@ -741,49 +687,39 @@ export function UploadPage() {
     }
   };
 
-  const actionLabel = isAtc
-    ? atcStaged?.keep.length
-      ? atcStaged.keep.length > 1
-        ? `Publish ${atcStaged.keep.length} circulars`
-        : `Publish ${atcStaged.periodLabel}`
-      : 'Publish'
-    : storeMode === 'supabase'
-      ? 'Upload to Supabase'
-      : 'Save locally';
+  const actionLabel = storeMode === 'supabase' ? 'Upload to Supabase' : 'Save locally';
   const busyLabel = storeMode === 'supabase' ? 'Uploading…' : 'Saving…';
-  const confirmActionLabel = actionLabel;
+  const confirmActionLabel = storeMode === 'supabase' ? 'Upload to Supabase' : 'Save';
 
   const requestPublish = async () => {
     if (isAtc) {
-      if (!atcStaged) return;
+      const okFiles = stagedFiles.filter((f) => !f.error && f.rows.length);
+      if (!okFiles.length) return;
+      const name = stagedFiles.map((f) => f.filename).join(' + ');
       setBusy(true);
       setError('');
       try {
-        const needIA = atcStaged.counts.IA > 0;
-        const needIB = atcStaged.counts.IB > 0;
-        const [ia, ib] = await Promise.all([
-          needIA ? api.atcQuery('format=IA') : Promise.resolve({ rows: [] as Record<string, unknown>[] }),
-          needIB ? api.atcQuery('format=IB') : Promise.resolve({ rows: [] as Record<string, unknown>[] }),
-        ]);
-        const existing = [...(ia.rows || []), ...(ib.rows || [])];
-        const combined = rowsToPublish(existing);
-        if (!combined.length) {
-          setError('Nothing to publish — choose a workbook first.');
+        const { collapsed, against, cells } = prepareIncoming();
+        const publishRows = against.rows.map(stripOrigin);
+        if (!publishRows.length) {
+          setError('Nothing to write — comparison columns would not overwrite stored full months.');
           return;
         }
-        const months = new Set(combined.map((r) => String(r.period_label || '')).filter(Boolean));
-        const existingScoped = existing.filter((r) => months.has(String(r.period_label || '')));
-        const diff = buildAtcDiff(combined, existingScoped);
-        setPendingRows(combined);
-        setPendingFilename(atcStaged.filename);
-        setConfirmLines(buildConfirmLines(combined));
+        const diff = buildAtcDiff(publishRows, existingAtc);
+        setPendingRows(publishRows);
+        setPendingFilename(name);
+        setCoverage(cells);
+        setSkippedDupes(collapsed.skipped.length);
+        setConfirmLines(buildConfirmLines(cells, collapsed.skipped.length, stagedFiles.filter((f) => f.error).length));
         setConfirmDiff(diff.rows);
         setDiffSummary({
           newOffices: diff.newOffices,
           changedOffices: diff.changedOffices,
           unchangedOffices: diff.unchangedOffices,
         });
-        setDiffFilter(diff.rows.some((r) => r.kind === 'change') ? 'change' : 'new');
+        const hasAchChange = diff.rows.some((r) => r.kind === 'change' && r.source === 'achievement');
+        const hasAchNew = diff.rows.some((r) => r.kind === 'new' && r.source === 'achievement');
+        setDiffFilter(hasAchChange ? 'change' : hasAchNew ? 'new' : 'fills');
         setConfirmOpen(true);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Could not compare with existing data');
@@ -803,8 +739,14 @@ export function UploadPage() {
 
   const visibleDiff = useMemo(() => {
     if (diffFilter === 'all') return confirmDiff;
-    return confirmDiff.filter((r) => r.kind === diffFilter);
+    if (diffFilter === 'fills') return confirmDiff.filter((r) => r.source === 'header_month');
+    return confirmDiff.filter((r) => r.kind === diffFilter && r.source === 'achievement');
   }, [confirmDiff, diffFilter]);
+
+  const clearStagedFile = (filename: string) => {
+    setStagedFiles((prev) => prev.filter((f) => f.filename !== filename));
+    setMessage('');
+  };
 
   return (
     <div className="upload-page">
@@ -825,7 +767,7 @@ export function UploadPage() {
               onChange={(e) => {
                 setModule(e.target.value);
                 setRows([]);
-                setAtcStaged(null);
+                setStagedFiles([]);
                 setNscParseId('');
                 setNscPreview(null);
                 setMessage('');
@@ -849,80 +791,51 @@ export function UploadPage() {
 
         {isAtc && allowed && (
           <div className="upload-atc">
-            <p className="muted upload-atc-one">
-              One dump zone — drop Excl. Bulk and Incl. Bulk together. The app sorts them.
-            </p>
-            <AtcDrop
-              staged={atcStaged}
-              busy={busy}
-              onFiles={onAtcFiles}
-              onClear={() => {
-                setAtcStaged(null);
-                setMessage('');
-                setError('');
-              }}
-            />
-            {atcStaged && (
-              <>
-                <div className="table-wrap upload-atc-keep">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Month</th>
-                        <th>Basis</th>
-                        <th>From file</th>
-                        <th>Offices</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {atcStaged.keep.map((k) => (
-                        <tr key={`${k.period}|${k.format}`}>
-                          <td>{k.period}</td>
-                          <td>{formatAtcBasis(k.format)}</td>
-                          <td>{k.filename}</td>
-                          <td>
-                            {k.offices}
-                            {k.warning ? <span className="muted"> · {k.warning}</span> : null}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {atcStaged.skip.filter((s) => !atcStaged.files.includes(s.filename)).length > 0 && (
-                  <div className="upload-atc-skip">
-                    <strong>Ignored</strong>
-                    <ul>
-                      {atcStaged.skip
-                        .filter((s) => !atcStaged.files.includes(s.filename))
-                        .map((s) => (
-                          <li key={s.filename}>
-                            <span>{s.filename}</span>
-                            <span className="muted"> — {s.reason}</span>
-                          </li>
-                        ))}
-                    </ul>
-                  </div>
-                )}
-              </>
+            <AtcDropTray busy={busy} hasFiles={stagedFiles.length > 0} onFiles={onAtcFiles} />
+            {stagedFiles.length > 0 && (
+              <ul className="upload-file-list">
+                {stagedFiles.map((f) => (
+                  <li key={f.filename} className={f.error ? 'is-error' : ''}>
+                    <div className="upload-file-meta">
+                      <strong>{f.filename}</strong>
+                      <span className="muted">
+                        {f.error
+                          ? f.error
+                          : `${f.formats.join('+') || '—'} · ${(f.primary.IA[0] || f.primary.IB[0] || '—')}${
+                              f.rows.length ? ` · ${f.rows.length} rows` : ''
+                            }`}
+                      </span>
+                    </div>
+                    <button type="button" className="linkish" onClick={() => clearStagedFile(f.filename)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
-            {atcStaged?.headerMonths.length ? (
-              <label className="upload-atc-opt">
-                <input
-                  type="checkbox"
-                  checked={fillHeaderMonths}
-                  onChange={(e) => setFillHeaderMonths(e.target.checked)}
-                />
-                <span>
-                  Also fill empty comparison months ({atcStaged.headerMonths.join(', ')}) — will not replace a month that
-                  already has a full circular
-                </span>
-              </label>
-            ) : null}
             <div className="upload-actions">
-              <button type="button" className="btn" disabled={busy || !atcStaged} onClick={requestPublish}>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !stagedFiles.some((f) => !f.error && f.rows.length)}
+                onClick={requestPublish}
+              >
                 {busy ? busyLabel : actionLabel}
               </button>
+              {stagedFiles.length > 0 && (
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    setStagedFiles([]);
+                    setMessage('');
+                    setError('');
+                  }}
+                >
+                  Clear all
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1008,6 +921,7 @@ export function UploadPage() {
                 <th>When</th>
                 <th>Module</th>
                 <th>File</th>
+                <th>Months</th>
                 <th>Rows</th>
               </tr>
             </thead>
@@ -1017,12 +931,13 @@ export function UploadPage() {
                   <td>{String(b.created_at || '').replace('T', ' ').slice(0, 16)}</td>
                   <td>{String(b.module)}</td>
                   <td>{String(b.filename || '—')}</td>
+                  <td>{String(b.period_label || b.notes || '—')}</td>
                   <td>{String(b.row_count)}</td>
                 </tr>
               ))}
               {!batches.length && (
                 <tr>
-                  <td colSpan={4} className="muted">
+                  <td colSpan={5} className="muted">
                     No uploads yet
                   </td>
                 </tr>
@@ -1089,15 +1004,7 @@ export function UploadPage() {
           />
           <div className={`upload-modal panel ${isAtc ? 'upload-modal-wide' : ''}`}>
             <div className="upload-modal-head">
-              <h3>
-                {isAtc
-                  ? atcStaged?.periodLabel
-                    ? `Review ${atcStaged.periodLabel} before publish`
-                    : 'Review AT&C before publish'
-                  : storeMode === 'supabase'
-                    ? 'Review changes before upload'
-                    : 'Review changes before save'}
-              </h3>
+              <h3>{storeMode === 'supabase' ? 'Review changes before upload' : 'Review changes before save'}</h3>
               <button type="button" className="linkish" disabled={busy} onClick={() => setConfirmOpen(false)}>
                 Cancel
               </button>
@@ -1114,17 +1021,22 @@ export function UploadPage() {
 
             {isAtc && (
               <div className="upload-diff">
+                <CoverageCalendar cells={coverage} />
                 <div className="upload-diff-summary">
                   <span>{diffSummary.changedOffices} offices with changes</span>
                   <span>{diffSummary.newOffices} new</span>
                   <span>{diffSummary.unchangedOffices} unchanged</span>
-                  <span>{confirmDiff.filter((r) => r.kind === 'change').length} field mismatches</span>
+                  <span>
+                    {confirmDiff.filter((r) => r.kind === 'change' && r.source === 'achievement').length}{' '}
+                    field mismatches
+                  </span>
                 </div>
                 <div className="upload-diff-filters">
                   {(
                     [
                       ['change', 'Mismatch'],
                       ['new', 'New'],
+                      ['fills', 'Comparison fills'],
                       ['all', 'All'],
                     ] as const
                   ).map(([id, label]) => (
@@ -1144,7 +1056,7 @@ export function UploadPage() {
                       <tr>
                         <th>Office</th>
                         <th>Month</th>
-                        <th>Basis</th>
+                        <th>Fmt</th>
                         <th>Field</th>
                         <th>Existing</th>
                         <th>New</th>
@@ -1159,7 +1071,7 @@ export function UploadPage() {
                             <div className="muted upload-diff-code">{r.office}</div>
                           </td>
                           <td>{r.period}</td>
-                          <td>{r.format === 'IB' ? 'Incl.' : 'Excl.'}</td>
+                          <td>{r.format}</td>
                           <td>{r.fieldLabel}</td>
                           <td>{r.oldVal}</td>
                           <td>{r.newVal}</td>
@@ -1170,8 +1082,10 @@ export function UploadPage() {
                         <tr>
                           <td colSpan={7} className="muted">
                             {diffFilter === 'change'
-                              ? 'No mismatches — values match existing data for overlapping offices.'
-                              : 'No rows in this view.'}
+                              ? 'No mismatches on full months — values match stored data.'
+                              : diffFilter === 'fills'
+                                ? 'No comparison-column fills in this batch.'
+                                : 'No rows in this view.'}
                           </td>
                         </tr>
                       )}
@@ -1209,70 +1123,69 @@ export function UploadPage() {
   );
 }
 
-function AtcDrop({
-  staged,
+function AtcDropTray({
   busy,
+  hasFiles,
   onFiles,
-  onClear,
 }: {
-  staged: StagedAtc | null;
   busy: boolean;
-  onFiles: (files: File[]) => void;
-  onClear: () => void;
+  hasFiles: boolean;
+  onFiles: (files: FileList | File[]) => void;
 }) {
   return (
-    <label
-      className={`upload-slot upload-slot-wide ${staged ? 'has-file' : ''}${busy ? ' is-busy' : ''}`}
-      onDragOver={(e) => {
-        e.preventDefault();
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        if (busy) return;
-        const files = [...e.dataTransfer.files];
-        if (files.length) onFiles(files);
-      }}
-    >
+    <label className={`upload-slot upload-tray ${hasFiles ? 'has-file' : ''}`}>
       <div className="upload-slot-top">
-        <strong>{staged?.periodLabel ? `Publish ${staged.periodLabel}` : 'One drop — all AT&C files'}</strong>
-        <span className="upload-slot-tag">Shift-select many files</span>
+        <strong>AT&amp;C workbooks</strong>
+        <span className="upload-slot-tag">IA + IB · any months</span>
       </div>
-      {staged ? (
-        <div className="upload-slot-file">
-          <span className="upload-slot-name">{staged.filename}</span>
-          <span className="muted">
-            {staged.keep.length} circular{staged.keep.length === 1 ? '' : 's'} kept
-            {staged.skip.filter((s) => !staged.files.includes(s.filename)).length
-              ? ` · ${staged.skip.filter((s) => !staged.files.includes(s.filename)).length} ignored`
-              : ''}
-          </span>
-          <button
-            type="button"
-            className="linkish"
-            onClick={(e) => {
-              e.preventDefault();
-              onClear();
-            }}
-          >
-            Remove
-          </button>
-        </div>
-      ) : (
-        <span className="upload-slot-hint">
-          Drop many Excel files, or browse and Shift-click a range — mixed months and extras are sorted automatically
-        </span>
-      )}
+      <span className="upload-slot-hint">
+        {busy ? 'Parsing…' : 'Drop one or many Excel files, or click to browse'}
+      </span>
       <input
         type="file"
-        accept=".xlsx,.xls"
+        accept=".xlsx,.xls,.xlsb"
         multiple
         disabled={busy}
         onChange={(e) => {
-          const files = [...(e.target.files || [])];
-          if (files.length) onFiles(files);
+          if (e.target.files?.length) onFiles(e.target.files);
           e.target.value = '';
         }}
       />
     </label>
+  );
+}
+
+function CoverageCalendar({ cells }: { cells: CoverageCell[] }) {
+  if (!cells.length) return null;
+  const formats: Array<'IA' | 'IB'> = ['IA', 'IB'];
+  return (
+    <div className="upload-coverage">
+      <div className="upload-coverage-legend">
+        <span className="upload-cov upload-cov-new">New full</span>
+        <span className="upload-cov upload-cov-replace">Replace full</span>
+        <span className="upload-cov upload-cov-fill">Fill only</span>
+        <span className="upload-cov upload-cov-skip">Won’t overwrite</span>
+      </div>
+      {formats.map((fmt) => {
+        const row = cells.filter((c) => c.format === fmt);
+        if (!row.length) return null;
+        return (
+          <div key={fmt} className="upload-coverage-row">
+            <div className="upload-coverage-fmt">{fmt === 'IA' ? 'With CCC' : 'Without CCC'}</div>
+            <div className="upload-coverage-grid">
+              {row.map((c) => (
+                <span
+                  key={`${c.format}|${c.period}`}
+                  className={`upload-cov upload-cov-${c.action}`}
+                  title={`${c.period} ${c.format}: ${c.action} (stored ${c.stored}, incoming ${c.incoming})`}
+                >
+                  {String(c.period).replace("'", '')}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

@@ -14,7 +14,6 @@ const {
   readCollection,
   writeCollection,
   writeCollectionAndPersist,
-  persistAtcApplied,
   nextId,
   scopeFilter,
   readUsers,
@@ -1660,14 +1659,21 @@ app.post('/api/atc/parse', requireAuth, requirePerm('atc', 'upload'), (req, res)
       XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
     const parsed = parseAtcWorkbook(wb, sheetToAoa, {
       period_label: req.body?.period_label || '',
+      filename: req.body?.filename || '',
     });
+    const ok = !parsed.error && (parsed.rows || []).length > 0;
     res.json({
-      ok: true,
+      ok,
+      error: parsed.error || undefined,
       period_label: parsed.period_label,
       target_fy: parsed.target_fy,
-      rows: parsed.rows,
+      rows: parsed.rows || [],
       filtered_out: parsed.filtered_out,
       counts: parsed.counts,
+      skipped_sheets: parsed.skipped_sheets || [],
+      formats: parsed.formats || [],
+      primary_months: parsed.primary_months || { IA: [], IB: [] },
+      extra_months: parsed.extra_months || { IA: [], IB: [] },
     });
   } catch (e) {
     res.status(400).json({ error: e.message || 'Failed to parse ATC workbook' });
@@ -1925,7 +1931,7 @@ async function upsertByKeyPersisted(collection, rows, keyFn, mapFn) {
     try {
       await refreshFromSupabase('atc_snapshots');
     } catch (e) {
-      throw new Error(`Cannot publish AT&C — live snapshot refresh failed: ${e.message}`);
+      console.error('[upload] refresh atc_snapshots failed:', e.message);
     }
   }
   const existing = readCollection(collection, []);
@@ -2008,13 +2014,12 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
   if (!rows.length) return res.status(400).json({ error: 'No rows' });
 
   if (module === 'atc') {
-    const { isHeaderMonthPoint } = require('./atc_parse');
     const iaCccPeriods = new Set();
     const iaDivPeriods = new Set();
     for (const raw of rows) {
-      if (isHeaderMonthPoint(raw)) continue;
       const fmt = String(raw.source_format || 'IA').toUpperCase() === 'IB' ? 'IB' : 'IA';
       if (fmt !== 'IA') continue;
+      if (String(raw.point_source || '').toLowerCase() !== 'achievement') continue;
       const period_label = String(raw.period_label || req.body.period_label || '').trim();
       const office_type = String(raw.office_type || '').toLowerCase();
       if (!period_label) continue;
@@ -2024,7 +2029,7 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
     const missingDiv = [...iaCccPeriods].filter((p) => !iaDivPeriods.has(p));
     if (missingDiv.length) {
       return res.status(400).json({
-        error: `Excl. Bulk (CCC) is missing Division TOTAL rows for ${missingDiv.join(', ')}. Re-drop the official workbook and confirm the preview shows division totals.`,
+        error: `Excl. Bulk missing Division TOTAL for ${missingDiv.join(', ')}. Re-drop the Format-IA file and confirm division rows were parsed.`,
       });
     }
   }
@@ -2242,14 +2247,16 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
       }
     );
   } else if (module === 'atc') {
-    const {
-      periodSortKey,
-      isDroScopedOffice,
-      isHeaderMonthPoint,
-      mergeAtcSnapshots,
-      dedupeAtcRows,
-    } = require('./atc_parse');
-    const fillHeader = Boolean(req.body.fill_header_months);
+    const { periodSortKey, isDroScopedOffice } = require('./atc_parse');
+    const { mergeAtcSnapshots } = require('./atc_merge');
+    if (useSupabase()) {
+      try {
+        await refreshFromSupabase('atc_snapshots');
+      } catch (e) {
+        console.error('[upload] refresh atc_snapshots failed:', e.message);
+      }
+    }
+    const existing = readCollection('atc_snapshots', []);
     const now = new Date().toISOString();
     const n = (v) => {
       if (v == null || v === '') return null;
@@ -2258,7 +2265,6 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
     };
     const mapped = [];
     for (const raw of rows) {
-      if (!fillHeader && isHeaderMonthPoint(raw)) continue;
       const office_code = String(raw.office_code || raw.Code || raw['CCC Code'] || '').trim();
       const period_label = String(raw.period_label || req.body.period_label || '').trim();
       if (!office_code || !period_label) continue;
@@ -2271,7 +2277,10 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
         target_fy: raw.target_fy || '',
         source_format,
         basis_label:
-          raw.basis_label || (source_format === 'IB' ? 'Incl. Bulk (Division)' : 'Excl. Bulk (CCC)'),
+          raw.basis_label ||
+          (source_format === 'IB'
+            ? 'Format-IB (Div/Reg excl. bulk path)'
+            : 'Format-IA (CCC path)'),
         office_type,
         office_code,
         office_name: raw.office_name || raw.Name || officeName(office_code),
@@ -2296,36 +2305,14 @@ app.post('/api/upload/:module', requireAuth, async (req, res) => {
         coll_eff: n(raw.coll_eff ?? raw.CollEff),
         coll_eff_mar: n(raw.coll_eff_mar),
         coll_eff_yoy: n(raw.coll_eff_yoy),
-        point_source: raw.point_source || null,
+        point_source: raw.point_source || 'header_month',
         batch_id: batch.id,
         updated_at: now,
       });
     }
-    const uniqueMapped = dedupeAtcRows(mapped);
-    if (!uniqueMapped.length) {
-      return res.status(400).json({ error: 'No AT&C achievement rows to publish.' });
-    }
-    if (useSupabase()) {
-      try {
-        await refreshFromSupabase('atc_snapshots');
-      } catch (e) {
-        return res.status(502).json({
-          error: `Cannot publish AT&C — live data could not be loaded: ${e.message}`,
-        });
-      }
-    }
-    const existing = readCollection('atc_snapshots', []);
-    const merged = mergeAtcSnapshots(existing, uniqueMapped, { now, nextId });
-    cloud = await persistAtcApplied(merged.existing, merged.applied);
-    upserted = merged.applied.length;
-    if (useSupabase() && !cloud.persisted) {
-      return res.status(502).json({
-        error: cloud.error
-          ? `AT&C did not save to Supabase: ${cloud.error}`
-          : 'AT&C did not save to Supabase. Nothing was published.',
-        cloud,
-      });
-    }
+    const stats = mergeAtcSnapshots(existing, mapped, { nextId, now });
+    cloud = await writeCollectionAndPersist('atc_snapshots', existing);
+    upserted = stats.upserted;
   }
 
   logActivity(req.user.username, 'upload', `${module}: ${upserted} rows (${req.body.filename || 'file'})`);

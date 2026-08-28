@@ -15,7 +15,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { api, canEdit, canUploadModule } from '../api';
+import { api, canEdit } from '../api';
 import {
   ANALYTIC_TOPICS,
   buildFocusRows,
@@ -1165,7 +1165,6 @@ export function AtcPage() {
   const [editForm, setEditForm] = useState<Record<string, string>>({});
 
   const canEditAtc = canEdit(user, 'atc');
-  const canUploadAtc = canUploadModule(user, 'atc');
 
   // Admin landing view: Division · Compare · AT&C (all divisions selected via office effect)
   useEffect(() => {
@@ -2256,18 +2255,11 @@ export function AtcPage() {
             </>
           ) : (
             <>
-          {(canEditAtc || canUploadAtc) && (
-            <section className="atc-block atc-block-actions">
-              {canUploadAtc && (
-                <a className="btn secondary atc-edit-toggle atc-edit-sidebar" href="/upload?module=atc">
-                  Publish month
-                </a>
-              )}
-              {canEditAtc && (
-                <button type="button" className="btn atc-edit-toggle atc-edit-sidebar" onClick={startEditFlow}>
-                  Edit AT&amp;C values
-                </button>
-              )}
+          {canEditAtc && (
+            <section className="atc-block">
+              <button type="button" className="btn atc-edit-toggle atc-edit-sidebar" onClick={startEditFlow}>
+                Edit AT&amp;C values
+              </button>
             </section>
           )}
           <section className="atc-block">
