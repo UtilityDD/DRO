@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { DEFAULT_MASK_OPACITY } from '@/domain/types';
 import type {
   AssetLifecycle,
   MapLayerSettings,
@@ -215,9 +216,9 @@ const defaultFilters: NetworkFilters = {
 };
 
 const defaultMapLayers: MapLayerSettings = {
-  basemap: 'carto',
+  basemap: 'esri',
   showMask: true,
-  maskOpacity: 0.35,
+  maskOpacity: DEFAULT_MASK_OPACITY,
   showDistricts: true,
   showDistrictLabels: true,
   showBlocks: false,

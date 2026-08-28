@@ -5,7 +5,7 @@ import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import { useNetworkStore } from '@/store/networkStore';
 import { parallelCircuitLatLngs, lineDisplayLabel, formatCapacity, haversineKm } from '@/domain/geo';
-import { createBoundaryLayers, createBasemapLayer, DEFAULT_ZONE_BOUNDS, fitDefaultZone, type BoundaryHandle } from './boundaryLayers';
+import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_BOUNDS, fitDefaultZone, type BoundaryHandle } from './boundaryLayers';
 import { feederLabelOffsetPx, feederLabelPlacement } from './feederLabels';
 import { lineStyle, substationIcon, tapIcon } from './symbology';
 import { nearestPointOnLines, nearestSubstation } from './mapSnap';
@@ -37,7 +37,7 @@ export function MapView() {
   const measureLayerRef = useRef<L.FeatureGroup | null>(null);
   const hintsLayerRef = useRef<L.FeatureGroup | null>(null);
   const boundaryRef = useRef<BoundaryHandle | null>(null);
-  const basemapRef = useRef<L.TileLayer | null>(null);
+  const basemapRef = useRef<L.Layer | null>(null);
   /** Active snap target for click-to-complete connect / tap */
   const snapRef = useRef<{
     kind: 'substation' | 'line';
@@ -198,7 +198,7 @@ export function MapView() {
     if (mapLayers.basemap !== 'none') {
       const next = createBasemapLayer(mapLayers.basemap);
       next.addTo(map);
-      next.bringToBack();
+      basemapToBack(next);
       basemapRef.current = next;
     }
 

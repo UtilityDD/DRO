@@ -1253,7 +1253,7 @@ function LayersForm() {
               { id: 'google', label: 'Google Roads' },
               { id: 'google-hybrid', label: 'Google Hybrid' },
               { id: 'osm', label: 'OpenStreetMap' },
-              { id: 'carto', label: 'Carto Light' },
+              { id: 'esri', label: 'Light Gray' },
               { id: 'none', label: 'No basemap' },
             ] as const
           ).map((b) => (

@@ -1,10 +1,9 @@
 /**
  * Rebuilds the West Bengal boundary assets in apps/web/public/geo from OpenStreetMap.
  *
- * The Power Map basemaps (Carto and OSM) are rendered from OSM data, so taking
- * the admin boundaries from OSM too makes the outlines sit exactly on the borders
- * drawn in the tiles. It also means neighbouring areas share the same OSM ways, so
- * the state mask dissolved from these polygons has no seams.
+ * Taking the admin boundaries from OSM makes the outlines sit exactly on the
+ * borders drawn by the OSM basemap tiles. It also means neighbouring areas share
+ * the same OSM ways, so the state mask dissolved from these polygons has no seams.
  *
  * Usage:  node scripts/build-wb-districts.mjs [districts|blocks|all] [--refetch]
  * The raw Overpass response for each level is cached so the geometry can be

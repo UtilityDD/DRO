@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { fetchBlockGeoJSON, fetchDistrictGeoJSON } from '@/lib/districts';
+import { DEFAULT_MASK_OPACITY } from '@/domain/types';
 
 /**
  * Fallback state outline, used only when the district file cannot be loaded.
@@ -29,7 +30,7 @@ export function fitDefaultZone(map: L.Map, bounds: L.LatLngBounds) {
   });
 }
 
-export type BasemapId = 'google' | 'google-hybrid' | 'osm' | 'carto' | 'none';
+export type BasemapId = 'google' | 'google-hybrid' | 'osm' | 'esri' | 'none';
 
 export interface BoundaryLayerOptions {
   showMask: boolean;
@@ -327,7 +328,7 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
     style: {
       stroke: false,
       fillColor: '#0f172a',
-      fillOpacity: 0.35,
+      fillOpacity: DEFAULT_MASK_OPACITY,
       fillRule: 'evenodd',
     },
   }).addTo(group);
@@ -534,7 +535,30 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
   };
 }
 
-export function createBasemapLayer(id: BasemapId): L.TileLayer {
+const ESRI_CANVAS = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas';
+const ESRI_ATTRIBUTION =
+  'Tiles &copy; Esri — Esri, HERE, Garmin, &copy; OpenStreetMap contributors';
+
+/**
+ * Esri splits its light canvas into a label-free base and a separate reference
+ * layer carrying the place names, so the light basemap is a group of two tiles.
+ * Esri stops at zoom 16 and serves a "Map data not yet available" placeholder
+ * above it, hence maxNativeZoom — Leaflet upscales instead of showing that.
+ */
+function createEsriCanvas(): L.LayerGroup {
+  const base = L.tileLayer(`${ESRI_CANVAS}/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`, {
+    maxZoom: 20,
+    maxNativeZoom: 16,
+    attribution: ESRI_ATTRIBUTION,
+  });
+  const labels = L.tileLayer(
+    `${ESRI_CANVAS}/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}`,
+    { maxZoom: 20, maxNativeZoom: 16 },
+  );
+  return L.layerGroup([base, labels]);
+}
+
+export function createBasemapLayer(id: BasemapId): L.Layer {
   switch (id) {
     case 'none':
       return L.tileLayer('', {
@@ -558,11 +582,20 @@ export function createBasemapLayer(id: BasemapId): L.TileLayer {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap',
       });
-    case 'carto':
+    case 'esri':
     default:
-      return L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-      });
+      return createEsriCanvas();
+  }
+}
+
+/** Push a basemap behind any other tile layers, group or not. */
+export function basemapToBack(layer: L.Layer) {
+  if (layer instanceof L.LayerGroup) {
+    // Reverse order so the first child ends up furthest back.
+    for (const child of layer.getLayers().reverse()) {
+      if (child instanceof L.TileLayer) child.bringToBack();
+    }
+  } else if (layer instanceof L.TileLayer) {
+    layer.bringToBack();
   }
 }

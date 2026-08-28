@@ -126,9 +126,10 @@ export interface NetworkFilters {
 
 export interface MapLayerSettings {
   /** Basemap tiles (Google shows admin lines in the map itself). */
-  basemap: 'google' | 'google-hybrid' | 'osm' | 'carto' | 'none';
+  basemap: 'google' | 'google-hybrid' | 'osm' | 'esri' | 'none';
   /** Soft dim outside West Bengal. */
   showMask: boolean;
+  /** 0..0.85, matching the side panel slider. */
   maskOpacity: number;
   /** Clean district boundary overlay for district-level view. */
   showDistricts: boolean;
@@ -150,6 +151,9 @@ export interface MapLayerSettings {
   /** Force every district dimmed. */
   dimAllDistricts: boolean;
 }
+
+/** Shared so the store default and the initial mask paint cannot drift apart. */
+export const DEFAULT_MASK_OPACITY = 0.7;
 
 export interface NetworkAnalytics {
   substationCount: number;

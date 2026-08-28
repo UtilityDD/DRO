@@ -135,7 +135,7 @@ function PrintMiniMap({
       boxZoom: false,
       keyboard: false,
     });
-    createBasemapLayer('carto').addTo(map);
+    createBasemapLayer('esri').addTo(map);
     const districts = L.featureGroup().addTo(map);
     const network = L.featureGroup().addTo(map);
     districtsLayerRef.current = districts;

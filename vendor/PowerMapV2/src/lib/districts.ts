@@ -6,8 +6,8 @@
  * edges cannot drift apart.
  *
  * The local file is extracted from OpenStreetMap admin_level=5 relations by
- * scripts/build-wb-districts.mjs, which is the same data the Carto and OSM
- * basemaps are rendered from — so the outlines sit on the borders in the tiles.
+ * scripts/build-wb-districts.mjs, so the outlines sit on the borders drawn by
+ * the OSM basemap rather than beside them.
  * The CDN copy is a much coarser fallback for when the asset is unavailable.
  */
 export const WB_DISTRICT_SOURCES = [
