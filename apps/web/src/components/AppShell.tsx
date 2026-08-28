@@ -307,6 +307,37 @@ function matchLink(pathname: string, l: LinkItem) {
   return pathname === l.to || (l.to !== '/' && pathname.startsWith(l.to));
 }
 
+// Warm a route's split chunk (and, for the map, its boundary geometry) the moment
+// the user shows intent by hovering/focusing its nav link, so the page is ready by
+// the time they click — without downloading anything for routes they never open.
+const routeChunkLoaders: Record<string, () => Promise<unknown>> = {
+  '/powermap': () => import('../pages/PowerMapPage'),
+  '/hierarchy': () => import('../pages/HierarchyPage'),
+  '/nsc': () => import('../pages/NscDeskPage'),
+  '/atc': () => import('../pages/AtcPage'),
+  '/consumers': () => import('../pages/ConsumersPage'),
+  '/tech-works': () => import('../pages/TechWorksDeskPage'),
+  '/field': () => import('../pages/FieldDeskPage'),
+  '/upload': () => import('../pages/UploadPage'),
+  '/admin': () => import('../pages/AdminPage'),
+  '/disco': () => import('../pages/ModulePages'),
+  '/grievances': () => import('../pages/ModulePages'),
+  '/spot-billing': () => import('../pages/ModulePages'),
+  '/bulk': () => import('../pages/ModulePages'),
+};
+
+const prefetched = new Set<string>();
+
+function prefetchRoute(to: string) {
+  if (prefetched.has(to)) return;
+  prefetched.add(to);
+  routeChunkLoaders[to]?.().catch(() => prefetched.delete(to));
+  if (to === '/powermap') {
+    // Warm the district geometry into the HTTP/SW cache ahead of the first render.
+    fetch('/geo/wb-districts.geojson').catch(() => {});
+  }
+}
+
 export function AppShell() {
   const { user, loading, logout } = useAuth();
   const location = useLocation();
@@ -567,6 +598,8 @@ export function AppShell() {
               data-theme={l.theme}
               className={({ isActive }) => (isActive ? 'active' : '')}
               onClick={onPick}
+              onMouseEnter={() => prefetchRoute(l.to)}
+              onFocus={() => prefetchRoute(l.to)}
             >
               <span className="nav-icon">
                 <Icon name={l.icon} />
@@ -785,7 +818,13 @@ export function AppShell() {
 
       <nav className="bottom-nav mobile-only" aria-label="Primary">
         {(bottomPrimary.length ? bottomPrimary : primary).map((l) => (
-          <NavLink key={l.to} to={l.to} end={l.end} className={({ isActive }) => (isActive ? 'active' : '')}>
+          <NavLink
+            key={l.to}
+            to={l.to}
+            end={l.end}
+            className={({ isActive }) => (isActive ? 'active' : '')}
+            onTouchStart={() => prefetchRoute(l.to)}
+          >
             <span className="bottom-icon">
               <Icon name={l.icon} />
             </span>

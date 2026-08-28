@@ -2203,6 +2203,14 @@ html[data-appearance='dark'] .login-card {
   animation: spin 0.7s linear infinite;
 }
 
+.route-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  width: 100%;
+}
+
 .bottom-nav {
   display: none;
 }
