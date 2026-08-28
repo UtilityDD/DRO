@@ -6,7 +6,6 @@ import { SearchPalette } from '@/features/shell/SearchPalette';
 import { SidePanel } from '@/features/shell/SidePanel';
 import { StatusBar } from '@/features/shell/StatusBar';
 import { ToolRail } from '@/features/shell/ToolRail';
-import { TopBar } from '@/features/shell/TopBar';
 import { useNetworkStore } from '@/store/networkStore';
 
 export function App() {
@@ -21,8 +20,7 @@ export function App() {
   }, [bootstrap]);
 
   return (
-    <div className="app-shell">
-      <TopBar />
+    <div className="pm-shell">
       <div className="workspace">
         <ToolRail />
         <div className="map-stage">
@@ -43,8 +41,8 @@ export function App() {
             <div className="legend-row"><span className="sym circle" /> 33 kV</div>
             <div className="legend-note">Filled = existing · Outline = proposed</div>
           </div>
+          <SidePanel />
         </div>
-        <SidePanel />
       </div>
       <StatusBar />
       <SearchPalette />

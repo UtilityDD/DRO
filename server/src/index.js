@@ -17,6 +17,7 @@ const {
   nextId,
   scopeFilter,
   readUsers,
+  touchUserLogin,
   initStore,
   ensureCollection,
   isNscLoaded,
@@ -414,7 +415,7 @@ app.post('/api/login', (req, res) => {
     if (!raw) return res.status(401).json({ error: 'Invalid username or PIN' });
 
     raw.last_login = new Date().toISOString();
-    writeCollection('portal_users', users);
+    touchUserLogin(raw);
     const user = publicUser(raw);
     req.session.user = user;
     logActivity(user.username, 'login', 'Signed in');

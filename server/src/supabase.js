@@ -4,7 +4,7 @@ const path = require('path');
 const CONFIG_PATH = path.join(__dirname, '..', 'data', 'supabase_config.json');
 
 let SCHEMA =
-  process.env.SUPABASE_SCHEMA || process.env.DRO_SUPABASE_SCHEMA || 'dro';
+  process.env.SUPABASE_SCHEMA || process.env.DRO_SUPABASE_SCHEMA || 'public';
 
 let SUPABASE_URL =
   process.env.SUPABASE_URL || process.env.DRO_SUPABASE_URL || '';
@@ -89,10 +89,12 @@ async function querySupabaseMeta(apiPath, options = {}) {
     headers['Content-Profile'] = schema;
   }
 
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 20000;
   const response = await fetch(url, {
     method,
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok && response.status !== 206) {
@@ -132,6 +134,7 @@ async function countRows(table, query = '') {
       Range: '0-0',
       'Range-Unit': 'items',
     },
+    signal: AbortSignal.timeout(20000),
   });
   if (!response.ok && response.status !== 206) {
     const errText = await response.text();
@@ -258,13 +261,18 @@ function alignObjectKeys(rows) {
 }
 
 async function replaceTable(table, rows, opts = {}) {
+  const incoming = Array.isArray(rows) ? rows : [];
+  // DELETE-then-INSERT: an empty payload would wipe the live table.
+  if (!incoming.length) {
+    console.error(`[Supabase] replaceTable(${table}) refused: empty payload`);
+    return [];
+  }
   for (let i = 0; i < 2000; i += 1) {
     const probe = await querySupabase(`${table}?select=id&limit=1`);
     if (!Array.isArray(probe) || !probe.length) break;
     await querySupabase(`${table}?id=gte.0`, { method: 'DELETE', prefer: 'return=minimal' });
   }
-  if (!rows.length) return [];
-  const aligned = alignObjectKeys(rows);
+  const aligned = alignObjectKeys(incoming);
   const chunk = opts.chunk || 200;
   const prefer = opts.silent ? 'return=minimal' : 'return=representation';
   const out = [];

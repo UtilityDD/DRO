@@ -1,39 +1,46 @@
-import { useEffect, useState } from 'react';
-import { App as PowerMapApp } from '@/App';
+import { useEffect } from 'react';
+import { Search } from 'lucide-react';
+import { App as PowerMapApp } from '../../../../vendor/PowerMapV2/src/App';
+import { useNetworkStore } from '@/store/networkStore';
 import { ensurePowerMapClient } from '../powermap/supabase';
+import { usePageHeading } from '../lib/pageHeading';
 import 'leaflet/dist/leaflet.css';
 import '../powermap/powermap.css';
+import '../powermap/powermap-dro.css';
 
 export function PowerMapPage() {
-  const [ready, setReady] = useState(false);
-  const [hint, setHint] = useState('Opening Power Map…');
+  const loaded = useNetworkStore((s) => s.loaded);
+  const backend = useNetworkStore((s) => s.backend);
+  const substations = useNetworkStore((s) => s.substations);
+  const lines = useNetworkStore((s) => s.lines);
+  const setSearchOpen = useNetworkStore((s) => s.setSearchOpen);
+  const searchOpen = useNetworkStore((s) => s.searchOpen);
+
+  usePageHeading('Power Map');
 
   useEffect(() => {
-    let cancelled = false;
-    ensurePowerMapClient().then((r) => {
-      if (cancelled) return;
-      if (r.live?.ok) setHint(`Live network · ${r.live.table || 'pm_*'}`);
-      else if (r.configured) setHint(`Supabase key set · not reading tables (${r.live?.reason || 'run 011 bridge SQL or expose schema powermap'})`);
-      else setHint('Local copy — Power Map is not using the live table');
-      setReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
+    void ensurePowerMapClient();
   }, []);
-
-  if (!ready) {
-    return (
-      <div className="pm-page pm-booting">
-        <p className="muted">{hint}</p>
-      </div>
-    );
-  }
 
   return (
     <div className="pm-page">
-      <p className="pm-live-hint muted">{hint}. Existing Power Map substations load first; DRO stations are added later without replacing them.</p>
-      <div className="pm-root" data-backend={hint}>
+      <div className="pm-desk-toolbar">
+        <button
+          type="button"
+          className="pm-desk-search"
+          onClick={() => setSearchOpen(!searchOpen)}
+        >
+          <Search size={15} />
+          Search network
+          <kbd>⌘K</kbd>
+        </button>
+        <span className="muted">
+          {loaded
+            ? `${backend === 'supabase' ? 'Live' : 'Local'} · ${substations.length} SS · ${lines.length} lines`
+            : 'Loading network…'}
+        </span>
+      </div>
+      <div className="pm-root">
         <PowerMapApp />
       </div>
     </div>

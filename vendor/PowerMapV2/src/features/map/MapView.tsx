@@ -81,6 +81,20 @@ export function MapView() {
       zoomControl: false,
       attributionControl: true,
       minZoom: 7,
+      zoomAnimation: true,
+      fadeAnimation: true,
+      markerZoomAnimation: true,
+      zoomAnimationThreshold: 8,
+      inertia: true,
+      inertiaDeceleration: 2800,
+      inertiaMaxSpeed: 2200,
+      easeLinearity: 0.22,
+      wheelPxPerZoomLevel: 90,
+      wheelDebounceTime: 28,
+      zoomSnap: 0.25,
+      zoomDelta: 0.5,
+      bounceAtZoomLimits: false,
+      preferCanvas: false,
     });
     fitDefaultZone(map, L.latLngBounds(DEFAULT_ZONE_BOUNDS));
 

@@ -724,21 +724,19 @@ export function AppShell() {
         </aside>
 
         <div className="main">
-          {!mapMode && (
-            <header className="page-masthead desktop-only">
-              <div className="page-masthead-copy">
-                <div className="page-masthead-kicker">{groupLabel}</div>
-                <h1>{heading || current?.label || 'DRO Insights'}</h1>
-                <p>{scope}</p>
-              </div>
-              <div className="page-masthead-actions">
-                {present && <span className="present-chip">Presenting</span>}
-                {appearanceBtn('masthead')}
-                {laserBtn('masthead')}
-                {presentBtn('masthead')}
-              </div>
-            </header>
-          )}
+          <header className="page-masthead desktop-only">
+            <div className="page-masthead-copy">
+              <div className="page-masthead-kicker">{groupLabel}</div>
+              <h1>{heading || current?.label || 'DRO Insights'}</h1>
+              <p>{scope}</p>
+            </div>
+            <div className="page-masthead-actions">
+              {present && <span className="present-chip">Presenting</span>}
+              {appearanceBtn('masthead')}
+              {laserBtn('masthead')}
+              {presentBtn('masthead')}
+            </div>
+          </header>
 
           <div className={`page-content${mapMode ? ' page-content-flush' : ''}`}>
             <PageHeadingProvider set={setHeading}>

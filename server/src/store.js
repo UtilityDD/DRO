@@ -226,7 +226,13 @@ async function loadTable(name) {
       if (!(name === 'nsc_cases' && localRows.length === cache[name].length)) {
         writeLocal(name, cache[name]);
       }
-      console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
+      if (AUTH_TABLES.includes(name) && cache[name].length === 0) {
+        console.error(
+          `[store] loaded ${table}: 0 rows — login will fail until this table has data in Supabase`
+        );
+      } else {
+        console.log(`[store] loaded ${table}: ${cache[name].length} rows`);
+      }
     }
   } catch (e) {
     if (CLOUD_ONLY.has(name)) {
@@ -264,6 +270,7 @@ async function initStore(opts = {}) {
       await loadTable(name);
     }
     authReady = true;
+    initialized = true;
     if (onAuthReady) onAuthReady();
     console.log('[store] auth ready');
     try {
@@ -277,10 +284,11 @@ async function initStore(opts = {}) {
     }
   } catch (e) {
     authReady = true;
+    initialized = true;
     if (onAuthReady) onAuthReady();
     throw e;
   }
-  initialized = true;
+  console.log('[store] remaining collections loaded');
   return { mode: 'supabase', host: sb.status().host };
 }
 
@@ -506,6 +514,14 @@ async function persistCollection(name, copy) {
     }
     return;
   }
+  if (name === 'portal_users') {
+    if (!mapped.length) {
+      console.error('[store] refusing to persist empty portal_users');
+      return;
+    }
+    await sb.upsertRows(table, mapped, 'username', { silent: true });
+    return;
+  }
   await sb.replaceTable(table, mapped);
 }
 
@@ -621,6 +637,31 @@ function saveUserRecord(rawUser) {
   return normalizeUser(users.find((u) => u.username === rawUser.username));
 }
 
+/** Update last_login in cache + a single-row PATCH. Never DELETE/replace the users table. */
+function touchUserLogin(rawUser) {
+  const when = rawUser.last_login || new Date().toISOString();
+  rawUser.last_login = when;
+  const uname = String(rawUser.username || '').toLowerCase();
+  const apply = (rows) => {
+    const idx = (rows || []).findIndex((u) => String(u.username || '').toLowerCase() === uname);
+    if (idx >= 0) rows[idx].last_login = when;
+    return rows;
+  };
+  if (useSupabase()) {
+    if (Array.isArray(cache.portal_users)) apply(cache.portal_users);
+    writeLocal('portal_users', cache.portal_users || []);
+    const filter =
+      rawUser.id != null && rawUser.id !== ''
+        ? `id=eq.${encodeURIComponent(rawUser.id)}`
+        : `username=eq.${encodeURIComponent(String(rawUser.username || ''))}`;
+    sb.updateByFilter('portal_users', filter, { last_login: when }).catch((e) =>
+      console.warn('[store] last_login persist:', e.message)
+    );
+    return;
+  }
+  writeLocal('portal_users', apply(readLocal('portal_users', [])));
+}
+
 async function pushAllLocalToSupabase() {
   if (!useSupabase()) throw new Error('Supabase not configured');
   const report = [];
@@ -658,6 +699,7 @@ module.exports = {
   scopeFilter,
   readUsers,
   saveUserRecord,
+  touchUserLogin,
   pushAllLocalToSupabase,
   isReady: () => initialized,
   isAuthReady: () => authReady || initialized,

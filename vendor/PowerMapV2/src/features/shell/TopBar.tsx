@@ -28,8 +28,8 @@ export function TopBar() {
           <Zap size={16} />
         </div>
         <div className="brand-text">
-          <span className="brand-name">PowerMap</span>
-          <span className="brand-ver">V2</span>
+          <span className="brand-name">Power Map</span>
+          <span className="brand-ver">DRO</span>
         </div>
       </div>
 

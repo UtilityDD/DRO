@@ -62,11 +62,11 @@
 }
 .app-shell[data-theme='powermap'],
 .app-shell[data-theme='map'] {
-  --accent: #166534;
-  --accent-dim: #14532d;
-  --accent-soft: rgba(22, 101, 52, 0.12);
-  --accent-rgb: 22, 101, 52;
-  --page-wash: rgba(22, 101, 52, 0.05);
+  --accent: #2563eb;
+  --accent-dim: #1e40af;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+  --accent-rgb: 37, 99, 235;
+  --page-wash: rgba(37, 99, 235, 0.05);
 }
 .app-shell[data-theme='nsc'] {
   --accent: #1d4ed8;
@@ -207,9 +207,9 @@ html[data-appearance='dark'] body {
 }
 .app-shell[data-appearance='dark'][data-theme='powermap'],
 .app-shell[data-appearance='dark'][data-theme='map'] {
-  --accent: #4ade80;
-  --accent-dim: #86efac;
-  --accent-soft: rgba(74, 222, 128, 0.18);
+  --accent: #60a5fa;
+  --accent-dim: #93c5fd;
+  --accent-soft: rgba(96, 165, 250, 0.2);
 }
 .app-shell[data-appearance='dark'][data-theme='grievance'],
 .app-shell[data-appearance='dark'][data-theme='griev'] {
@@ -1058,7 +1058,6 @@ button {
 .mode-powermap {
   height: 100dvh;
   overflow: hidden;
-  --appbar-h: 0px;
 }
 
 .mode-powermap .main {
@@ -1076,6 +1075,10 @@ button {
   flex-direction: column;
 }
 
+.mode-powermap .present-fab-stack {
+  top: calc(var(--appbar-h) + 4.6rem);
+}
+
 .pm-page {
   flex: 1;
   min-height: 0;
@@ -1089,17 +1092,276 @@ button {
   min-height: 0;
 }
 
-.pm-live-hint {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.8rem;
-}
-
 .pm-booting {
   display: grid;
   place-items: center;
+  gap: 0.75rem;
   min-height: 40vh;
+}
+
+.pm-live-hint {
+  display: none;
+}
+
+/* Power Map as a native DRO desk — hide nested product chrome. */
+.mode-powermap {
+  --dro-surface: var(--surface);
+  --dro-text: var(--text);
+  --dro-muted: var(--muted);
+  --dro-border: var(--border);
+  --dro-bg: var(--bg);
+  --dro-bg-soft: var(--bg-soft);
+  --dro-shadow: var(--shadow);
+  --dro-font: var(--font);
+  --dro-display: var(--display);
+  --dro-danger: var(--danger);
+  --dro-radius: var(--radius);
+}
+
+.mode-powermap .pm-root {
+  --bg: var(--dro-bg);
+  --surface: var(--dro-surface);
+  --surface-solid: var(--dro-surface);
+  --ink: var(--dro-text);
+  --muted: var(--dro-muted);
+  --line: var(--dro-border);
+  --accent: #2563eb;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+  --danger: var(--dro-danger);
+  --shadow: var(--dro-shadow);
+  --radius: var(--dro-radius);
+  --font: var(--dro-font);
+  --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--dro-font);
+  color: var(--dro-text);
+  background: transparent;
+}
+
+.app-shell[data-appearance='dark'].mode-powermap .pm-root {
+  --accent: #60a5fa;
+  --accent-soft: rgba(96, 165, 250, 0.2);
+}
+
+.mode-powermap .pm-root .pm-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+.mode-powermap .pm-root .top-bar,
+.mode-powermap .pm-root .pm-desk-bar,
+.mode-powermap .pm-live-hint {
+  display: none !important;
+}
+
+.pm-desk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: 0 0 auto;
+  padding: 0.35rem 1rem 0.55rem;
+}
+
+.pm-desk-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.38rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.pm-desk-search kbd {
+  font-size: 0.68rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 6px;
+  background: var(--bg-soft);
+}
+
+.mode-powermap .pm-root .workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 52px 1fr;
+}
+
+.mode-powermap .pm-root .tool-rail {
+  padding: 0.45rem 0.4rem;
+  gap: 2px;
+  background: var(--dro-surface);
+  border-right: 1px solid var(--dro-border);
+}
+
+.mode-powermap .pm-root .tool-btn {
+  width: 38px;
+  height: 38px;
+  color: var(--dro-muted);
+  border-radius: 10px;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.mode-powermap .pm-root .tool-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.mode-powermap .pm-root .tool-btn.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+}
+
+.mode-powermap .pm-root .map-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mode-powermap .pm-root .side-panel {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.7rem;
+  bottom: 2.6rem;
+  width: min(320px, 38vw);
+  z-index: 650;
+  border: 1px solid var(--dro-border);
+  border-radius: var(--dro-radius);
+  background: var(--dro-surface);
+  color: var(--dro-text);
+  box-shadow: var(--dro-shadow);
+  animation: none;
+  font-size: 0.82rem;
+}
+
+.mode-powermap .pm-root .side-panel-header {
+  padding: 0.7rem 0.85rem;
+  min-height: 44px;
+  border-bottom: 1px solid var(--dro-border);
+}
+
+.mode-powermap .pm-root .side-panel-header h2 {
+  font-family: var(--dro-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.mode-powermap .pm-root .side-panel-body {
+  padding: 0.85rem;
+}
+
+.mode-powermap .pm-root .status-bar {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 0.85rem;
+  background: var(--dro-surface);
+  border-top: 1px solid var(--dro-border);
+  color: var(--dro-muted);
+  font-size: 0.75rem;
+}
+
+.mode-powermap .pm-root .map-legend {
+  left: 0.7rem;
+  bottom: 0.7rem;
+  background: color-mix(in srgb, var(--dro-surface) 94%, transparent);
+  border: 1px solid var(--dro-border);
+  border-radius: var(--dro-radius);
+  backdrop-filter: blur(12px);
+  color: var(--dro-text);
+  box-shadow: var(--dro-shadow);
+}
+
+.mode-powermap .pm-root .map-root,
+.mode-powermap .pm-root .leaflet-container {
+  background: var(--dro-bg-soft);
+  font-family: var(--dro-font);
+}
+
+.mode-powermap .pm-root .leaflet-fade-anim .leaflet-tile,
+.mode-powermap .pm-root .leaflet-zoom-anim .leaflet-zoom-animated {
+  will-change: transform, opacity;
+}
+
+.mode-powermap .pm-root .leaflet-pane {
+  transform: translateZ(0);
+}
+
+.mode-powermap .pm-root .leaflet-control-zoom {
+  border: 1px solid var(--dro-border) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: var(--dro-shadow) !important;
+}
+
+.mode-powermap .pm-root .leaflet-control-zoom a {
+  background: var(--dro-surface) !important;
+  color: var(--dro-text) !important;
+  border-bottom: 1px solid var(--dro-border) !important;
+  width: 36px;
+  height: 36px;
+  line-height: 36px;
+}
+
+.mode-powermap .pm-root .leaflet-control-zoom a:hover {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
+.mode-powermap .pm-root .leaflet-control-attribution {
+  background: color-mix(in srgb, var(--dro-surface) 82%, transparent) !important;
+  color: var(--dro-muted) !important;
+}
+
+.mode-powermap .pm-root .primary-btn,
+.mode-powermap .pm-root .side-panel .primary-btn {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 10px;
+}
+
+.mode-powermap .pm-root .sync-pill.supabase .sync-dot {
+  background: var(--accent);
+}
+
+.mode-powermap .pm-root input,
+.mode-powermap .pm-root select,
+.mode-powermap .pm-root textarea {
+  background: var(--dro-bg-soft);
+  color: var(--dro-text);
+  border-color: var(--dro-border);
+}
+
+.mode-powermap .pm-root .search-overlay {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.mode-powermap .pm-root .search-dialog,
+.mode-powermap .pm-root .boot-card {
+  background: var(--dro-surface);
+  color: var(--dro-text);
+  border: 1px solid var(--dro-border);
+  border-radius: var(--dro-radius);
+}
+
+@media (max-width: 900px) {
+  .mode-powermap .pm-root .pm-desk-copy p {
+    display: none;
+  }
+
+  .mode-powermap .pm-root .side-panel {
+    width: min(320px, calc(100% - 1.2rem));
+    top: auto;
+    bottom: 3.2rem;
+    max-height: 52vh;
+  }
 }
 
 .panel-head {
@@ -8577,7 +8839,7 @@ html[data-appearance='dark'] .login-card {
 [data-theme="home"] { --item-accent: #334155; }
 [data-theme="hierarchy"] { --item-accent: #0f766e; }
 [data-theme="powermap"],
-[data-theme="map"] { --item-accent: #166534; }
+[data-theme="map"] { --item-accent: #2563eb; }
 [data-theme="nsc"] { --item-accent: #1d4ed8; }
 [data-theme="disco"] { --item-accent: #c2410c; }
 [data-theme="grievance"],
@@ -8623,6 +8885,24 @@ html[data-appearance='dark'] .login-card {
 
 .app-shell[data-theme="nsc"] .page-masthead p {
   display: none;
+}
+
+.app-shell[data-theme="powermap"] .page-masthead,
+.app-shell[data-theme="map"] .page-masthead {
+  align-items: center;
+  padding: 0.45rem 1.25rem 0.15rem;
+}
+
+.app-shell[data-theme="powermap"] .page-masthead-kicker,
+.app-shell[data-theme="map"] .page-masthead-kicker,
+.app-shell[data-theme="powermap"] .page-masthead p,
+.app-shell[data-theme="map"] .page-masthead p {
+  display: none;
+}
+
+.app-shell[data-theme="powermap"] .page-masthead h1,
+.app-shell[data-theme="map"] .page-masthead h1 {
+  font-size: 1.32rem;
 }
 
 .app-shell[data-theme="nsc"] .page-content {

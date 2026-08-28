@@ -45,6 +45,17 @@ textarea {
   overflow: hidden;
 }
 
+.pm-shell {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr 40px;
+  overflow: hidden;
+}
+
+.pm-desk-bar {
+  display: none;
+}
+
 .top-bar {
   display: flex;
   align-items: center;

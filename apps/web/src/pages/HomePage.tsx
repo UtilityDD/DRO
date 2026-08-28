@@ -10,7 +10,10 @@ export function HomePage() {
   const [nscDiv, setNscDiv] = useState<{ division_name: string; pending: number }[]>([]);
 
   useEffect(() => {
-    api.pulse().then((r) => setPulse(r.pulse));
+    api
+      .pulse()
+      .then((r) => setPulse(r.pulse))
+      .catch(() => setPulse({}));
     api
       .nscSummary()
       .then((r) => setNscDiv(r.byDivision.map((d) => ({ division_name: d.division_name, pending: d.pending || 0 }))))

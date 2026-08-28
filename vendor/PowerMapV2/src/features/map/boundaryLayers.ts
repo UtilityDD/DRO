@@ -550,10 +550,13 @@ function createEsriCanvas(): L.LayerGroup {
     maxZoom: 20,
     maxNativeZoom: 16,
     attribution: ESRI_ATTRIBUTION,
+    updateWhenIdle: false,
+    updateWhenZooming: true,
+    keepBuffer: 4,
   });
   const labels = L.tileLayer(
     `${ESRI_CANVAS}/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}`,
-    { maxZoom: 20, maxNativeZoom: 16 },
+    { maxZoom: 20, maxNativeZoom: 16, updateWhenIdle: false, keepBuffer: 4 },
   );
   return L.layerGroup([base, labels]);
 }
@@ -570,17 +573,23 @@ export function createBasemapLayer(id: BasemapId): L.Layer {
         maxZoom: 20,
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         attribution: 'Map data &copy; Google',
+        updateWhenIdle: false,
+        keepBuffer: 4,
       });
     case 'google-hybrid':
       return L.tileLayer('https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
         maxZoom: 20,
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         attribution: 'Map data &copy; Google',
+        updateWhenIdle: false,
+        keepBuffer: 4,
       });
     case 'osm':
       return L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap',
+        updateWhenIdle: false,
+        keepBuffer: 4,
       });
     case 'esri':
     default:

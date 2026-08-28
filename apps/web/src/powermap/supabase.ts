@@ -57,7 +57,10 @@ export async function ensurePowerMapClient(): Promise<{ configured: boolean; liv
   if (envUrl && envKey) applyClient(envUrl, envKey, 'public');
 
   try {
-    const res = await fetch('/api/powermap/config', { credentials: 'include' });
+    const res = await fetch('/api/powermap/config', {
+      credentials: 'include',
+      signal: AbortSignal.timeout(8000),
+    });
     if (res.ok) {
       const cfg = (await res.json()) as {
         url?: string | null;

@@ -130,6 +130,7 @@ body.is-printing .print-map-canvas.leaflet-container {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  body.print-preview-open .pm-shell > :not(.print-overlay),
   body.print-preview-open .app-shell > :not(.print-overlay) {
     display: none !important;
   }

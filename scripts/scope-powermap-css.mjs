@@ -33,6 +33,11 @@ function transform(css) {
       i = end < 0 ? css.length : end + 2;
       continue;
     }
+    if (/\s/.test(css[i])) {
+      out += css[i];
+      i += 1;
+      continue;
+    }
     if (css[i] === '@') {
       const brace = css.indexOf('{', i);
       if (brace < 0) {
@@ -40,25 +45,26 @@ function transform(css) {
         break;
       }
       const header = css.slice(i, brace);
-      if (/^@(keyframes|font-face|import)\b/i.test(header.trim())) {
-        let depth = 0;
-        let j = brace;
-        for (; j < css.length; j++) {
-          if (css[j] === '{') depth++;
-          else if (css[j] === '}') {
-            depth--;
-            if (depth === 0) {
-              j++;
-              break;
-            }
+      const atName = header.trim().split(/\s+/)[0].toLowerCase();
+      let depth = 0;
+      let j = brace;
+      for (; j < css.length; j++) {
+        if (css[j] === '{') depth++;
+        else if (css[j] === '}') {
+          depth--;
+          if (depth === 0) {
+            j++;
+            break;
           }
         }
-        out += css.slice(i, j);
-        i = j;
-        continue;
       }
-      out += header + '{';
-      i = brace + 1;
+      if (atName === '@media' || atName === '@supports') {
+        const inner = css.slice(brace + 1, j - 1);
+        out += header + '{' + transform(inner) + '}';
+      } else {
+        out += css.slice(i, j);
+      }
+      i = j;
       continue;
     }
     const brace = css.indexOf('{', i);

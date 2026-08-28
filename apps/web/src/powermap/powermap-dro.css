@@ -1,0 +1,104 @@
+/* DRO Insights overlay — imported AFTER powermap.css so it always wins. */
+
+.pm-live-hint {
+  display: none !important;
+}
+
+.pm-root .top-bar {
+  display: none !important;
+}
+
+.pm-root .pm-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+}
+
+.pm-root .workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 52px 1fr;
+}
+
+.pm-root .tool-rail {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.pm-root .tool-btn {
+  color: var(--muted);
+}
+
+.pm-root .tool-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pm-root .tool-btn.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+}
+
+.pm-root .side-panel {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.7rem;
+  bottom: 2.6rem;
+  width: min(320px, 38vw);
+  z-index: 650;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  animation: none;
+}
+
+.pm-root .status-bar {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.pm-root .map-legend {
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.pm-root .leaflet-control-zoom {
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: var(--shadow) !important;
+}
+
+.pm-root .leaflet-control-zoom a {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.pm-root .leaflet-control-zoom a:hover {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
+.pm-root input,
+.pm-root select,
+.pm-root textarea {
+  background: var(--bg-soft);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.pm-root .primary-btn,
+.pm-root .side-panel .primary-btn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
