@@ -1,7 +1,47 @@
 /** District boundary helpers for editor authorization (point-in-polygon). */
 
-const WB_DISTRICTS_URL =
-  'https://cdn.jsdelivr.net/gh/udit-001/india-maps-data@2884453/geojson/states/west-bengal.geojson';
+/**
+ * Single source for every West Bengal outline in the app. The state boundary is
+ * dissolved from these same district polygons, so the mask edge and the district
+ * edges cannot drift apart.
+ *
+ * The local file is extracted from OpenStreetMap admin_level=5 relations by
+ * scripts/build-wb-districts.mjs, which is the same data the Carto and OSM
+ * basemaps are rendered from — so the outlines sit on the borders in the tiles.
+ * The CDN copy is a much coarser fallback for when the asset is unavailable.
+ */
+export const WB_DISTRICT_SOURCES = [
+  '/geo/wb-districts.geojson',
+  'https://cdn.jsdelivr.net/gh/udit-001/india-maps-data@2884453/geojson/states/west-bengal.geojson',
+];
+
+/**
+ * CD blocks (OSM admin_level=6). Only fetched when the sub-district layer is
+ * switched on, since it is larger than the district file and rarely needed.
+ */
+export const WB_BLOCK_SOURCES = ['/geo/wb-blocks.geojson'];
+
+async function fetchFirstAvailable<T>(urls: string[], label: string): Promise<T> {
+  let lastErr: unknown;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Failed to load ${url}: ${res.status}`);
+      return (await res.json()) as T;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error(`No West Bengal ${label} source available`);
+}
+
+export function fetchDistrictGeoJSON<T>(): Promise<T> {
+  return fetchFirstAvailable<T>(WB_DISTRICT_SOURCES, 'district');
+}
+
+export function fetchBlockGeoJSON<T>(): Promise<T> {
+  return fetchFirstAvailable<T>(WB_BLOCK_SOURCES, 'block');
+}
 
 type Ring = number[][];
 type DistrictPoly = { name: string; rings: Ring[] };
@@ -41,8 +81,7 @@ export async function loadDistrictPolygons(): Promise<DistrictPoly[]> {
   if (cache) return cache;
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
-    const res = await fetch(WB_DISTRICTS_URL);
-    const data = (await res.json()) as {
+    const data = await fetchDistrictGeoJSON<{
       features: Array<{
         properties?: Record<string, unknown>;
         geometry?: {
@@ -50,7 +89,7 @@ export async function loadDistrictPolygons(): Promise<DistrictPoly[]> {
           coordinates: number[][][] | number[][][][];
         } | null;
       }>;
-    };
+    }>();
     const list: DistrictPoly[] = [];
     for (const f of data.features ?? []) {
       const g = f.geometry;

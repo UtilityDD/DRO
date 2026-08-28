@@ -220,6 +220,8 @@ const defaultMapLayers: MapLayerSettings = {
   maskOpacity: 0.35,
   showDistricts: true,
   showDistrictLabels: true,
+  showBlocks: false,
+  showBlockLabels: true,
   showSsNames: false,
   showSsCapacity: false,
   showFeederNames: false,

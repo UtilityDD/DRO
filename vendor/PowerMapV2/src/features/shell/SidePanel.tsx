@@ -1288,6 +1288,25 @@ function LayersForm() {
         District name labels
       </label>
 
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={mapLayers.showBlocks}
+          onChange={(e) => setMapLayers({ showBlocks: e.target.checked })}
+        />
+        Block (sub-district) boundaries
+      </label>
+
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={mapLayers.showBlockLabels}
+          disabled={!mapLayers.showBlocks}
+          onChange={(e) => setMapLayers({ showBlockLabels: e.target.checked })}
+        />
+        Block name labels <span className="muted">(zoom in)</span>
+      </label>
+
       <p className="section-label">Network labels</p>
       <label className="check-row">
         <input

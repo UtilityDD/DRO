@@ -1,12 +1,13 @@
 import L from 'leaflet';
+import { fetchBlockGeoJSON, fetchDistrictGeoJSON } from '@/lib/districts';
 
-/** State outline — used only to punch the outside mask hole. */
-const WB_STATE_URL =
+/**
+ * Fallback state outline, used only when the district file cannot be loaded.
+ * It comes from a different survey than the districts, so its edge does not sit
+ * exactly on the district edges — prefer the dissolved districts.
+ */
+const WB_STATE_FALLBACK_URL =
   'https://raw.githubusercontent.com/shuklaneerajdev/IndiaStateTopojsonFiles/master/WestBengal.geojson';
-
-/** Clean district polygons for district-level view. */
-const WB_DISTRICTS_URL =
-  'https://cdn.jsdelivr.net/gh/udit-001/india-maps-data@2884453/geojson/states/west-bengal.geojson';
 
 /**
  * Default map frame: Malda Zone and north Bengal (same as the other Power Map app).
@@ -35,6 +36,9 @@ export interface BoundaryLayerOptions {
   maskOpacity: number;
   showDistricts: boolean;
   showDistrictLabels: boolean;
+  /** CD block (sub-district) outlines; loaded on first use. */
+  showBlocks: boolean;
+  showBlockLabels: boolean;
   /** Empty = all undimmed (unless dimAllDistricts). Non-empty = only these stay bright. */
   focusedDistricts: string[];
   dimAllDistricts: boolean;
@@ -79,6 +83,91 @@ function collectOuterRings(data: GeoJSONFC): number[][][] {
   return rings;
 }
 
+/** ~1 cm, so shared vertices survive float noise but real corners stay distinct. */
+const VERTEX_GRID = 1e7;
+
+function vertexKey(pt: number[]): string {
+  return `${Math.round(pt[0] * VERTEX_GRID)},${Math.round(pt[1] * VERTEX_GRID)}`;
+}
+
+type BoundaryEdge = { a: number[]; b: number[]; ka: string; kb: string };
+
+/**
+ * Merge adjacent polygons by discarding every edge that two of them share, then
+ * re-chaining what is left into closed rings. Neighbouring districts in the
+ * source file are built on one topology and use identical vertices, so the
+ * result is the exact state outline rather than a second, slightly different
+ * survey of it. Returns null if the rings do not chain cleanly.
+ */
+function dissolveRings(rings: number[][][]): number[][][] | null {
+  const edges = new Map<string, { edge: BoundaryEdge; count: number }>();
+
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      const ka = vertexKey(a);
+      const kb = vertexKey(b);
+      if (ka === kb) continue;
+      const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      const hit = edges.get(key);
+      if (hit) hit.count += 1;
+      else edges.set(key, { edge: { a, b, ka, kb }, count: 1 });
+    }
+  }
+
+  const perimeter: BoundaryEdge[] = [];
+  for (const { edge, count } of edges.values()) {
+    if (count === 1) perimeter.push(edge);
+  }
+  if (!perimeter.length) return null;
+
+  const adjacency = new Map<string, number[]>();
+  perimeter.forEach((edge, index) => {
+    for (const k of [edge.ka, edge.kb]) {
+      const list = adjacency.get(k);
+      if (list) list.push(index);
+      else adjacency.set(k, [index]);
+    }
+  });
+
+  const used = new Set<number>();
+  const outlines: number[][][] = [];
+
+  for (let i = 0; i < perimeter.length; i++) {
+    if (used.has(i)) continue;
+    const first = perimeter[i];
+    used.add(i);
+    const ring: number[][] = [first.a, first.b];
+    let cursor = first.kb;
+
+    while (cursor !== first.ka) {
+      let next = -1;
+      for (const candidate of adjacency.get(cursor) ?? []) {
+        if (!used.has(candidate)) {
+          next = candidate;
+          break;
+        }
+      }
+      if (next < 0) break;
+      used.add(next);
+      const edge = perimeter[next];
+      const forward = edge.ka === cursor;
+      ring.push(forward ? edge.b : edge.a);
+      cursor = forward ? edge.kb : edge.ka;
+    }
+
+    // An open chain means the source rings are not edge-matched; bail out so the
+    // caller can fall back instead of drawing a mask with a torn edge.
+    if (cursor !== first.ka) return null;
+    if (ring.length < 4) continue;
+    ring[ring.length - 1] = ring[0];
+    outlines.push(ring);
+  }
+
+  return outlines.length ? outlines : null;
+}
+
 export function districtName(props: Record<string, unknown> | undefined): string {
   if (!props) return 'District';
   for (const k of ['district', 'DISTRICT', 'dtname', 'DT_NAME', 'NAME_2', 'name', 'NAME']) {
@@ -86,6 +175,17 @@ export function districtName(props: Record<string, unknown> | undefined): string
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return 'District';
+}
+
+export function blockName(props: Record<string, unknown> | undefined): string {
+  const v = props?.block;
+  return typeof v === 'string' && v.trim() ? v.trim() : 'Block';
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"]/g, (c) =>
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;',
+  );
 }
 
 function ringCentroid(ring: number[][]): [number, number] {
@@ -139,6 +239,22 @@ async function fetchGeoJSON(url: string): Promise<GeoJSONFC> {
   return (await res.json()) as GeoJSONFC;
 }
 
+/**
+ * Below this zoom the state holds 344 blocks, so their labels would be an
+ * unreadable pile; district labels cover that range instead.
+ */
+const BLOCK_LABEL_MIN_ZOOM = 11;
+
+/** Hairline sub-division, deliberately weaker than the district stroke. */
+const BLOCK_STYLE: L.PathOptions = {
+  color: '#0f766e',
+  weight: 0.7,
+  opacity: 0.55,
+  dashArray: '3 3',
+  fill: false,
+  interactive: false,
+};
+
 function styleForDistrict(
   name: string,
   focusedDistricts: string[],
@@ -165,15 +281,20 @@ function styleForDistrict(
 }
 
 export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> {
-  const stateData = await fetchGeoJSON(WB_STATE_URL);
-  const rings = collectOuterRings(stateData);
-
   let districtData: GeoJSONFC | null = null;
   try {
-    districtData = await fetchGeoJSON(WB_DISTRICTS_URL);
+    districtData = await fetchDistrictGeoJSON<GeoJSONFC>();
   } catch {
     districtData = null;
   }
+
+  // Punch the mask with the districts' own outline so the two layers share every
+  // vertex. Dissolving also drops the internal district edges, which would
+  // otherwise leave hairlines along shared borders under the even-odd fill.
+  const districtRings = districtData ? collectOuterRings(districtData) : [];
+  const rings =
+    (districtRings.length ? dissolveRings(districtRings) : null) ??
+    (districtRings.length ? districtRings : collectOuterRings(await fetchGeoJSON(WB_STATE_FALLBACK_URL)));
 
   const districtNames = districtData
     ? [...new Set(districtData.features.map((f) => districtName(f.properties)))].sort((a, b) =>
@@ -238,6 +359,47 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
       })
     : null;
 
+  let blockLayer: L.GeoJSON | null = null;
+  let blockLabelGroup: L.LayerGroup | null = null;
+  let blockState: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
+  let destroyed = false;
+  let latestOpts: BoundaryLayerOptions | null = null;
+
+  const loadBlocks = () => {
+    if (blockState !== 'idle') return;
+    blockState = 'loading';
+    void fetchBlockGeoJSON<GeoJSONFC>()
+      .then((data) => {
+        if (destroyed) return;
+        blockLayer = L.geoJSON(data as GeoJSON.GeoJsonObject, {
+          interactive: false,
+          style: BLOCK_STYLE,
+        });
+        const labels = L.layerGroup();
+        for (const feature of data.features) {
+          const c = featureCentroid(feature);
+          if (!c) continue;
+          labels.addLayer(
+            L.marker(c, {
+              interactive: false,
+              icon: L.divIcon({
+                className: 'pm-block-label',
+                html: `<span>${escapeHtml(blockName(feature.properties))}</span>`,
+                iconSize: [0, 0],
+                iconAnchor: [0, 0],
+              }),
+            }),
+          );
+        }
+        blockLabelGroup = labels;
+        blockState = 'ready';
+        if (latestOpts) apply(latestOpts);
+      })
+      .catch(() => {
+        blockState = 'failed';
+      });
+  };
+
   type LabelEntry = { name: string; marker: L.Marker };
   const labelEntries: LabelEntry[] = [];
   const labelGroup = L.layerGroup();
@@ -250,7 +412,7 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
         interactive: false,
         icon: L.divIcon({
           className: 'pm-district-label',
-          html: `<span>${name}</span>`,
+          html: `<span>${escapeHtml(name)}</span>`,
           iconSize: [0, 0],
           iconAnchor: [0, 0],
         }),
@@ -268,6 +430,7 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
   }
 
   const apply = (opts: BoundaryLayerOptions) => {
+    latestOpts = opts;
     latestFocused = opts.focusedDistricts;
     latestDimAll = opts.dimAllDistricts;
     clickHandler = opts.onDistrictClick;
@@ -330,15 +493,44 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
       group.removeLayer(labelGroup);
     }
 
+    if (opts.showBlocks) {
+      if (blockLayer) {
+        if (!group.hasLayer(blockLayer)) blockLayer.addTo(group);
+      } else {
+        loadBlocks();
+      }
+    } else if (blockLayer && group.hasLayer(blockLayer)) {
+      group.removeLayer(blockLayer);
+    }
+
+    if (blockLabelGroup) {
+      const showLabels =
+        opts.showBlocks && opts.showBlockLabels && map.getZoom() >= BLOCK_LABEL_MIN_ZOOM;
+      if (showLabels && !group.hasLayer(blockLabelGroup)) blockLabelGroup.addTo(group);
+      else if (!showLabels && group.hasLayer(blockLabelGroup)) group.removeLayer(blockLabelGroup);
+    }
+
+    // Keep blocks under the district strokes, and the mask under everything.
+    if (opts.showBlocks && blockLayer && group.hasLayer(blockLayer)) blockLayer.bringToBack();
     if (opts.showMask && group.hasLayer(maskLayer)) maskLayer.bringToBack();
   };
+
+  // Block labels are zoom-gated, so re-evaluate whenever the zoom settles.
+  const onZoomEnd = () => {
+    if (latestOpts) apply(latestOpts);
+  };
+  map.on('zoomend', onZoomEnd);
 
   return {
     group,
     bounds,
     districtNames,
     apply,
-    destroy: () => group.remove(),
+    destroy: () => {
+      destroyed = true;
+      map.off('zoomend', onZoomEnd);
+      group.remove();
+    },
   };
 }
 

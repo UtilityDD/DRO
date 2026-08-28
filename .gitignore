@@ -11,4 +11,7 @@ server/data/*.json
 apps/web/dev-dist/
 .vscode/
 
+# Cached Overpass responses for scripts/build-wb-districts.mjs
+tmp_osm_wb_*.json
+
 .vercel

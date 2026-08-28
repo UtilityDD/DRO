@@ -133,6 +133,10 @@ export interface MapLayerSettings {
   /** Clean district boundary overlay for district-level view. */
   showDistricts: boolean;
   showDistrictLabels: boolean;
+  /** CD block (sub-district) outlines; the data loads on first use. */
+  showBlocks: boolean;
+  /** Block name labels, shown only once zoomed past the district level. */
+  showBlockLabels: boolean;
   /** Permanent map labels for network assets */
   showSsNames: boolean;
   showSsCapacity: boolean;

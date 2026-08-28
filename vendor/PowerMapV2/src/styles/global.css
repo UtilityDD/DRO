@@ -1572,6 +1572,22 @@ textarea {
   color: white;
 }
 
+.pm-block-label span {
+  /* Lighter than the district label so the hierarchy reads at a glance. */
+  display: inline-block;
+  transform: translate(-50%, -50%);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  color: #0f766e;
+  font-size: 9px;
+  font-weight: 550;
+  white-space: nowrap;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 .district-focus-block {
   border: 1px solid var(--line);
   border-radius: 12px;
