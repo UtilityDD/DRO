@@ -246,12 +246,14 @@ const defaultFilters: NetworkFilters = {
 };
 
 const defaultMapLayers: MapLayerSettings = {
-  basemap: 'esri',
+  // Open on a plain canvas: the district and block outlines are the reference,
+  // so tiles only add noise until the user picks one.
+  basemap: 'none',
   showMask: true,
   maskOpacity: DEFAULT_MASK_OPACITY,
   showDistricts: true,
   showDistrictLabels: true,
-  showBlocks: false,
+  showBlocks: true,
   showBlockLabels: true,
   showSsNames: false,
   showSsCapacity: false,
