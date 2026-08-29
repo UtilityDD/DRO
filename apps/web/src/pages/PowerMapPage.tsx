@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
 import { App as PowerMapApp } from '../../../../vendor/PowerMapV2/src/App';
 import { useNetworkStore } from '@/store/networkStore';
@@ -16,6 +16,10 @@ export function PowerMapPage() {
   const lines = useNetworkStore((s) => s.lines);
   const setSearchOpen = useNetworkStore((s) => s.setSearchOpen);
   const searchOpen = useNetworkStore((s) => s.searchOpen);
+  // The map's own mount effect calls bootstrap(), and React runs child effects
+  // before the parent's, so mounting it before the credentials land would load
+  // the offline copy and never retry. Hold it back until they resolve.
+  const [clientReady, setClientReady] = useState(false);
 
   usePageHeading('Power Map');
 
@@ -27,7 +31,13 @@ export function PowerMapPage() {
     void store.applyPortalIdentity(null);
     void (async () => {
       // Supabase first: a super admin's identity triggers editor/suggestion loads.
-      await ensurePowerMapClient();
+      try {
+        await ensurePowerMapClient();
+      } finally {
+        // Mount either way; without credentials the map runs offline, but it must
+        // not be held back forever by a failed or slow config fetch.
+        if (!cancelled) setClientReady(true);
+      }
       try {
         const me = await api.powerMapIdentity();
         if (cancelled) return;
@@ -68,14 +78,27 @@ export function PowerMapPage() {
           Search network
           <kbd>⌘K</kbd>
         </button>
-        <span className="muted">
-          {loaded
-            ? `${backend === 'supabase' ? 'Live' : 'Local'} · ${substations.length} SS · ${lines.length} lines`
-            : 'Loading network…'}
-        </span>
+        {loaded && backend !== 'supabase' ? (
+          <span
+            className="pm-offline-badge"
+            title="The map could not reach the database and is showing a cached copy saved earlier on this device. Edits made now stay in this browser only."
+          >
+            Offline copy · {substations.length} SS · {lines.length} lines — not live
+          </span>
+        ) : (
+          <span className="muted">
+            {loaded
+              ? `Live · ${substations.length} SS · ${lines.length} lines`
+              : 'Loading network…'}
+          </span>
+        )}
       </div>
       <div className="pm-root">
-        <PowerMapApp />
+        {clientReady ? (
+          <PowerMapApp />
+        ) : (
+          <p className="pm-boot muted">Connecting to the network…</p>
+        )}
       </div>
     </div>
   );

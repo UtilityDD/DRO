@@ -9,7 +9,8 @@ import {
   nscLiveStamp,
   nscQueueMemGet,
   nscSetLiveStamp,
-  nscStampOf,
+  nscVersionOf,
+  nscVersionOfSnap,
   type NscQueueSnap,
   type NscStamp,
 } from './nscCache';
@@ -18,7 +19,8 @@ export type { NscQueueSnap };
 
 const inflight = new Map<string, Promise<NscQueueSnap>>();
 let lastStampAt = 0;
-const STAMP_TTL_MS = 45_000;
+/** Dump usually changes once a day. Recheck the cheap status stamp at most every 6 hours. */
+const STAMP_TTL_MS = 6 * 60 * 60 * 1000;
 
 function asQueue(q: string): NscQueue {
   return q === 'withheld' ? 'withheld' : 'pending';
@@ -36,6 +38,7 @@ function snapFromPayload(
 ): NscQueueSnap {
   return {
     stamp: stampKey,
+    version: stampKey,
     queue,
     rows: hydrateRows(payload.rows),
     divisions: payload.divisions || [],
@@ -47,13 +50,13 @@ function snapFromPayload(
   };
 }
 
-async function fetchStamp(): Promise<{ key: string; stamp: NscStamp }> {
-  if (nscLiveStamp() && Date.now() - lastStampAt < STAMP_TTL_MS) {
+async function fetchStamp(force = false): Promise<{ key: string; stamp: NscStamp }> {
+  if (!force && nscLiveStamp() && Date.now() - lastStampAt < STAMP_TTL_MS) {
     const meta = await nscCacheGetMeta();
-    if (meta) return { key: nscLiveStamp() || nscStampOf(meta), stamp: meta };
+    if (meta) return { key: nscLiveStamp() || nscVersionOf(meta), stamp: meta };
   }
   const st = await api.nscStatus();
-  const key = nscStampOf(st);
+  const key = nscVersionOf(st);
   lastStampAt = Date.now();
   nscSetLiveStamp(key);
   await nscCachePutMeta(st);
@@ -75,15 +78,17 @@ export async function ensureNscQueue(
   opts: { force?: boolean; onUpdate?: (snap: NscQueueSnap) => void } = {}
 ): Promise<NscQueueSnap> {
   const q = asQueue(queue);
-  if (!opts.force) {
-    const cached = nscQueueMemGet(q) || (await nscCacheGetQueue(q));
-    const live = nscLiveStamp();
-    if (cached && (!live || cached.stamp === live)) {
-      const stale = !live || Date.now() - lastStampAt > STAMP_TTL_MS;
-      if (stale) {
+  const cached = nscQueueMemGet(q) || (await nscCacheGetQueue(q));
+  const cachedVer = nscVersionOfSnap(cached);
+  const live = nscLiveStamp();
+
+  if (!opts.force && cached) {
+    if (!live || cachedVer === live) {
+      const due = !live || Date.now() - lastStampAt > STAMP_TTL_MS;
+      if (due) {
         revalidateNscQueue(q, cached)
           .then((next) => {
-            if (next && next.stamp !== cached.stamp) opts.onUpdate?.(next);
+            if (next && nscVersionOfSnap(next) !== cachedVer) opts.onUpdate?.(next);
           })
           .catch(() => undefined);
       }
@@ -103,8 +108,8 @@ export async function ensureNscQueue(
 
 async function revalidateNscQueue(queue: NscQueue, cached: NscQueueSnap): Promise<NscQueueSnap | null> {
   try {
-    const st = await fetchStamp();
-    if (st.key === cached.stamp) return cached;
+    const st = await fetchStamp(true);
+    if (st.key === nscVersionOfSnap(cached)) return cached;
     const existing = inflight.get(queue);
     if (existing) return existing;
     const p = fetchQueueNetwork(queue, st).finally(() => {
@@ -113,7 +118,7 @@ async function revalidateNscQueue(queue: NscQueue, cached: NscQueueSnap): Promis
     inflight.set(queue, p);
     return p;
   } catch {
-    return null;
+    return cached;
   }
 }
 
@@ -124,5 +129,5 @@ export function prefetchNscQueue(queue: NscQueue) {
 export async function warmNscStamp() {
   if (nscLiveStamp()) return;
   const meta = await nscCacheGetMeta();
-  if (meta) nscSetLiveStamp(nscStampOf(meta));
+  if (meta) nscSetLiveStamp(nscVersionOf(meta));
 }

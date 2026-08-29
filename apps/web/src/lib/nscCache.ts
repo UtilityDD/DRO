@@ -12,6 +12,7 @@ export type NscStamp = {
 
 export type NscQueueSnap = {
   stamp: string;
+  version?: string;
   queue: NscQueue;
   rows: NscChartRow[];
   divisions: NscOfficeOpt[];
@@ -68,6 +69,23 @@ async function nscCacheDropStores() {
 export function nscStampOf(s: NscStamp | null | undefined) {
   if (!s) return '';
   return `${s.report_date || ''}|${s.updated_at || ''}|${s.pending || 0}|${s.withheld || 0}`;
+}
+
+/** Daily dump identity. Counts change when a new SAP file is uploaded (once a day, rarely 2–3). */
+export function nscVersionOf(s: NscStamp | null | undefined) {
+  if (!s) return '';
+  return `${String(s.report_date || '').slice(0, 10)}|p${Number(s.pending) || 0}|w${Number(s.withheld) || 0}`;
+}
+
+export function nscVersionOfSnap(snap: { version?: string; report_date?: string | null; pending?: number; withheld?: number } | null) {
+  if (!snap) return '';
+  if (snap.version) return snap.version;
+  return nscVersionOf({
+    report_date: snap.report_date || null,
+    updated_at: null,
+    pending: snap.pending || 0,
+    withheld: snap.withheld || 0,
+  });
 }
 
 export function nscLiveStamp() {

@@ -10,6 +10,8 @@ const multer = require('multer');
 const nscLib = require('./nsc_parse');
 const nscQuery = require('./nsc_query');
 const nscImport = require('./nsc_import');
+const nscSnap = require('./nsc_snap_cache');
+const atcSnap = require('./atc_snap_cache');
 const {
   readCollection,
   writeCollection,
@@ -22,6 +24,7 @@ const {
   ensureCollection,
   isNscLoaded,
   refreshFromSupabase,
+  hasCollection,
   storeMode,
   useSupabase,
   isReady,
@@ -188,6 +191,18 @@ app.get('/api/powermap/config', requireAuth, async (req, res) => {
       : String(live.table || '').startsWith('pm_')
         ? 'public'
         : pub.schema;
+
+  // When POWERMAP_SUPABASE_URL / POWERMAP_ANON_KEY are unset, publicPowerMapConfig
+  // falls back to the portal project, which holds no pm_* tables. Handing those
+  // credentials over makes the map look configured and then fail every read, so it
+  // silently shows the bundled seed instead. The probe above already read a real
+  // substations table with these exact credentials, so trust it: if that failed,
+  // report unconfigured and let the map say plainly that it is offline.
+  if (!live.ok) {
+    console.warn('[powermap/config] withholding credentials, probe failed:', live.reason);
+    return res.json({ url: null, anonKey: null, schema, configured: false, live });
+  }
+
   res.json({ ...pub, schema, live });
 });
 
@@ -346,6 +361,7 @@ function toNscChartRow(r) {
     withheld_reason: r.withheld_reason || '',
     collected_on: isoDay(r.collected_on),
     created_on: isoDay(r.created_on || r.applied_on),
+    applied_on: isoDay(r.applied_on),
     quotation_issue_on: isoDay(r.quotation_issue_on),
     report_date: isoDay(r.report_date),
     remarks: r.remarks || '',
@@ -1079,13 +1095,15 @@ app.get('/api/nsc/status', requireAuth, requirePerm('nsc', 'view'), async (req, 
   const rows = filterScoped(req.user, readCollection('nsc_cases', []));
   const pending = rows.filter((r) => nscLib.isPendingQueue(r)).length;
   const withheld = rows.filter((r) => String(r.status) === 'withheld').length;
-  res.json({
+  const status = {
     report_date: rows[0]?.report_date || null,
     updated_at: rows[0]?.updated_at || null,
     pending,
     withheld,
     total: rows.length,
-  });
+  };
+  status.version = nscSnap.nscVersionOf(status);
+  res.json(status);
 });
 
 app.get('/api/nsc/desk', requireAuth, requirePerm('nsc', 'view'), async (req, res) => {
@@ -1138,19 +1156,26 @@ app.get('/api/nsc/queue', requireAuth, requirePerm('nsc', 'view'), async (req, r
   const offices = nscOfficeOptions(req.user);
   try {
     if (useSupabase()) {
+      const st = await nscQuery.nscStatus(req.user);
+      const version = st.version || nscSnap.nscVersionOf(st);
+      const hit = nscSnap.getQueue(req.user, queue, version);
+      if (hit) return res.json({ ...hit, version, cached: true });
       const rows = await nscQuery.nscFetchAll({ queue }, req.user, {
         chart: true,
         select: nscQuery.CHART_SELECT,
       });
       const chartRows = enrichRows(rows).map(toNscChartRow);
-      return res.json({
+      const payload = {
         queue,
-        report_date: chartRows[0]?.report_date || null,
+        report_date: st.report_date || chartRows[0]?.report_date || null,
         count: chartRows.length,
         rows: chartRows,
         divisions: offices.divisions,
         cccs: offices.cccs,
-      });
+        version,
+      };
+      nscSnap.putQueue(req.user, queue, version, payload);
+      return res.json(payload);
     }
   } catch (e) {
     return res.status(500).json({ error: e.message || 'NSC queue failed' });
@@ -1166,6 +1191,11 @@ app.get('/api/nsc/queue', requireAuth, requirePerm('nsc', 'view'), async (req, r
     rows,
     divisions: offices.divisions,
     cccs: offices.cccs,
+    version: nscSnap.nscVersionOf({
+      report_date: rows[0]?.report_date || null,
+      pending: queue === 'pending' ? rows.length : 0,
+      withheld: queue === 'withheld' ? rows.length : 0,
+    }),
   });
 });
 
@@ -1496,6 +1526,32 @@ app.get('/api/consumers', requireAuth, requirePerm('consumers', 'view'), (req, r
   });
 });
 
+app.get('/api/atc/status', requireAuth, requirePerm('atc', 'view'), async (req, res) => {
+  try {
+    const memo = atcSnap.getStatus(req.user);
+    if (memo) return res.json(memo);
+    let stamp;
+    if (useSupabase()) {
+      const count = await sb.countRows('atc_snapshots');
+      let latest_period = null;
+      try {
+        const latest = await sb.querySupabase(
+          'atc_snapshots?select=period_label,period_sort&order=period_sort.desc.nullslast&limit=1'
+        );
+        latest_period = Array.isArray(latest) ? latest[0]?.period_label || null : null;
+      } catch {
+        /* keep */
+      }
+      stamp = { latest_period, count, version: atcSnap.atcVersionOf({ latest_period, count }) };
+    } else {
+      stamp = atcSnap.stampFromRows(readCollection('atc_snapshots', []));
+    }
+    res.json(atcSnap.putStatus(req.user, stamp));
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'ATC status failed' });
+  }
+});
+
 app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) => {
   if (!useSupabase()) {
     return res.status(503).json({
@@ -1507,9 +1563,14 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
     });
   }
 
+  const force = String(req.query.refresh || '') === '1';
   let rows;
   try {
-    rows = await refreshFromSupabase('atc_snapshots');
+    if (!force && hasCollection('atc_snapshots')) {
+      rows = readCollection('atc_snapshots', []);
+    } else {
+      rows = await refreshFromSupabase('atc_snapshots');
+    }
   } catch (e) {
     return res.status(502).json({
       error: `Failed to load AT&C from Supabase: ${e.message}`,
@@ -1580,6 +1641,7 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
     return String(ra?.period_sort || a).localeCompare(String(rb?.period_sort || b));
   });
 
+  const stamp = atcSnap.stampFromRows(rows);
   res.json({
     rows: out,
     periods,
@@ -1588,6 +1650,8 @@ app.get('/api/atc', requireAuth, requirePerm('atc', 'view'), async (req, res) =>
     host: sb.status().host,
     can_edit: canEdit(req.user, 'atc'),
     can_upload: canUpload(req.user, 'atc'),
+    version: stamp.version,
+    latest_period: stamp.latest_period,
   });
 });
 
@@ -1667,6 +1731,7 @@ app.patch('/api/atc', requireAuth, requirePerm('atc', 'edit'), async (req, res) 
         `&office_code=eq.${encodeURIComponent(office_code)}`;
       await sb.updateByFilter('atc_snapshots', filter, patch);
       await refreshFromSupabase('atc_snapshots');
+      atcSnap.invalidate();
     } else {
       await writeCollectionAndPersist('atc_snapshots', rows);
     }
@@ -1914,6 +1979,7 @@ app.post('/api/nsc/commit', requireAuth, requirePerm('nsc', 'upload'), async (re
     const { batch } = await createBatchPersisted('nsc', req, rows.length, payload.report_date);
     for (const r of rows) r.batch_id = batch.id;
     const cloud = await writeCollectionAndPersist('nsc_cases', rows);
+    nscSnap.invalidate();
     try {
       fs.unlinkSync(staging);
     } catch {

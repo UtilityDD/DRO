@@ -375,6 +375,9 @@ async function nscFetchAll(q, user, { select, chart } = {}) {
 }
 
 async function nscStatus(user) {
+  const snap = require('./nsc_snap_cache');
+  const cached = snap.getStatus(user);
+  if (cached) return cached;
   const [pending, withheld] = await Promise.all([
     nscCount({ queue: 'pending' }, user),
     nscCount({ queue: 'withheld' }, user),
@@ -383,7 +386,7 @@ async function nscStatus(user) {
   let updated_at = null;
   try {
     const latest = await sb.querySupabase(
-      'nsc_cases?select=report_date,updated_at&order=updated_at.desc.nullslast&limit=1'
+      'nsc_cases?select=report_date,updated_at&order=report_date.desc.nullslast&limit=1'
     );
     report_date = Array.isArray(latest) ? latest[0]?.report_date || null : null;
     updated_at = Array.isArray(latest) ? latest[0]?.updated_at || null : null;
@@ -397,13 +400,15 @@ async function nscStatus(user) {
       /* keep */
     }
   }
-  return {
+  const value = {
     report_date,
     updated_at,
     pending,
     withheld,
     total: pending + withheld,
+    version: snap.nscVersionOf({ report_date, pending, withheld }),
   };
+  return snap.putStatus(user, value);
 }
 
 function csvEscape(v) {

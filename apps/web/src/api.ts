@@ -171,6 +171,8 @@ export const api = {
       rows: import('./lib/nscDesk').NscChartRow[];
       divisions: { code: string; name: string }[];
       cccs: { code: string; name: string; division_code?: string }[];
+      version?: string;
+      cached?: boolean;
     }>(`/api/nsc/queue?queue=${queue}`),
   nscExport: async (q = '') => {
     const res = await fetch(`/api/nsc/export${q}`, { credentials: 'include' });
@@ -213,6 +215,7 @@ export const api = {
       pending: number;
       withheld: number;
       total: number;
+      version?: string;
     }>('/api/nsc/status'),
   nscParse: async (file: File, reportDate: string) => {
     const fd = new FormData();
@@ -306,6 +309,8 @@ export const api = {
       can_upload?: boolean;
       source?: string;
       host?: string;
+      version?: string;
+      latest_period?: string | null;
     }>(`/api/atc${period ? `?period=${encodeURIComponent(period)}` : ''}`),
   atcQuery: (qs = '') =>
     request<{
@@ -316,7 +321,15 @@ export const api = {
       can_edit?: boolean;
       source?: string;
       host?: string;
+      version?: string;
+      latest_period?: string | null;
     }>(`/api/atc${qs ? `?${qs}` : ''}`),
+  atcStatus: () =>
+    request<{
+      latest_period: string | null;
+      count: number;
+      version: string;
+    }>('/api/atc/status'),
   atcParse: (body: { base64: string; period_label?: string; filename?: string }) =>
     request<{
       ok: boolean;

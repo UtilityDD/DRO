@@ -40,6 +40,14 @@ import {
   removeTargetHistory,
   type SavedAtcTarget,
 } from '../lib/atcTargetStore';
+import { dumpMemGet } from '../lib/dumpCache';
+import {
+  atcDumpMergeRow,
+  ensureAtcDump,
+  prefetchAtcDump,
+  warmAtcStamp,
+  type AtcDumpPayload,
+} from '../lib/atcDump';
 import { useAuth } from '../auth';
 
 /** Shared plot area height inside the equal workspace panels */
@@ -1157,7 +1165,12 @@ export function AtcPage() {
   const [activeSavedId, setActiveSavedId] = useState('');
   const skipTargetReset = useRef(false);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [dumpVersion, setDumpVersion] = useState(
+    () => dumpMemGet<AtcDumpPayload>('atc')?.data?.version || dumpMemGet('atc')?.version || '',
+  );
+  const [syncing, setSyncing] = useState(false);
+  const [loading, setLoading] = useState(() => !dumpMemGet('atc'));
+  const atcReq = useRef(0);
   const [editOpen, setEditOpen] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState('');
@@ -1210,41 +1223,78 @@ export function AtcPage() {
   const metricGroup = compareBy === 'losses' ? LOSS_METRICS : null;
   const compareKind: 'pct' | 'mu' | 'count' = isMetricCompare ? 'pct' : isIdcCompare ? 'mu' : param.kind;
 
-  useEffect(() => {
-    setLoading(true);
+  const applyAtcDump = (allRows: Record<string, unknown>[], allPeriods: string[], version?: string) => {
+    const list = (allRows || []).filter(
+      (row) => !format || String(row.source_format || 'IA').toUpperCase() === format
+    );
+    setRows(list);
+    const fromRows = [...new Set(list.map((row) => String(row.period_label || '')).filter(Boolean))];
+    const fromApi = (allPeriods || []).filter((p) => fromRows.includes(p) || !fromRows.length);
+    const ps = (fromApi.length ? fromApi : fromRows).sort((a, b) => {
+      const ra = list.find((row) => row.period_label === a);
+      const rb = list.find((row) => row.period_label === b);
+      return String(ra?.period_sort || a).localeCompare(String(rb?.period_sort || b));
+    });
+    setPeriods(ps);
+    setAsOf((prev) => {
+      if (prev && ps.includes(prev)) return prev;
+      return ps.length ? ps[ps.length - 1] : '';
+    });
+    if (version) setDumpVersion(version);
+  };
+
+  const loadAtc = async (force = false) => {
+    const id = ++atcReq.current;
+    await warmAtcStamp();
+    const cached = dumpMemGet<{ rows: Record<string, unknown>[]; periods: string[]; version: string }>('atc');
+    if (cached?.data?.rows) {
+      applyAtcDump(cached.data.rows, cached.data.periods, cached.version);
+      setLoading(false);
+      setSyncing(Boolean(force));
+    } else {
+      setLoading(true);
+      setSyncing(false);
+    }
     setError('');
-    const q = new URLSearchParams();
-    q.set('format', format);
-    api
-      .atcQuery(q.toString())
-      .then((r) => {
-        const list = (r.rows || []).filter(
-          (row) => !format || String(row.source_format || 'IA').toUpperCase() === format
-        );
-        setRows(list);
-        // Derive months from rows if API omits periods (stale server)
-        const fromApi = r.periods || [];
-        const fromRows = [
-          ...new Set(list.map((row) => String(row.period_label || '')).filter(Boolean)),
-        ];
-        const ps = (fromApi.length ? fromApi : fromRows).sort((a, b) => {
-          const ra = list.find((row) => row.period_label === a);
-          const rb = list.find((row) => row.period_label === b);
-          return String(ra?.period_sort || a).localeCompare(String(rb?.period_sort || b));
-        });
-        setPeriods(ps);
-        setAsOf((prev) => {
-          if (prev && ps.includes(prev)) return prev;
-          return ps.length ? ps[ps.length - 1] : '';
-        });
-      })
-      .catch((e) => {
+    try {
+      const snap = await ensureAtcDump({
+        force,
+        onUpdate: (next) => {
+          if (id !== atcReq.current) return;
+          applyAtcDump(next.data.rows, next.data.periods, next.version);
+        },
+      });
+      if (id !== atcReq.current) return;
+      applyAtcDump(snap.data.rows, snap.data.periods, snap.version);
+    } catch (e) {
+      if (id !== atcReq.current) return;
+      if (!cached) {
         setRows([]);
         setPeriods([]);
-        setError(e.message || 'Failed to load AT&C from Supabase');
-      })
-      .finally(() => setLoading(false));
+        setError(e instanceof Error ? e.message : 'Failed to load AT&C from Supabase');
+      }
+    } finally {
+      if (id === atcReq.current) {
+        setLoading(false);
+        setSyncing(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    loadAtc();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const cached = dumpMemGet<{ rows: Record<string, unknown>[]; periods: string[]; version: string }>('atc');
+    if (cached?.data?.rows) applyAtcDump(cached.data.rows, cached.data.periods, cached.version);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [format]);
+
+  useEffect(() => {
+    prefetchAtcDump();
+  }, [user?.username]);
 
   const openEditFor = (officeCode: string, periodLabel?: string) => {
     if (!canEditAtc || !officeCode) return;
@@ -1331,6 +1381,7 @@ export function AtcPage() {
             : r
         )
       );
+      void atcDumpMergeRow(updated);
       setEditOpen(false);
       setEditRow(null);
     } catch (e) {
@@ -2506,6 +2557,19 @@ export function AtcPage() {
                 ) : null}
               </div>
               <div className="atc-result-tools">
+                {dumpVersion ? (
+                  <span className="muted atc-dump-ver" title="AT&C dump version — reused until a new upload">
+                    {dumpVersion.split('|')[0] || dumpVersion}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={loading && !rows.length}
+                  onClick={() => loadAtc(true)}
+                >
+                  {syncing ? 'Updating…' : 'Refresh'}
+                </button>
                 {canEditAtc && panelTab !== 'analytic' && !onTarget && (
                   <button
                     type="button"

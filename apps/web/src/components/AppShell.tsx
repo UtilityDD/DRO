@@ -336,6 +336,15 @@ function prefetchRoute(to: string) {
     // Warm the district geometry into the HTTP/SW cache ahead of the first render.
     fetch('/geo/wb-districts.geojson').catch(() => {});
   }
+  if (to === '/atc') {
+    import('../lib/atcDump').then((m) => m.prefetchAtcDump()).catch(() => {});
+  }
+  if (to === '/nsc') {
+    import('../lib/nscQueue').then((m) => {
+      m.prefetchNscQueue('pending');
+      m.prefetchNscQueue('withheld');
+    }).catch(() => {});
+  }
 }
 
 export function AppShell() {

@@ -1,0 +1,30 @@
+category,metres,name_a,kv_a,feeders_a,lat_a,lng_a,name_b,kv_b,feeders_b,lat_b,lng_b,action
+duplicate — handled by 023,8,Gangarampur GSS,132,11,25.39757,88.55808,Gangarampur 132 kV,132,0,25.39750,88.55806,"none, migration merges these"
+duplicate — handled by 023,16,Khejuria 132 kV,132,0,24.80712,87.94444,Khejuria GSS,132,8,24.80725,87.94452,"none, migration merges these"
+duplicate — handled by 023,43,Raiganj 132 kV,132,0,25.63636,88.12461,Raiganj GSS,132,11,25.63665,88.12432,"none, migration merges these"
+duplicate — handled by 023,53,Gazole 220 kV,220,0,25.15050,88.15946,Gazol GSS,220,8,25.15097,88.15957,"none, migration merges these"
+duplicate — handled by 023,78,Islampur 132 kV,132,0,26.19673,88.10838,Islampur GSS,132,7,26.19707,88.10770,"none, migration merges these"
+duplicate — handled by 023,93,Samsi 132 kV,132,0,25.29170,88.01322,Samsi GSS,132,7,25.29178,88.01230,"none, migration merges these"
+duplicate — handled by 023,1320,Raiganj 132 kV,132,0,25.63636,88.12461,Raiganj,33,3,25.63143,88.13658,"none, migration merges these"
+duplicate — both wired,67,Manikchak,33,4,25.07518,87.90633,Manikchak GSS,33,3,25.07552,87.90688,"check feeder lists, then enable in 023 opt-in block"
+duplicate — both wired,207,Harishchandrapur,33,4,25.42578,87.87920,Harishchandrapur GSS,33,3,25.42500,87.87733,"check feeder lists, then enable in 023 opt-in block"
+"spelling variant, same voltage",276,Dalkhola PG 220 kV,220,0,25.88335,87.82704,Dalkhola 220 kV,220,0,25.88583,87.82717,likely duplicate — decide which name is right
+"different names, suspiciously close",54,Balurghat 132 kV,132,0,25.24497,88.78582,Baro-Raghunathpur,33,2,25.24500,88.78528,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",70,TCF PS-III Bholagach GSS,33,5,26.41717,88.37297,Bholagach,33,2,26.41653,88.37297,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",407,Binaguri 400 kV,400,0,26.65029,88.46612,NJP 220 kV,220,0,26.65378,88.46735,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",751,Old Ghoom,33,0,27.00856,88.25531,New Ghoom,33,0,27.00717,88.24789,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",938,Dabgram,33,0,26.66831,88.42267,Siliguri 220 kV,220,0,26.67632,88.41968,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",960,Lebong PH,33,0,26.88078,88.27853,Pankhabari,33,0,26.87567,88.27072,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",1173,Lodhama,33,0,27.05194,88.27508,Darjeeling 132 kV,132,0,27.06242,88.27650,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",1287,Singamari,33,0,27.06060,88.25650,Bijanbari,33,0,27.05003,88.26178,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",1335,Lodhama,33,0,27.05194,88.27508,Bijanbari,33,0,27.05003,88.26178,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",1392,Fazi,33,0,26.91199,88.24898,Kurseong 132 kV,132,0,26.89951,88.24780,one pin is probably wrong — verify on satellite
+"different names, suspiciously close",1479,Ghorapir GSS,132,15,25.01083,88.14110,Mangalbari,33,2,25.00842,88.15553,one pin is probably wrong — verify on satellite
+"spelling variant, different voltage",296,Dalkhola PG 220 kV,220,0,25.88335,87.82704,Dalkhola GSS,33,4,25.88599,87.82743,confirm whether both yards exist
+"two voltage yards, same site",31,Dalkhola 220 kV,220,0,25.88583,87.82717,Dalkhola GSS,33,4,25.88599,87.82743,"normal, confirm both really exist"
+"two voltage yards, same site",65,Kushmandi GSS,132,12,25.54550,88.35940,Kushmandi,33,2,25.54590,88.35987,"normal, confirm both really exist"
+"two voltage yards, same site",89,Harishchandrapur 132 kV,132,0,25.42569,87.87779,Harishchandrapur GSS,33,3,25.42500,87.87733,"normal, confirm both really exist"
+"two voltage yards, same site",94,Ujanu,33,0,26.73292,88.40430,Ujanu 132 kV,132,0,26.73332,88.40346,"normal, confirm both really exist"
+"two voltage yards, same site",142,Harishchandrapur 132 kV,132,0,25.42569,87.87779,Harishchandrapur,33,4,25.42578,87.87920,"normal, confirm both really exist"
+"two voltage yards, same site",449,Siliguri,33,0,26.73901,88.43589,Siliguri 132 kV,132,0,26.73870,88.44040,"normal, confirm both really exist"
+"two voltage yards, same site",1360,Raiganj GSS,132,11,25.63665,88.12432,Raiganj,33,3,25.63143,88.13658,"normal, confirm both really exist"

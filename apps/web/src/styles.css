@@ -1186,6 +1186,30 @@ button {
   background: var(--bg-soft);
 }
 
+.pm-boot {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+/* Serving a cached copy is easy to miss and makes edits silently local-only,
+   so it reads as a warning rather than ordinary status text. */
+.pm-offline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: help;
+}
+
 .mode-powermap .pm-root .workspace {
   flex: 1;
   min-height: 0;

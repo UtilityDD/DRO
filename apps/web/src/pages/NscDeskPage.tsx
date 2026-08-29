@@ -561,7 +561,8 @@ function NscCaseSheet({
   );
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    // Global, not React's synthetic event: this listener is on window.
+    const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
@@ -994,26 +995,19 @@ export function NscDeskPage() {
     await warmNscStamp();
     const cached = nscQueueMemGet(queue) || (await nscCacheGetQueue(queue));
     if (id !== deskReq.current) return;
-    const st = await api.nscStatus().catch(() => null);
-    const expected = queue === 'withheld' ? st?.withheld : st?.pending;
-    const staleCache = Boolean(cached && st && expected != null && cached.rows.length !== expected);
-    if (id !== deskReq.current) return;
-    if (!force && !staleCache && cached) {
+    if (cached) {
       setQueueSnap(cached);
       setLoading(false);
-      setSyncing(false);
-    } else if (cached && !staleCache) {
-      setQueueSnap(cached);
-      setLoading(false);
-      setSyncing(true);
+      setSyncing(Boolean(force));
     } else {
       setQueueSnap(null);
       setLoading(true);
+      setSyncing(false);
     }
     setError('');
     try {
       const snap = await ensureNscQueue(queue, {
-        force: force || staleCache,
+        force,
         onUpdate: (next) => {
           if (id !== deskReq.current) return;
           setQueueSnap(next);
@@ -1037,6 +1031,11 @@ export function NscDeskPage() {
     loadDesk();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue]);
+
+  useEffect(() => {
+    prefetchNscQueue('pending');
+    prefetchNscQueue('withheld');
+  }, [user?.username]);
 
   const sourceRows = queueSnap?.rows || [];
   const divisions = desk?.divisions || [];
@@ -1748,8 +1747,13 @@ export function NscDeskPage() {
           </div>
         </div>
         <div className="nsc-bar-actions">
+          {queueSnap?.report_date ? (
+            <span className="muted nsc-dump-ver" title="NSC dump version — reused until a new upload">
+              {queueSnap.report_date}
+            </span>
+          ) : null}
           <button type="button" className="nsc-bar-btn" onClick={() => loadDesk(true)} disabled={loading && !desk}>
-            Refresh
+            {syncing ? 'Updating…' : 'Refresh'}
           </button>
           <button type="button" className="nsc-bar-btn" disabled={!tableRows.length || exporting} onClick={download}>
             {exporting ? '…' : 'Download'}

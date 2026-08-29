@@ -343,6 +343,10 @@ async function refreshFromSupabase(name) {
   return cloneRows(name, cache[name]);
 }
 
+function hasCollection(name) {
+  return Object.prototype.hasOwnProperty.call(cache, name);
+}
+
 function readCollection(name, fallback = []) {
   let rows;
   if (useSupabase() && cache[name]) {
@@ -512,6 +516,11 @@ async function persistCollection(name, copy) {
         silent: true,
       });
     }
+    try {
+      require('./atc_snap_cache').invalidate();
+    } catch {
+      /* keep */
+    }
     return;
   }
   if (name === 'portal_users') {
@@ -547,6 +556,11 @@ async function persistAtcApplied(fullRows, appliedRows) {
     }
     cache.atc_snapshots = full;
     writeLocal('atc_snapshots', full);
+    try {
+      require('./atc_snap_cache').invalidate();
+    } catch {
+      /* keep */
+    }
     return {
       store: 'supabase',
       persisted: true,
@@ -689,6 +703,7 @@ module.exports = {
   ensureCollection,
   isNscLoaded,
   refreshFromSupabase,
+  hasCollection,
   readCollection,
   writeCollection,
   writeCollectionAndPersist,

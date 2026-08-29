@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { api, type User } from './api';
 import { nscCacheBindUser, nscCacheClear } from './lib/nscCache';
 import { nscFollowupsBindUser, nscFollowupsClearUser } from './lib/nscFollowups';
+import { dumpBindUser, dumpClear } from './lib/dumpCache';
 
 type AuthState = {
   user: User | null;
@@ -22,10 +23,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { user } = await api.session();
       nscCacheBindUser(user?.username);
       nscFollowupsBindUser(user?.username);
+      dumpBindUser(user?.username);
       setUser(user);
     } catch {
       nscCacheClear();
       nscFollowupsClearUser();
+      dumpClear();
       setUser(null);
     } finally {
       setLoading(false);
@@ -40,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { user } = await api.login(username, pin);
     nscCacheBindUser(user?.username);
     nscFollowupsBindUser(user?.username);
+    dumpBindUser(user?.username);
     setUser(user);
   };
 
@@ -47,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await api.logout();
     nscCacheClear();
     nscFollowupsClearUser();
+    dumpClear();
     setUser(null);
   };
 

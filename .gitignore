@@ -11,7 +11,9 @@ server/data/*.json
 apps/web/dev-dist/
 .vscode/
 
-# Cached Overpass responses for scripts/build-wb-districts.mjs
-tmp_osm_wb_*.json
+# Throwaway analysis scripts and their cached API responses (Overpass, Supabase
+# probes, one-off data checks). Anything worth keeping gets a real home.
+tmp_*
+tmp_nsc_inspect/
 
 .vercel

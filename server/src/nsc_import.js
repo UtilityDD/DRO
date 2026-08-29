@@ -153,6 +153,11 @@ async function tickJob(jobId) {
 function markJobDone(job) {
   job.status = 'done';
   job.error = null;
+  try {
+    require('./nsc_snap_cache').invalidate();
+  } catch {
+    /* keep */
+  }
   saveJob(job).catch((e) => console.warn('[nsc-import] done save:', e.message));
   setImmediate(() => {
     finalizeJob(job).catch((e) => console.warn('[nsc-import] finalize:', e.message));
