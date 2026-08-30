@@ -634,6 +634,187 @@ function LossTargetTooltip(props: {
   );
 }
 
+const IDC_GAP = {
+  id: { color: '#d97706', label: 'Unbilled I−D' },
+  dc: { color: '#9333ea', label: 'Outstanding D−C' },
+};
+
+function idcRowFromPayload(payload?: Array<{ payload?: Record<string, unknown> }>) {
+  const row = payload?.[0]?.payload;
+  if (!row) return null;
+  const input = toNum(row.input);
+  const demand = toNum(row.demand);
+  const coll = toNum(row.coll);
+  return {
+    input,
+    demand,
+    coll,
+    idGap: input != null && demand != null ? input - demand : toNum(row.idGap),
+    dcGap: demand != null && coll != null ? demand - coll : toNum(row.dcGap),
+  };
+}
+
+function IdcTrendTooltip(props: {
+  active?: boolean;
+  payload?: Array<{ payload?: Record<string, unknown>; color?: string; dataKey?: string; name?: string }>;
+  label?: string | number;
+}) {
+  const { active, payload, label } = props;
+  if (!active || !payload?.length) return null;
+  const row = idcRowFromPayload(payload);
+  if (!row) return null;
+  const pctOf = (gap: number | null, base: number | null) =>
+    gap != null && base != null && Math.abs(base) > 0.0005 ? `${((gap / base) * 100).toFixed(1)}%` : '';
+  return (
+    <div className="atc-tip atc-tip-idc">
+      <div className="atc-tip-title">{String(label || '')}</div>
+      {ENERGY_METRICS.map((m) => {
+        const v = m.id === 'input' ? row.input : m.id === 'demand' ? row.demand : row.coll;
+        return (
+          <div key={m.id} className="atc-tip-row">
+            <span>
+              <i className="atc-tip-swatch" style={{ background: m.color }} />
+              {m.short}
+            </span>
+            <strong>{v != null ? formatMu(v) : '—'}</strong>
+          </div>
+        );
+      })}
+      <div className="atc-tip-gap">
+        <div className="atc-tip-row">
+          <span>
+            <i className="atc-tip-swatch" style={{ background: IDC_GAP.id.color }} />
+            {IDC_GAP.id.label}
+          </span>
+          <strong style={{ color: IDC_GAP.id.color }}>
+            {row.idGap != null ? formatMu(row.idGap) : '—'}
+            {pctOf(row.idGap, row.input) ? (
+              <em className="atc-tip-pct">{pctOf(row.idGap, row.input)}</em>
+            ) : null}
+          </strong>
+        </div>
+        <div className="atc-tip-row">
+          <span>
+            <i className="atc-tip-swatch" style={{ background: IDC_GAP.dc.color }} />
+            {IDC_GAP.dc.label}
+          </span>
+          <strong style={{ color: IDC_GAP.dc.color }}>
+            {row.dcGap != null ? formatMu(row.dcGap) : '—'}
+            {pctOf(row.dcGap, row.demand) ? (
+              <em className="atc-tip-pct">{pctOf(row.dcGap, row.demand)}</em>
+            ) : null}
+          </strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Vertical hover line with I−D / D−C labels sitting in the gaps between the three series. */
+function IdcGapCursor({
+  x,
+  y,
+  top,
+  height,
+  width,
+  left,
+  points,
+  payload,
+  domain,
+}: {
+  x?: number;
+  y?: number;
+  top?: number;
+  height?: number;
+  width?: number;
+  left?: number;
+  points?: Array<{ x: number; y: number }>;
+  payload?: Array<{ payload?: Record<string, unknown> }>;
+  domain?: [number, number];
+}) {
+  const x1 = Number(points?.[0]?.x ?? x);
+  const y1 = Number(points?.[0]?.y ?? top ?? y);
+  const y2 = Number(points?.[1]?.y ?? (Number(top ?? y) + Number(height)));
+  if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(y2)) return null;
+  const plotTop = Math.min(y1, y2);
+  const plotH = Math.abs(y2 - y1) || Number(height) || 0;
+  const row = idcRowFromPayload(payload);
+  const d0 = Number(domain?.[0]);
+  const d1 = Number(domain?.[1]);
+  const yOf = (v: number) => {
+    if (!Number.isFinite(d0) || !Number.isFinite(d1) || d1 === d0 || plotH <= 0) return null;
+    const py = plotTop + plotH * (1 - (v - d0) / (d1 - d0));
+    return Number.isFinite(py) ? py : null;
+  };
+  const yIn = row?.input != null ? yOf(row.input) : null;
+  const yDe = row?.demand != null ? yOf(row.demand) : null;
+  const yCo = row?.coll != null ? yOf(row.coll) : null;
+  const chartRight = Number(left || 0) + Number(width || 0);
+  const placeRight = !chartRight || x1 < chartRight - 92;
+  const tx = placeRight ? x1 + 8 : x1 - 8;
+  const anchor = placeRight ? 'start' : 'end';
+
+  const bands: Array<{ y1: number; y2: number; y: number; text: string; color: string }> = [];
+  if (yIn != null && yDe != null && row?.idGap != null) {
+    bands.push({
+      y1: yIn,
+      y2: yDe,
+      y: (yIn + yDe) / 2,
+      text: `I−D ${formatMu(row.idGap)}`,
+      color: IDC_GAP.id.color,
+    });
+  }
+  if (yDe != null && yCo != null && row?.dcGap != null) {
+    bands.push({
+      y1: yDe,
+      y2: yCo,
+      y: (yDe + yCo) / 2,
+      text: `D−C ${formatMu(row.dcGap)}`,
+      color: IDC_GAP.dc.color,
+    });
+  }
+
+  return (
+    <g className="recharts-tooltip-cursor atc-idc-cursor" pointerEvents="none">
+      <line
+        x1={x1}
+        y1={y1}
+        x2={x1}
+        y2={y2}
+        stroke="#64748b"
+        strokeWidth={1.25}
+        strokeDasharray="4 3"
+      />
+      {bands.map((b) => (
+        <g key={b.text}>
+          <line
+            x1={x1}
+            y1={b.y1}
+            x2={x1}
+            y2={b.y2}
+            stroke={b.color}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeOpacity={0.9}
+          />
+          {Math.abs(b.y1 - b.y2) >= 14 ? (
+            <text
+              x={tx}
+              y={b.y}
+              textAnchor={anchor}
+              dominantBaseline="middle"
+              fill={b.color}
+              className="atc-idc-cursor-label"
+            >
+              {b.text}
+            </text>
+          ) : null}
+        </g>
+      ))}
+    </g>
+  );
+}
+
 /** Avoid Number(null) === 0 — missing sheet cells must stay blank. */
 function toNum(v: unknown): number | null {
   if (v == null || v === '') return null;
@@ -1867,6 +2048,13 @@ export function AtcPage() {
         point[m.id] = valueAt(p, m.field);
         if (showTarget && m.targetField) point[`t_${m.id}`] = valueAt(p, m.targetField);
       }
+      if (isIdcTrend) {
+        const input = toNum(point.input);
+        const demand = toNum(point.demand);
+        const coll = toNum(point.coll);
+        point.idGap = input != null && demand != null ? input - demand : null;
+        point.dcGap = demand != null && coll != null ? demand - coll : null;
+      }
       return point;
     });
   }, [isMetricTrend, isIdcTrend, metricTrendGroup, activeCodes, rows, sortedPeriods, chartMonthSet, level, showTarget]);
@@ -2851,7 +3039,19 @@ export function AtcPage() {
                           />
                           <Tooltip
                             {...CHART_TOOLTIP}
-                            formatter={(v: number, name: string) => [fmtTip(v), name]}
+                            cursor={
+                              isIdcTrend ? (
+                                <IdcGapCursor domain={metricTrendYAxis?.domain} />
+                              ) : (
+                                true
+                              )
+                            }
+                            content={isIdcTrend ? <IdcTrendTooltip /> : undefined}
+                            formatter={
+                              isIdcTrend
+                                ? undefined
+                                : (v: number, name: string) => [fmtTip(v), name]
+                            }
                           />
                           <Legend wrapperStyle={{ fontSize: 11, color: 'var(--chart-label)', paddingTop: 4 }} />
                           {metricTrendGroup.map((m) => (
