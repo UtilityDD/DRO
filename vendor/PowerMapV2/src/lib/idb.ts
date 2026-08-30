@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { OrgUnit, Substation, TapLateral, TapNode, TrunkLine } from '@/domain/types';
+import type { PersonalDraft } from '@/lib/personalDrafts';
 
 interface PowerMapDB extends DBSchema {
   meta: { key: string; value: unknown };
@@ -8,6 +9,7 @@ interface PowerMapDB extends DBSchema {
   tapNodes: { key: string; value: TapNode };
   tapLaterals: { key: string; value: TapLateral };
   orgUnits: { key: string; value: OrgUnit };
+  personalDrafts: { key: string; value: PersonalDraft };
 }
 
 type StoreName = 'substations' | 'lines' | 'tapNodes' | 'tapLaterals' | 'orgUnits';
@@ -16,14 +18,19 @@ let dbPromise: Promise<IDBPDatabase<PowerMapDB>> | null = null;
 
 export function getDb() {
   if (!dbPromise) {
-    dbPromise = openDB<PowerMapDB>('powermap-dro-v2', 1, {
-      upgrade(db) {
-        db.createObjectStore('meta');
-        db.createObjectStore('substations', { keyPath: 'id' });
-        db.createObjectStore('lines', { keyPath: 'id' });
-        db.createObjectStore('tapNodes', { keyPath: 'id' });
-        db.createObjectStore('tapLaterals', { keyPath: 'id' });
-        db.createObjectStore('orgUnits', { keyPath: 'id' });
+    dbPromise = openDB<PowerMapDB>('powermap-dro-v2', 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('meta');
+          db.createObjectStore('substations', { keyPath: 'id' });
+          db.createObjectStore('lines', { keyPath: 'id' });
+          db.createObjectStore('tapNodes', { keyPath: 'id' });
+          db.createObjectStore('tapLaterals', { keyPath: 'id' });
+          db.createObjectStore('orgUnits', { keyPath: 'id' });
+        }
+        if (oldVersion < 2 && !db.objectStoreNames.contains('personalDrafts')) {
+          db.createObjectStore('personalDrafts', { keyPath: 'id' });
+        }
       },
     });
   }

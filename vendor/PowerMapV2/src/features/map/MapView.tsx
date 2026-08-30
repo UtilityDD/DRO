@@ -61,6 +61,9 @@ export function MapView() {
   const suggestions = useNetworkStore((s) => s.suggestions);
   const showSuggestionsOnMap = useNetworkStore((s) => s.showSuggestionsOnMap);
   const focusedSuggestionId = useNetworkStore((s) => s.focusedSuggestionId);
+  const personalDrafts = useNetworkStore((s) => s.personalDrafts);
+  const showPersonalDraftsOnMap = useNetworkStore((s) => s.showPersonalDraftsOnMap);
+  const focusedPersonalDraftId = useNetworkStore((s) => s.focusedPersonalDraftId);
   const adminRole = useNetworkStore((s) => s.adminRole);
   const sitingAnalysis = useNetworkStore((s) => s.sitingAnalysis);
   const showSitingOnMap = useNetworkStore((s) => s.showSitingOnMap);
@@ -1127,6 +1130,51 @@ export function MapView() {
       });
     }
 
+    // Personal on-device drafts (editor only)
+    if (
+      showPersonalDraftsOnMap &&
+      adminRole === 'editor' &&
+      personalDrafts.length
+    ) {
+      personalDrafts.forEach((draft) => {
+        if (draft.lat == null || draft.lng == null) return;
+        const focused = focusedPersonalDraftId === draft.id;
+        const label = `Draft · ${draft.summary}`;
+        const icon = L.divIcon({
+          className: `pm-draft-marker${focused ? ' is-focused' : ''}`,
+          html: `<span class="pm-draft-dot${focused ? ' is-focused' : ''}"></span><span class="pm-draft-text">${escapeHtml(label)}</span>`,
+          iconSize: [0, 0],
+          iconAnchor: [0, 0],
+        });
+        const marker = L.marker([draft.lat, draft.lng], {
+          icon,
+          interactive: true,
+          zIndexOffset: focused ? 910 : 710,
+        });
+        marker.bindTooltip(label, {
+          permanent: focused,
+          className: 'pm-tip pm-tip-draft',
+        });
+        if (focused) {
+          L.circleMarker([draft.lat, draft.lng], {
+            radius: 22,
+            color: '#0d9488',
+            weight: 2,
+            dashArray: '4 3',
+            fillColor: '#0d9488',
+            fillOpacity: 0.12,
+            interactive: false,
+            className: 'pm-snap-ring',
+          }).addTo(layer);
+        }
+        marker.on('click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          useNetworkStore.getState().focusPersonalDraft(draft.id);
+        });
+        layer.addLayer(marker);
+      });
+    }
+
     // 33 kV spacing-based siting candidates
     if (showSitingOnMap && sitingAnalysis?.candidates.length) {
       sitingAnalysis.candidates.forEach((c) => {
@@ -1232,6 +1280,9 @@ export function MapView() {
     suggestions,
     showSuggestionsOnMap,
     focusedSuggestionId,
+    personalDrafts,
+    showPersonalDraftsOnMap,
+    focusedPersonalDraftId,
     adminRole,
     sitingAnalysis,
     showSitingOnMap,

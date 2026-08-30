@@ -9,6 +9,7 @@ import { OWNER_OPTIONS } from '@/lib/reports';
 import type { SitingCandidate } from '@/lib/sitingSuggestions';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 import { SCENE_PRESETS } from '@/lib/mapScope';
+import { isDraftStale } from '@/lib/personalDrafts';
 import { useNetworkStore } from '@/store/networkStore';
 import { ReportsForm } from '@/features/shell/ReportsPanel';
 import { PrintForm } from '@/features/print/PrintForm';
@@ -264,12 +265,21 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
   const adminRole = useNetworkStore((s) => s.adminRole);
   const editorCanEditSs = useNetworkStore((s) => s.editorCanEditSs);
   const saveSubstationBundle = useNetworkStore((s) => s.saveSubstationBundle);
+  const savePersonalDraftBundle = useNetworkStore((s) => s.savePersonalDraftBundle);
+  const personalDraftForAsset = useNetworkStore((s) => s.personalDraftForAsset);
+  const discardPersonalDraft = useNetworkStore((s) => s.discardPersonalDraft);
+  const substationsLive = useNetworkStore((s) => s.substations);
+  const linesLive = useNetworkStore((s) => s.lines);
   const requestDelete = useNetworkStore((s) => s.requestDelete);
   const flashStatus = useNetworkStore((s) => s.flashStatus);
   const setPanel = useNetworkStore((s) => s.setPanel);
 
   const related = linesConnectedTo(ssId, allLines);
   const relatedKey = related.map((l) => `${l.id}:${l.version}`).join('|');
+  const existingDraft = personalDraftForAsset('substation', ssId);
+  const draftStale = existingDraft
+    ? isDraftStale(existingDraft, { substations: substationsLive, lines: linesLive })
+    : null;
 
   const [name, setName] = useState(ss?.name ?? '');
   const [voltageCode, setVoltageCode] = useState<VoltageCode>(ss?.voltageCode ?? '33');
@@ -286,6 +296,7 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
   const [latText, setLatText] = useState(ss ? ss.lat.toFixed(6) : '');
   const [lngText, setLngText] = useState(ss ? ss.lng.toFixed(6) : '');
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>(() => related.map(lineToDraft));
+  const [draftComment, setDraftComment] = useState(existingDraft?.comment ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -310,6 +321,10 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
     setLineDrafts(related.map(lineToDraft));
     // relatedKey captures id+version of connected lines
   }, [ssId, relatedKey]);
+
+  useEffect(() => {
+    setDraftComment(existingDraft?.comment ?? '');
+  }, [existingDraft?.id, existingDraft?.updatedAt]);
 
   if (!ss) return <EmptyProps />;
 
@@ -345,9 +360,36 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
   const canEdit =
     adminMode && (adminRole === 'super' || editorCanEditSs(ssId));
   const outOfScope = adminMode && adminRole === 'editor' && !editorCanEditSs(ssId);
+  const isEditor = adminRole === 'editor';
 
   const patchLineDraft = (id: string, patch: Partial<LineDraft>) => {
     setLineDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  };
+
+  const applyStoredDraft = () => {
+    const payloadSs = existingDraft?.payload.ss;
+    const payloadLines = existingDraft?.payload.relatedLines;
+    if (!payloadSs) {
+      flashStatus('Draft has no substation payload');
+      return;
+    }
+    setName(payloadSs.name);
+    setVoltageCode(payloadSs.voltageCode);
+    setStatus(payloadSs.status);
+    setTransformers(payloadSs.transformers);
+    setLoadingPct(payloadSs.loadingPct == null ? '' : String(payloadSs.loadingPct));
+    setCommissionYear(payloadSs.commissionYear == null ? '' : String(payloadSs.commissionYear));
+    setOrgUnitId(payloadSs.orgUnitId ?? '');
+    setProposalRef(payloadSs.proposalRef);
+    setOwner(payloadSs.owner);
+    setRemarks(payloadSs.remarks);
+    setLatText(payloadSs.lat.toFixed(6));
+    setLngText(payloadSs.lng.toFixed(6));
+    if (payloadLines?.length) {
+      setLineDrafts(payloadLines.map(lineToDraft));
+    }
+    setDraftComment(existingDraft.comment);
+    flashStatus('Draft loaded into form');
   };
 
   const save = async () => {
@@ -359,6 +401,10 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
     const parsed = parseCoordPair(latText, lngText);
     if (!parsed) {
       setError('Enter valid latitude (−90…90) and longitude (−180…180).');
+      return;
+    }
+    if (isEditor && !draftComment.trim()) {
+      setError('Add a personal comment before saving the draft.');
       return;
     }
     setError(null);
@@ -390,8 +436,11 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
           loadingPct: d.loadingPct === '' ? null : Number(d.loadingPct),
         };
       });
-      const result = await saveSubstationBundle(nextSs, nextLines);
+      const result = isEditor
+        ? await savePersonalDraftBundle(nextSs, nextLines, draftComment)
+        : await saveSubstationBundle(nextSs, nextLines);
       flashStatus(result.message);
+      if (!result.ok) setError(result.message);
     } finally {
       setSaving(false);
     }
@@ -425,8 +474,38 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
             : 'View only. Unlock in Settings to edit this substation and related lines.'}
         </p>
       )}
-      {adminRole === 'editor' && canEdit && (
-        <p className="muted">Saving submits a suggestion for super-admin review (live map unchanged until approved).</p>
+      {isEditor && canEdit && (
+        <p className="muted">
+          Saves stay on this device only (personal drafts). Promote to a suggestion for review comes
+          later — live map is unchanged.
+        </p>
+      )}
+      {isEditor && existingDraft && (
+        <div className={`admin-box${draftStale?.stale ? ' draft-stale' : ''}`}>
+          <p className="section-label">On-device draft</p>
+          {draftStale?.stale ? (
+            <p className="field-error">
+              Live map changed since this draft:{' '}
+              {draftStale.details.slice(0, 2).join('; ')}
+              {draftStale.details.length > 2 ? '…' : ''}
+            </p>
+          ) : (
+            <p className="muted">Saved {new Date(existingDraft.updatedAt).toLocaleString()}</p>
+          )}
+          <p className="muted">{existingDraft.comment}</p>
+          <div className="form-actions">
+            <button type="button" className="primary-btn ghost" onClick={applyStoredDraft}>
+              Load into form
+            </button>
+            <button
+              type="button"
+              className="danger-btn"
+              onClick={() => void discardPersonalDraft(existingDraft.id)}
+            >
+              Discard draft
+            </button>
+          </div>
+        </div>
       )}
       <fieldset disabled={!canEdit} className="form-fieldset">
         <Field label="Name">
@@ -694,18 +773,31 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
 
       {error && <p className="field-error">{error}</p>}
 
+      {isEditor && canEdit && (
+        <Field label="Personal comment (required for drafts)">
+          <textarea
+            rows={2}
+            value={draftComment}
+            onChange={(e) => setDraftComment(e.target.value)}
+            placeholder="Why this change — stays on this device"
+          />
+        </Field>
+      )}
+
       <div className="form-actions">
         <button
           type="button"
           className="primary-btn"
-          disabled={!canEdit || !dirty || saving}
+          disabled={!canEdit || !dirty || saving || (isEditor && !draftComment.trim())}
           onClick={() => void save()}
         >
           {saving
             ? 'Saving…'
-            : dirtyLines.length
-              ? 'Save SS & related lines'
-              : 'Save / Update'}
+            : isEditor
+              ? 'Save to my drafts'
+              : dirtyLines.length
+                ? 'Save SS & related lines'
+                : 'Save / Update'}
         </button>
         <button
           type="button"
@@ -753,7 +845,14 @@ function LinePropertiesForm({ lineId }: { lineId: string }) {
   const allLines = useNetworkStore((s) => s.lines);
   const substations = useNetworkStore((s) => s.substations);
   const adminMode = useNetworkStore((s) => s.adminMode);
+  const adminRole = useNetworkStore((s) => s.adminRole);
+  const editorCanEditLine = useNetworkStore((s) => s.editorCanEditLine);
   const updateLine = useNetworkStore((s) => s.updateLine);
+  const savePersonalDraftLine = useNetworkStore((s) => s.savePersonalDraftLine);
+  const personalDraftForAsset = useNetworkStore((s) => s.personalDraftForAsset);
+  const discardPersonalDraft = useNetworkStore((s) => s.discardPersonalDraft);
+  const substationsLive = useNetworkStore((s) => s.substations);
+  const linesLive = useNetworkStore((s) => s.lines);
   const requestDelete = useNetworkStore((s) => s.requestDelete);
   const flashStatus = useNetworkStore((s) => s.flashStatus);
   const setPanel = useNetworkStore((s) => s.setPanel);
@@ -770,16 +869,29 @@ function LinePropertiesForm({ lineId }: { lineId: string }) {
     : [];
   const isDouble = siblings.length > 1;
   const siblingKey = siblings.map((l) => `${l.id}:${l.version}`).join('|');
+  const existingDraft = personalDraftForAsset('line', lineId);
+  const draftStale = existingDraft
+    ? isDraftStale(existingDraft, { substations: substationsLive, lines: linesLive })
+    : null;
+  const isEditor = adminRole === 'editor';
+  const canEditLine =
+    adminMode && (adminRole === 'super' || (line ? editorCanEditLine(line.id) : false));
 
   const [drafts, setDrafts] = useState<CircuitDraft[]>(() =>
     (siblings.length ? siblings : line ? [line] : []).map(lineToCircuitDraft),
   );
+  const [draftComment, setDraftComment] = useState(existingDraft?.comment ?? '');
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const source = siblings.length ? siblings : line ? [line] : [];
     setDrafts(source.map(lineToCircuitDraft));
   }, [siblingKey, lineId]);
+
+  useEffect(() => {
+    setDraftComment(existingDraft?.comment ?? '');
+  }, [existingDraft?.id, existingDraft?.updatedAt]);
 
   if (!line) return <EmptyProps />;
 
@@ -807,6 +919,19 @@ function LinePropertiesForm({ lineId }: { lineId: string }) {
     );
   });
 
+  const applyStoredDraft = () => {
+    const payloadLine = existingDraft?.payload.line;
+    if (!payloadLine) {
+      flashStatus('Draft has no feeder payload');
+      return;
+    }
+    setDrafts((prev) =>
+      prev.map((d) => (d.id === payloadLine.id ? lineToCircuitDraft(payloadLine) : d)),
+    );
+    setDraftComment(existingDraft.comment);
+    flashStatus('Draft loaded into form');
+  };
+
   const save = async () => {
     if (!adminMode) {
       flashStatus('Unlock in Settings to edit');
@@ -814,8 +939,44 @@ function LinePropertiesForm({ lineId }: { lineId: string }) {
       return;
     }
     if (!dirtyDrafts.length) return;
+    if (isEditor && !draftComment.trim()) {
+      setError('Add a personal comment before saving the draft.');
+      return;
+    }
+    setError(null);
     setSaving(true);
     try {
+      if (isEditor) {
+        let lastMsg = '';
+        for (const d of dirtyDrafts) {
+          if (!editorCanEditLine(d.id)) {
+            setError(`Feeder “${d.name}” is outside your authorized area`);
+            return;
+          }
+          const orig = circuitList.find((l) => l.id === d.id)!;
+          const next = {
+            ...orig,
+            name: d.name.trim() || orig.name,
+            voltageCode: d.voltageCode,
+            status: d.status,
+            circuitCount: Number(d.circuitCount) || 1,
+            circuitConfig: isDouble ? ('double' as const) : d.circuitConfig,
+            conductor: d.conductor,
+            loadingPct: d.loadingPct === '' ? null : Number(d.loadingPct),
+            proposalRef: d.proposalRef,
+            remarks: d.remarks,
+          };
+          const result = await savePersonalDraftLine(next, draftComment);
+          lastMsg = result.message;
+          if (!result.ok) {
+            setError(result.message);
+            flashStatus(result.message);
+            return;
+          }
+        }
+        flashStatus(lastMsg || 'Saved on this device only — not on the live map');
+        return;
+      }
       for (const d of dirtyDrafts) {
         const orig = circuitList.find((l) => l.id === d.id)!;
         await updateLine(d.id, {
@@ -846,6 +1007,38 @@ function LinePropertiesForm({ lineId }: { lineId: string }) {
         <p className="readonly-banner">
           View only. Unlock in Settings to edit lines.
         </p>
+      )}
+      {isEditor && canEditLine && (
+        <p className="muted">
+          Saves stay on this device only (personal drafts). Live map is unchanged until promote →
+          suggestion is available later.
+        </p>
+      )}
+      {isEditor && existingDraft && (
+        <div className={`admin-box${draftStale?.stale ? ' draft-stale' : ''}`}>
+          <p className="section-label">On-device draft</p>
+          {draftStale?.stale ? (
+            <p className="field-error">
+              Live map changed since this draft:{' '}
+              {draftStale.details.slice(0, 2).join('; ')}
+            </p>
+          ) : (
+            <p className="muted">Saved {new Date(existingDraft.updatedAt).toLocaleString()}</p>
+          )}
+          <p className="muted">{existingDraft.comment}</p>
+          <div className="form-actions">
+            <button type="button" className="primary-btn ghost" onClick={applyStoredDraft}>
+              Load into form
+            </button>
+            <button
+              type="button"
+              className="danger-btn"
+              onClick={() => void discardPersonalDraft(existingDraft.id)}
+            >
+              Discard draft
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="endpoint-coords">
@@ -1007,20 +1200,40 @@ function LinePropertiesForm({ lineId }: { lineId: string }) {
         })}
       </fieldset>
 
+      {error && <p className="field-error">{error}</p>}
+
+      {isEditor && canEditLine && (
+        <Field label="Personal comment (required for drafts)">
+          <textarea
+            rows={2}
+            value={draftComment}
+            onChange={(e) => setDraftComment(e.target.value)}
+            placeholder="Why this change — stays on this device"
+          />
+        </Field>
+      )}
+
       <div className="form-actions">
         <button
           type="button"
           className="primary-btn"
-          disabled={!adminMode || !dirtyDrafts.length || saving}
+          disabled={
+            !adminMode ||
+            !dirtyDrafts.length ||
+            saving ||
+            (isEditor && !draftComment.trim())
+          }
           onClick={() => void save()}
         >
           {saving
             ? 'Saving…'
-            : isDouble
-              ? dirtyDrafts.length > 1
-                ? 'Save both circuits'
-                : `Save Ckt ${Math.max(1, drafts.findIndex((d) => d.id === dirtyDrafts[0]?.id) + 1)}`
-              : 'Save / Update'}
+            : isEditor
+              ? 'Save to my drafts'
+              : isDouble
+                ? dirtyDrafts.length > 1
+                  ? 'Save both circuits'
+                  : `Save Ckt ${Math.max(1, drafts.findIndex((d) => d.id === dirtyDrafts[0]?.id) + 1)}`
+                : 'Save / Update'}
         </button>
         {!isDouble && (
           <button
@@ -1656,6 +1869,14 @@ function SettingsForm() {
   const focusSuggestion = useNetworkStore((s) => s.focusSuggestion);
   const focusedSuggestionId = useNetworkStore((s) => s.focusedSuggestionId);
   const setShowSuggestionsOnMap = useNetworkStore((s) => s.setShowSuggestionsOnMap);
+  const personalDrafts = useNetworkStore((s) => s.personalDrafts);
+  const showPersonalDraftsOnMap = useNetworkStore((s) => s.showPersonalDraftsOnMap);
+  const setShowPersonalDraftsOnMap = useNetworkStore((s) => s.setShowPersonalDraftsOnMap);
+  const focusPersonalDraft = useNetworkStore((s) => s.focusPersonalDraft);
+  const focusedPersonalDraftId = useNetworkStore((s) => s.focusedPersonalDraftId);
+  const discardPersonalDraft = useNetworkStore((s) => s.discardPersonalDraft);
+  const refreshPersonalDrafts = useNetworkStore((s) => s.refreshPersonalDrafts);
+  const lines = useNetworkStore((s) => s.lines);
   const checkSupabase = useNetworkStore((s) => s.checkSupabase);
   const pushToSupabase = useNetworkStore((s) => s.pushToSupabase);
   const reloadFromSupabase = useNetworkStore((s) => s.reloadFromSupabase);
@@ -1746,8 +1967,8 @@ function SettingsForm() {
               {adminRole === 'super'
                 ? 'You can edit the network, authorize editors, and review suggestions.'
                 : editorUnrestricted
-                  ? 'You can suggest edits anywhere on the network.'
-                  : `You can suggest edits for ${editableSsIds.length} authorized SS (+ connected feeders).`}
+                  ? 'You can save personal drafts (this device) for any SS + feeders.'
+                  : `You can save personal drafts for ${editableSsIds.length} authorized SS (+ connected feeders) on this device.`}
             </p>
             <button type="button" className="danger-btn" onClick={lockAdmin}>
               {portalManaged ? 'Pause editing' : 'Lock'}
@@ -1801,6 +2022,68 @@ function SettingsForm() {
           </>
         )}
       </div>
+
+      {adminRole === 'editor' && adminMode && (
+        <div className="admin-box">
+          <p className="section-label">My drafts (this device)</p>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={showPersonalDraftsOnMap}
+              onChange={(e) => setShowPersonalDraftsOnMap(e.target.checked)}
+            />
+            Show on map (teal markers)
+          </label>
+          <button
+            type="button"
+            className="primary-btn ghost"
+            disabled={busy}
+            onClick={() => void run(refreshPersonalDrafts)}
+          >
+            Refresh drafts
+          </button>
+          {personalDrafts.length === 0 && (
+            <p className="muted">No drafts yet — edit an SS or feeder and Save to my drafts.</p>
+          )}
+          {personalDrafts.map((draft) => {
+            const stale = isDraftStale(draft, { substations, lines });
+            const focused = focusedPersonalDraftId === draft.id;
+            return (
+              <div
+                key={draft.id}
+                className={`suggestion-row${focused ? ' is-focused' : ''}${stale.stale ? ' draft-stale' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => focusPersonalDraft(draft.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    focusPersonalDraft(draft.id);
+                  }
+                }}
+              >
+                <div>
+                  <strong>{draft.summary}</strong>
+                  {stale.stale && <span className="field-error"> · live changed</span>}
+                  <p className="muted">{draft.comment}</p>
+                  <p className="muted">{new Date(draft.updatedAt).toLocaleString()}</p>
+                </div>
+                <button
+                  type="button"
+                  className="danger-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void discardPersonalDraft(draft.id);
+                  }}
+                >
+                  Discard
+                </button>
+              </div>
+            );
+          })}
+          <p className="muted">Promote to suggestion for super-admin review will come later.</p>
+        </div>
+      )}
 
       {adminRole === 'super' && (
         <>

@@ -20,7 +20,6 @@ import {
   listPendingSuggestions,
   reviewSuggestion,
   revokeEditor as revokeEditorRemote,
-  submitSuggestion,
   verifyEditorLogin,
   type EditSuggestion,
   type EditorAccount,
@@ -31,6 +30,14 @@ import {
   sceneById,
   type SceneId,
 } from '@/lib/mapScope';
+import {
+  deletePersonalDraft,
+  draftId,
+  isDraftStale,
+  listPersonalDrafts,
+  putPersonalDraft,
+  type PersonalDraft,
+} from '@/lib/personalDrafts';
 import {
   canEditorTouchLine,
   canEditorTouchSubstation,
@@ -145,6 +152,10 @@ interface NetworkStore extends UiState {
   showSuggestionsOnMap: boolean;
   /** Suggestion highlighted from the side-panel list */
   focusedSuggestionId: string | null;
+  /** On-device personal drafts for the current editor (never live / never cloud). */
+  personalDrafts: PersonalDraft[];
+  showPersonalDraftsOnMap: boolean;
+  focusedPersonalDraftId: string | null;
   /** Live map-edit hint (snap target, distance) for status bar */
   editCursorHint: string | null;
   /** 33 kV spacing-based siting analysis */
@@ -189,6 +200,23 @@ interface NetworkStore extends UiState {
   revokeEditor: (id: string) => Promise<void>;
   setShowSuggestionsOnMap: (on: boolean) => void;
   focusSuggestion: (id: string | null) => void;
+  refreshPersonalDrafts: () => Promise<void>;
+  savePersonalDraftBundle: (
+    ss: Substation,
+    relatedLines: TrunkLine[],
+    comment: string,
+  ) => Promise<{ ok: boolean; message: string }>;
+  savePersonalDraftLine: (
+    line: TrunkLine,
+    comment: string,
+  ) => Promise<{ ok: boolean; message: string }>;
+  discardPersonalDraft: (id: string) => Promise<void>;
+  focusPersonalDraft: (id: string | null) => void;
+  setShowPersonalDraftsOnMap: (on: boolean) => void;
+  personalDraftForAsset: (
+    kind: 'substation' | 'line',
+    assetId: string,
+  ) => PersonalDraft | undefined;
   setEditCursorHint: (hint: string | null) => void;
   runSitingAnalysis: () => Promise<void>;
   clearSitingAnalysis: () => void;
@@ -331,6 +359,9 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   suggestions: [],
   showSuggestionsOnMap: true,
   focusedSuggestionId: null,
+  personalDrafts: [],
+  showPersonalDraftsOnMap: true,
+  focusedPersonalDraftId: null,
   editCursorHint: null,
   sitingAnalysis: null,
   sitingBusy: false,
@@ -504,6 +535,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       editableSsIds: [...editable],
     });
     get().flashStatus(`Unlocked · ${editor.name} · ${editable.size} SS in scope`);
+    await get().refreshPersonalDrafts();
     return true;
   },
 
@@ -521,6 +553,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
         editorAccount: null,
         editableSsIds: [],
         editorUnrestricted: false,
+        personalDrafts: [],
+        focusedPersonalDraftId: null,
       });
       return;
     }
@@ -535,6 +569,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
         editorAccount: null,
         editableSsIds: [],
         editorUnrestricted: false,
+        personalDrafts: [],
+        focusedPersonalDraftId: null,
       });
       await get().refreshEditors();
       await get().refreshSuggestions();
@@ -565,6 +601,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       editableSsIds: [...editable],
       editorUnrestricted: identity.unrestricted,
     });
+    await get().refreshPersonalDrafts();
   },
 
   resumePortalEditing: async () => {
@@ -587,6 +624,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       editorAccount: null,
       editableSsIds: [],
       editorUnrestricted: false,
+      personalDrafts: [],
+      focusedPersonalDraftId: null,
       tool: 'cursor',
       placeDraft: null,
       connectDraft: { fromId: null },
@@ -675,6 +714,169 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     }
     get().flashStatus(`Focused · ${sug.summary}`);
   },
+
+  refreshPersonalDrafts: async () => {
+    const username =
+      get().portalIdentity?.username ||
+      get().editorAccount?.portalUsername ||
+      get().editorAccount?.name ||
+      get().adminName ||
+      '';
+    if (!username || get().adminRole !== 'editor') {
+      set({ personalDrafts: [], focusedPersonalDraftId: null });
+      return;
+    }
+    const drafts = await listPersonalDrafts(username);
+    set({ personalDrafts: drafts });
+  },
+
+  personalDraftForAsset: (kind, assetId) => {
+    const username =
+      get().portalIdentity?.username ||
+      get().editorAccount?.portalUsername ||
+      get().editorAccount?.name ||
+      get().adminName ||
+      '';
+    if (!username) return undefined;
+    const id = draftId(username, kind, assetId);
+    return get().personalDrafts.find((d) => d.id === id);
+  },
+
+  savePersonalDraftBundle: async (ss, relatedLines, comment) => {
+    if (!get().requireAdmin()) return { ok: false, message: 'Unlock required' };
+    if (get().adminRole !== 'editor') {
+      return { ok: false, message: 'Personal drafts are for authorized editors' };
+    }
+    if (!get().editorCanEditSs(ss.id)) {
+      return { ok: false, message: 'This substation is outside your authorized area' };
+    }
+    for (const line of relatedLines) {
+      if (!get().editorCanEditLine(line.id)) {
+        return { ok: false, message: `Line “${line.name}” is outside your authorized area` };
+      }
+    }
+    const username =
+      get().portalIdentity?.username ||
+      get().editorAccount?.portalUsername ||
+      get().editorAccount?.name ||
+      get().adminName ||
+      '';
+    if (!username) return { ok: false, message: 'No editor identity for drafts' };
+
+    const note = comment.trim();
+    if (!note) return { ok: false, message: 'Add a personal comment before saving the draft' };
+
+    const liveSs = get().substations.find((s) => s.id === ss.id);
+    const baseVersions: Record<string, number> = {
+      [ss.id]: liveSs?.version ?? ss.version,
+    };
+    for (const line of relatedLines) {
+      const live = get().lines.find((l) => l.id === line.id);
+      baseVersions[line.id] = live?.version ?? line.version;
+    }
+
+    const draft: PersonalDraft = {
+      id: draftId(username, 'substation', ss.id),
+      username,
+      assetKind: 'substation',
+      assetId: ss.id,
+      summary: `SS “${ss.name}” + ${relatedLines.length} feeder(s)`,
+      comment: note,
+      payload: { ss, relatedLines },
+      baseVersions,
+      lat: ss.lat,
+      lng: ss.lng,
+      updatedAt: new Date().toISOString(),
+    };
+    await putPersonalDraft(draft);
+    await get().refreshPersonalDrafts();
+    set({ showPersonalDraftsOnMap: true, focusedPersonalDraftId: draft.id });
+    return {
+      ok: true,
+      message: 'Saved on this device only — not on the live map',
+    };
+  },
+
+  savePersonalDraftLine: async (line, comment) => {
+    if (!get().requireAdmin()) return { ok: false, message: 'Unlock required' };
+    if (get().adminRole !== 'editor') {
+      return { ok: false, message: 'Personal drafts are for authorized editors' };
+    }
+    if (!get().editorCanEditLine(line.id)) {
+      return { ok: false, message: 'This feeder is outside your authorized area' };
+    }
+    const username =
+      get().portalIdentity?.username ||
+      get().editorAccount?.portalUsername ||
+      get().editorAccount?.name ||
+      get().adminName ||
+      '';
+    if (!username) return { ok: false, message: 'No editor identity for drafts' };
+    const note = comment.trim();
+    if (!note) return { ok: false, message: 'Add a personal comment before saving the draft' };
+
+    const live = get().lines.find((l) => l.id === line.id);
+    const from = get().substations.find((s) => s.id === line.fromId);
+    const draft: PersonalDraft = {
+      id: draftId(username, 'line', line.id),
+      username,
+      assetKind: 'line',
+      assetId: line.id,
+      summary: `Feeder “${line.name}”`,
+      comment: note,
+      payload: { line },
+      baseVersions: { [line.id]: live?.version ?? line.version },
+      lat: from?.lat ?? null,
+      lng: from?.lng ?? null,
+      updatedAt: new Date().toISOString(),
+    };
+    await putPersonalDraft(draft);
+    await get().refreshPersonalDrafts();
+    set({ showPersonalDraftsOnMap: true, focusedPersonalDraftId: draft.id });
+    return {
+      ok: true,
+      message: 'Saved on this device only — not on the live map',
+    };
+  },
+
+  discardPersonalDraft: async (id) => {
+    await deletePersonalDraft(id);
+    const focused = get().focusedPersonalDraftId === id ? null : get().focusedPersonalDraftId;
+    await get().refreshPersonalDrafts();
+    set({ focusedPersonalDraftId: focused });
+    get().flashStatus('Personal draft discarded');
+  },
+
+  focusPersonalDraft: (id) => {
+    const draft = id ? get().personalDrafts.find((d) => d.id === id) : null;
+    if (!draft) {
+      set({ focusedPersonalDraftId: null });
+      return;
+    }
+    set({
+      focusedPersonalDraftId: draft.id,
+      showPersonalDraftsOnMap: true,
+    });
+    if (draft.lat != null && draft.lng != null) {
+      set({ mapFocus: { lat: draft.lat, lng: draft.lng } });
+    }
+    if (draft.assetKind === 'substation') {
+      set({ selection: { kind: 'substation', id: draft.assetId }, panel: 'properties' });
+    } else {
+      set({ selection: { kind: 'line', id: draft.assetId }, panel: 'properties' });
+    }
+    const stale = isDraftStale(draft, {
+      substations: get().substations,
+      lines: get().lines,
+    });
+    get().flashStatus(
+      stale.stale
+        ? `Draft · live map changed — review carefully`
+        : `Draft · ${draft.summary}`,
+    );
+  },
+
+  setShowPersonalDraftsOnMap: (showPersonalDraftsOnMap) => set({ showPersonalDraftsOnMap }),
 
   setEditCursorHint: (editCursorHint) => set({ editCursorHint }),
 
@@ -1246,29 +1448,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   updateLine: async (id, patch) => {
     if (!get().requireAdmin()) return;
     if (get().adminRole === 'editor') {
-      if (!get().editorCanEditLine(id)) {
-        get().flashStatus('This feeder is outside your authorized area');
-        return;
-      }
-      const orig = get().lines.find((l) => l.id === id);
-      if (!orig) return;
-      const next = { ...orig, ...patch, version: orig.version + 1 };
-      const from = get().substations.find((s) => s.id === next.fromId);
-      const result = await submitSuggestion({
-        editorId: get().editorAccount?.id ?? null,
-        editorName: get().adminName || 'Editor',
-        action: 'update',
-        assetKind: 'line',
-        assetId: id,
-        summary: `Update feeder “${next.name}”`,
-        payload: { line: next },
-        lat: from?.lat ?? null,
-        lng: from?.lng ?? null,
-      });
-      get().flashStatus(result.message);
-      if (result.ok && result.suggestion) {
-        set({ suggestions: [result.suggestion, ...get().suggestions] });
-      }
+      get().flashStatus('Use Save on the feeder form with a personal comment (device-only draft)');
       return;
     }
     const lines = get().lines.map((l) => (l.id === id ? { ...l, ...patch, version: l.version + 1 } : l));
@@ -1288,31 +1468,12 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   saveSubstationBundle: async (ss, relatedLines) => {
     if (!get().requireAdmin()) return { ok: false, message: 'Admin unlock required' };
 
-    // Editors: scoped + submit as suggestion (does not change live network)
+    // Editors: personal on-device drafts only (promote → suggestion comes later)
     if (get().adminRole === 'editor') {
-      if (!get().editorCanEditSs(ss.id)) {
-        return { ok: false, message: 'This substation is outside your authorized area' };
-      }
-      for (const line of relatedLines) {
-        if (!get().editorCanEditLine(line.id)) {
-          return { ok: false, message: `Line “${line.name}” is outside your authorized area` };
-        }
-      }
-      const result = await submitSuggestion({
-        editorId: get().editorAccount?.id ?? null,
-        editorName: get().adminName || 'Editor',
-        action: 'update',
-        assetKind: 'substation',
-        assetId: ss.id,
-        summary: `Update SS “${ss.name}” + ${relatedLines.length} related line(s)`,
-        payload: { ss, relatedLines },
-        lat: ss.lat,
-        lng: ss.lng,
-      });
-      if (result.ok && result.suggestion) {
-        set({ suggestions: [result.suggestion, ...get().suggestions] });
-      }
-      return { ok: result.ok, message: result.message };
+      return {
+        ok: false,
+        message: 'Add a personal comment and use “Save to my drafts”',
+      };
     }
 
     const now = new Date().toISOString();

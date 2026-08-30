@@ -554,6 +554,48 @@ textarea {
   pointer-events: none;
 }
 
+.pm-draft-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+.pm-draft-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #0d9488;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px #0d9488, 0 1px 4px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%);
+}
+
+.pm-draft-dot.is-focused {
+  animation: pm-pulse 1.2s ease-in-out infinite;
+}
+
+.pm-draft-text {
+  display: inline-block;
+  margin-top: 4px;
+  transform: translate(-50%, 0);
+  max-width: 200px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #0d9488;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.draft-stale {
+  border-color: color-mix(in srgb, var(--danger, #dc2626) 55%, transparent);
+}
+
 .pm-tip-suggestion {
   background: #ea580c !important;
   color: #fff !important;
