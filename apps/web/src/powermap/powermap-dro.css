@@ -102,6 +102,20 @@
   color: var(--ink);
 }
 
+.pm-root .siting-stats,
+.pm-root .siting-row,
+.pm-root .voltage-check-row {
+  background: var(--surface-muted);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.pm-root .siting-stats strong,
+.pm-root .siting-row strong,
+.pm-root .voltage-check-row strong {
+  color: var(--ink);
+}
+
 .pm-root .status-bar {
   background: var(--surface-solid);
   border-top: 1px solid var(--line);
@@ -112,6 +126,15 @@
   background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
   border: 1px solid var(--line);
   color: var(--ink);
+}
+
+.pm-root .map-legend .legend-title,
+.pm-root .map-legend .legend-row {
+  color: var(--ink);
+}
+
+.pm-root .map-legend .legend-note {
+  color: var(--muted);
 }
 
 .pm-root .scope-badge {

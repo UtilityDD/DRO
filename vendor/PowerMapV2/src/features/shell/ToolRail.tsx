@@ -11,12 +11,13 @@ import {
   FileBarChart2,
   Settings,
   MapPinned,
+  Activity,
   Printer,
 } from 'lucide-react';
 import type { ToolMode } from '@/domain/types';
 import { useNetworkStore } from '@/store/networkStore';
 
-type PanelId = 'layers' | 'filters' | 'reports' | 'settings' | 'siting' | 'print';
+type PanelId = 'layers' | 'filters' | 'reports' | 'settings' | 'siting' | 'voltage-check' | 'print';
 
 const tools: {
   id: ToolMode | PanelId;
@@ -31,6 +32,7 @@ const tools: {
   { id: 'delete', label: 'Delete', icon: Trash2 },
   { id: 'measure', label: 'Measure', icon: Ruler },
   { id: 'siting', label: '33 kV Siting', icon: MapPinned },
+  { id: 'voltage-check', label: 'Check voltage', icon: Activity },
   { id: 'print', label: 'Print Map', icon: Printer },
   { id: 'layers', label: 'Layers', icon: Layers },
   { id: 'filters', label: 'Filters', icon: Filter },
@@ -38,7 +40,15 @@ const tools: {
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-const PANEL_IDS: PanelId[] = ['layers', 'filters', 'reports', 'settings', 'siting', 'print'];
+const PANEL_IDS: PanelId[] = [
+  'layers',
+  'filters',
+  'reports',
+  'settings',
+  'siting',
+  'voltage-check',
+  'print',
+];
 
 export function ToolRail() {
   const tool = useNetworkStore((s) => s.tool);

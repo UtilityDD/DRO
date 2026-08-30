@@ -45,8 +45,14 @@ import {
 } from '@/lib/editorScope';
 import {
   analyze33KvSiting,
+  SITING_DISTRICTS,
   type SitingAnalysis,
 } from '@/lib/sitingSuggestions';
+import {
+  analyzeVoltageCheck,
+  type VoltageCheckAnalysis,
+  type VoltageCheckCell,
+} from '@/lib/voltageCheck';
 import {
   DEFAULT_PRINT_SETTINGS,
   type PrintSettings,
@@ -114,7 +120,17 @@ interface PlaceDraft {
 interface UiState {
   tool: ToolMode;
   selection: Selection | null;
-  panel: 'properties' | 'filters' | 'layers' | 'reports' | 'settings' | 'place-ss' | 'siting' | 'print' | null;
+  panel:
+    | 'properties'
+    | 'filters'
+    | 'layers'
+    | 'reports'
+    | 'settings'
+    | 'place-ss'
+    | 'siting'
+    | 'voltage-check'
+    | 'print'
+    | null;
   searchOpen: boolean;
   searchQuery: string;
   statusMessage: string | null;
@@ -163,6 +179,22 @@ interface NetworkStore extends UiState {
   sitingBusy: boolean;
   showSitingOnMap: boolean;
   focusedSitingId: string | null;
+  /** Inspection: far-from-33 kV distance wash */
+  voltageCheckAnalysis: VoltageCheckAnalysis | null;
+  voltageCheckBusy: boolean;
+  showVoltageCheckOnMap: boolean;
+  voltageCheckActive: boolean;
+  /** Map layers before entering voltage-check inspection */
+  voltageCheckLayerStash: MapLayerSettings | null;
+  /** Side list (hotspots + map clicks) */
+  voltageCheckList: VoltageCheckCell[];
+  focusedVoltageCheckId: string | null;
+  /** Districts included in the next / last voltage check */
+  voltageCheckDistricts: string[];
+  /** Manual cut-off km; null = auto from 33 kV spacing */
+  voltageCheckCutOffKm: number | null;
+  /** Preferred basemap while voltage-check is active */
+  voltageCheckBasemap: 'google' | 'none';
   printSettings: PrintSettings;
   printPreviewOpen: boolean;
   substations: Substation[];
@@ -223,6 +255,17 @@ interface NetworkStore extends UiState {
   setShowSitingOnMap: (on: boolean) => void;
   focusSitingCandidate: (id: string | null) => void;
   adoptSitingCandidate: (id: string) => void;
+  enterVoltageCheck: () => void;
+  exitVoltageCheck: () => void;
+  runVoltageCheckAnalysis: () => Promise<void>;
+  clearVoltageCheckAnalysis: () => void;
+  setShowVoltageCheckOnMap: (on: boolean) => void;
+  focusVoltageCheckCell: (id: string | null) => void;
+  addVoltageCheckHit: (cell: VoltageCheckCell) => void;
+  setVoltageCheckDistricts: (names: string[]) => void;
+  toggleVoltageCheckDistrict: (name: string) => void;
+  setVoltageCheckCutOffKm: (km: number | null) => void;
+  setVoltageCheckBasemap: (basemap: 'google' | 'none') => void;
   setPrintSettings: (patch: Partial<PrintSettings>) => void;
   setPrintPreviewOpen: (open: boolean) => void;
   applyScene: (id: Exclude<SceneId, 'custom'>) => void;
@@ -367,6 +410,16 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   sitingBusy: false,
   showSitingOnMap: true,
   focusedSitingId: null,
+  voltageCheckAnalysis: null,
+  voltageCheckBusy: false,
+  showVoltageCheckOnMap: true,
+  voltageCheckActive: false,
+  voltageCheckLayerStash: null,
+  voltageCheckList: [],
+  focusedVoltageCheckId: null,
+  voltageCheckDistricts: [...SITING_DISTRICTS],
+  voltageCheckCutOffKm: null,
+  voltageCheckBasemap: 'google',
   printSettings: { ...DEFAULT_PRINT_SETTINGS },
   printPreviewOpen: false,
   sceneId: 'overview',
@@ -944,6 +997,164 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     get().flashStatus(`Place draft at candidate · confirm in panel`);
   },
 
+  enterVoltageCheck: () => {
+    if (get().voltageCheckActive) {
+      set({
+        showVoltageCheckOnMap: true,
+        mapLayers: {
+          ...get().mapLayers,
+          basemap: get().voltageCheckBasemap,
+        },
+      });
+      return;
+    }
+    const layers = get().mapLayers;
+    const basemap = get().voltageCheckBasemap;
+    set({
+      voltageCheckActive: true,
+      voltageCheckLayerStash: { ...layers },
+      showVoltageCheckOnMap: true,
+      mapLayers: {
+        ...layers,
+        basemap,
+        showSsNames: false,
+        showSsCapacity: false,
+        showFeederNames: false,
+        showFeederLength: false,
+      },
+      sceneId: 'custom',
+    });
+  },
+
+  exitVoltageCheck: () => {
+    const stash = get().voltageCheckLayerStash;
+    set({
+      voltageCheckActive: false,
+      voltageCheckLayerStash: null,
+      focusedVoltageCheckId: null,
+      mapLayers: stash ? { ...stash } : get().mapLayers,
+      sceneId: stash ? 'custom' : get().sceneId,
+    });
+  },
+
+  runVoltageCheckAnalysis: async () => {
+    get().enterVoltageCheck();
+    set({ voltageCheckBusy: true, panel: 'voltage-check' });
+    try {
+      const analysis = await analyzeVoltageCheck(get().substations, {
+        districtNames: get().voltageCheckDistricts,
+        cutOffKm: get().voltageCheckCutOffKm,
+      });
+      set({
+        voltageCheckAnalysis: analysis,
+        voltageCheckList: analysis.hotspots,
+        focusedVoltageCheckId: null,
+        showVoltageCheckOnMap: true,
+        voltageCheckActive: true,
+        panel: 'voltage-check',
+      });
+      if (analysis.message) {
+        get().flashStatus(analysis.message);
+      } else {
+        get().flashStatus(
+          `${analysis.hotspots.length} far area(s) · cut-off ${analysis.cutOffKm.toFixed(1)} km from 33 kV`,
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Voltage check failed';
+      get().flashStatus(msg);
+      set({ voltageCheckAnalysis: null, voltageCheckList: [] });
+    } finally {
+      set({ voltageCheckBusy: false });
+    }
+  },
+
+  clearVoltageCheckAnalysis: () => {
+    get().exitVoltageCheck();
+    set({
+      voltageCheckAnalysis: null,
+      voltageCheckList: [],
+      focusedVoltageCheckId: null,
+    });
+  },
+
+  setShowVoltageCheckOnMap: (showVoltageCheckOnMap) => set({ showVoltageCheckOnMap }),
+
+  setVoltageCheckDistricts: (names) => {
+    const cleaned = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+    set({
+      voltageCheckDistricts: cleaned.length ? cleaned : [...SITING_DISTRICTS],
+    });
+  },
+
+  toggleVoltageCheckDistrict: (name) => {
+    const cur = get().voltageCheckDistricts;
+    const has = cur.some((d) => d.toLowerCase() === name.toLowerCase());
+    if (has) {
+      const next = cur.filter((d) => d.toLowerCase() !== name.toLowerCase());
+      set({
+        voltageCheckDistricts: next.length ? next : cur,
+      });
+      if (!next.length) {
+        get().flashStatus('Keep at least one district selected');
+      }
+    } else {
+      set({ voltageCheckDistricts: [...cur, name] });
+    }
+  },
+
+  setVoltageCheckCutOffKm: (km) => {
+    if (km == null || !Number.isFinite(km) || km <= 0) {
+      set({ voltageCheckCutOffKm: null });
+      return;
+    }
+    set({ voltageCheckCutOffKm: Math.min(80, Math.max(1, km)) });
+  },
+
+  setVoltageCheckBasemap: (basemap) => {
+    set({ voltageCheckBasemap: basemap });
+    if (get().voltageCheckActive || get().panel === 'voltage-check') {
+      set({
+        mapLayers: { ...get().mapLayers, basemap },
+        sceneId: 'custom',
+      });
+    }
+  },
+
+  focusVoltageCheckCell: (id) => {
+    const list = get().voltageCheckList;
+    const fromList = id ? list.find((x) => x.id === id) : null;
+    const fromCells = id
+      ? get().voltageCheckAnalysis?.cells.find((x) => x.id === id)
+      : null;
+    const c = fromList ?? fromCells ?? null;
+    if (!c) {
+      set({ focusedVoltageCheckId: null });
+      return;
+    }
+    get().enterVoltageCheck();
+    set({
+      focusedVoltageCheckId: c.id,
+      showVoltageCheckOnMap: true,
+      mapFocus: { lat: c.lat, lng: c.lng },
+      panel: 'voltage-check',
+    });
+    get().flashStatus(
+      `${c.district} · ${c.nearest33Name} · ${c.dist33Km.toFixed(1)} km`,
+    );
+  },
+
+  addVoltageCheckHit: (cell) => {
+    const list = get().voltageCheckList;
+    const exists = list.some((x) => x.id === cell.id);
+    set({
+      voltageCheckList: exists ? list : [cell, ...list],
+      focusedVoltageCheckId: cell.id,
+      showVoltageCheckOnMap: true,
+      panel: 'voltage-check',
+    });
+  },
+
   setPrintSettings: (patch) =>
     set({ printSettings: { ...get().printSettings, ...patch } }),
 
@@ -1096,7 +1307,15 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       panel: selection ? 'properties' : get().panel === 'properties' ? null : get().panel,
     }),
 
-  setPanel: (panel) => set({ panel }),
+  setPanel: (panel) => {
+    const prev = get().panel;
+    if (panel === 'voltage-check' && prev !== 'voltage-check') {
+      get().enterVoltageCheck();
+    } else if (prev === 'voltage-check' && panel !== 'voltage-check') {
+      get().exitVoltageCheck();
+    }
+    set({ panel });
+  },
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
 

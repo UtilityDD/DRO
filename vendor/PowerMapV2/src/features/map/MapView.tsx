@@ -9,6 +9,10 @@ import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_B
 import { feederLabelOffsetPx, feederLabelPlacement } from './feederLabels';
 import { lineStyle, substationIcon, tapIcon } from './symbology';
 import { nearestPointOnLines, nearestSubstation } from './mapSnap';
+import {
+  buildVoltageCheckWashDataUrl,
+  nearestVoltageCheckCell,
+} from '@/lib/voltageCheck';
 
 function escapeHtml(text: string) {
   return text
@@ -36,6 +40,7 @@ export function MapView() {
   const networkLayerRef = useRef<L.FeatureGroup | null>(null);
   const measureLayerRef = useRef<L.FeatureGroup | null>(null);
   const hintsLayerRef = useRef<L.FeatureGroup | null>(null);
+  const voltageCheckLayerRef = useRef<L.FeatureGroup | null>(null);
   const boundaryRef = useRef<BoundaryHandle | null>(null);
   const basemapRef = useRef<L.Layer | null>(null);
   /** Active snap target for click-to-complete connect / tap */
@@ -68,6 +73,10 @@ export function MapView() {
   const sitingAnalysis = useNetworkStore((s) => s.sitingAnalysis);
   const showSitingOnMap = useNetworkStore((s) => s.showSitingOnMap);
   const focusedSitingId = useNetworkStore((s) => s.focusedSitingId);
+  const voltageCheckAnalysis = useNetworkStore((s) => s.voltageCheckAnalysis);
+  const showVoltageCheckOnMap = useNetworkStore((s) => s.showVoltageCheckOnMap);
+  const voltageCheckActive = useNetworkStore((s) => s.voltageCheckActive);
+  const focusedVoltageCheckId = useNetworkStore((s) => s.focusedVoltageCheckId);
 
   const placeDraft = useNetworkStore((s) => s.placeDraft);
   const mapFocus = useNetworkStore((s) => s.mapFocus);
@@ -151,9 +160,11 @@ export function MapView() {
     const networkLayer = L.featureGroup().addTo(map);
     const measureLayer = L.featureGroup().addTo(map);
     const hintsLayer = L.featureGroup().addTo(map);
+    const voltageCheckLayer = L.featureGroup().addTo(map);
     networkLayerRef.current = networkLayer;
     measureLayerRef.current = measureLayer;
     hintsLayerRef.current = hintsLayer;
+    voltageCheckLayerRef.current = voltageCheckLayer;
     mapRef.current = map;
     setMapZoom(map.getZoom());
     setMapReadyTick((n) => n + 1);
@@ -811,6 +822,8 @@ export function MapView() {
     const ssById = new Map(substations.map((s) => [s.id, s]));
     const labelsPane = ensurePlaceLabelsPane(map);
     const calloutsPane = ensureCalloutsPane(map);
+    const quiet = state.voltageCheckActive;
+    map.getContainer().classList.toggle('pm-voltage-check-active', quiet);
 
     // Group parallel circuits for offset
     const pairKey = (a: string, b: string) => [a, b].sort().join('|');
@@ -848,6 +861,7 @@ export function MapView() {
           parallelTotal: sorted.length,
         });
         if (siblingSelected) style.opacity = 0.5;
+        if (quiet) style.opacity = (style.opacity ?? 0.88) * 0.08;
         const poly = L.polyline(path, style);
         poly.on('click', (e) => {
           L.DomEvent.stopPropagation(e);
@@ -985,12 +999,14 @@ export function MapView() {
         toLng = t.lng;
       }
       const selected = selection?.kind === 'tap_lateral' && selection.id === lat.id;
+      const latStyle = lineStyle(lat.voltageCode, lat.status, selected, true);
+      if (quiet) latStyle.opacity = (latStyle.opacity ?? 0.88) * 0.06;
       const poly = L.polyline(
         [
           [fromTap.lat, fromTap.lng],
           [toLat, toLng],
         ],
-        lineStyle(lat.voltageCode, lat.status, selected, true),
+        latStyle,
       );
       poly.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
@@ -1012,6 +1028,7 @@ export function MapView() {
       const marker = L.marker([tap.lat, tap.lng], {
         icon: tapIcon(selected),
         zIndexOffset: 400,
+        opacity: quiet ? 0.12 : 1,
       });
       marker.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
@@ -1034,6 +1051,7 @@ export function MapView() {
         icon: substationIcon(ss.voltageCode, ss.status, selected || isConnectFrom),
         draggable: tool === 'move',
         zIndexOffset: 500,
+        opacity: quiet ? (ss.voltageCode === '33' ? 0.48 : 0.18) : 1,
       });
 
       marker.on('click', (e) => {
@@ -1356,6 +1374,151 @@ export function MapView() {
     sitingAnalysis,
     showSitingOnMap,
     focusedSitingId,
+    voltageCheckActive,
+  ]);
+
+  // Far-from-33 kV wash + hit targets
+  useEffect(() => {
+    const map = mapRef.current;
+    const vcLayer = voltageCheckLayerRef.current;
+    if (!map || !vcLayer) return;
+    vcLayer.clearLayers();
+
+    const active =
+      voltageCheckActive && showVoltageCheckOnMap && voltageCheckAnalysis?.cells.length;
+    if (!active || !voltageCheckAnalysis) return;
+
+    const url = buildVoltageCheckWashDataUrl(voltageCheckAnalysis);
+    const b = voltageCheckAnalysis.bounds;
+    if (url) {
+      L.imageOverlay(
+        url,
+        [
+          [b.minLat, b.minLng],
+          [b.maxLat, b.maxLng],
+        ],
+        { opacity: 0.92, interactive: false, className: 'pm-voltage-check-wash' },
+      ).addTo(vcLayer);
+    }
+
+    const ssById = new Map(substations.map((s) => [s.id, s]));
+    const focused = focusedVoltageCheckId
+      ? voltageCheckAnalysis.cells.find((c) => c.id === focusedVoltageCheckId) ??
+        voltageCheckAnalysis.hotspots.find((c) => c.id === focusedVoltageCheckId)
+      : null;
+
+    if (focused) {
+      L.circleMarker([focused.lat, focused.lng], {
+        radius: 18,
+        color: '#b91c1c',
+        weight: 2,
+        dashArray: '4 3',
+        fillColor: '#ef4444',
+        fillOpacity: 0.12,
+        interactive: false,
+      }).addTo(vcLayer);
+      const ss = ssById.get(focused.nearest33Id);
+      if (ss) {
+        L.polyline(
+          [
+            [focused.lat, focused.lng],
+            [ss.lat, ss.lng],
+          ],
+          {
+            color: '#b91c1c',
+            weight: 1.75,
+            dashArray: '5 4',
+            opacity: 0.85,
+            interactive: false,
+          },
+        ).addTo(vcLayer);
+      }
+    }
+
+    // Sparse click targets on hotspots; hover via map mousemove over any far cell
+    const hitIds = new Set(voltageCheckAnalysis.hotspots.map((c) => c.id));
+    if (focused) hitIds.add(focused.id);
+    const hitCells = voltageCheckAnalysis.cells.filter((c) => hitIds.has(c.id));
+
+    hitCells.forEach((c) => {
+      const tip = `${c.district} · ${c.nearest33Name} · ${c.dist33Km.toFixed(1)} km`;
+      const marker = L.circleMarker([c.lat, c.lng], {
+        radius: 14,
+        color: 'transparent',
+        weight: 0,
+        fillColor: '#000',
+        fillOpacity: 0.01,
+        interactive: true,
+        className: 'pm-voltage-check-hit',
+      });
+      marker.bindTooltip(tip, {
+        sticky: true,
+        direction: 'top',
+        offset: [0, -8],
+        className: 'pm-tip pm-tip-voltage-check',
+      });
+      marker.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        const st = useNetworkStore.getState();
+        st.addVoltageCheckHit(c);
+        st.focusVoltageCheckCell(c.id);
+      });
+      vcLayer.addLayer(marker);
+    });
+
+    const hoverTip = L.tooltip({
+      sticky: true,
+      direction: 'top',
+      offset: [0, -10],
+      className: 'pm-tip pm-tip-voltage-check',
+      opacity: 0.95,
+    });
+
+    const onMapMove = (e: L.LeafletMouseEvent) => {
+      const analysis = useNetworkStore.getState().voltageCheckAnalysis;
+      if (!analysis?.cells.length) {
+        map.closeTooltip(hoverTip);
+        return;
+      }
+      const cell = nearestVoltageCheckCell(e.latlng.lat, e.latlng.lng, analysis.cells, 3.5);
+      if (!cell) {
+        map.closeTooltip(hoverTip);
+        return;
+      }
+      hoverTip
+        .setLatLng(e.latlng)
+        .setContent(
+          `${escapeHtml(cell.district)} · ${escapeHtml(cell.nearest33Name)} · <strong>${cell.dist33Km.toFixed(1)} km</strong>`,
+        );
+      if (!hoverTip.isOpen()) hoverTip.addTo(map);
+    };
+
+    const onMapClick = (e: L.LeafletMouseEvent) => {
+      if (!useNetworkStore.getState().voltageCheckActive) return;
+      if (!useNetworkStore.getState().showVoltageCheckOnMap) return;
+      const analysis = useNetworkStore.getState().voltageCheckAnalysis;
+      if (!analysis?.cells.length) return;
+      const cell = nearestVoltageCheckCell(e.latlng.lat, e.latlng.lng, analysis.cells, 5);
+      if (!cell) return;
+      const st = useNetworkStore.getState();
+      st.addVoltageCheckHit(cell);
+      st.focusVoltageCheckCell(cell.id);
+    };
+    map.on('mousemove', onMapMove);
+    map.on('click', onMapClick);
+
+    return () => {
+      map.off('mousemove', onMapMove);
+      map.off('click', onMapClick);
+      map.closeTooltip(hoverTip);
+      vcLayer.clearLayers();
+    };
+  }, [
+    voltageCheckActive,
+    showVoltageCheckOnMap,
+    voltageCheckAnalysis,
+    focusedVoltageCheckId,
+    substations,
   ]);
 
   return (

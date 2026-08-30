@@ -359,8 +359,9 @@ textarea {
   gap: 8px;
   padding: 8px;
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--surface-muted, #f8fafc);
   border: 1px solid var(--line);
+  color: var(--ink);
 }
 
 .siting-stats > div {
@@ -370,6 +371,7 @@ textarea {
 
 .siting-stats strong {
   font-size: 14px;
+  color: var(--ink);
 }
 
 .siting-row {
@@ -377,16 +379,49 @@ textarea {
   gap: 6px;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid #7dd3fc;
-  background: #f0f9ff;
+  border: 1px solid color-mix(in srgb, #38bdf8 50%, var(--line));
+  background: var(--surface-muted, #f0f9ff);
+  color: var(--ink);
   cursor: pointer;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .siting-row:hover,
 .siting-row.is-focused {
-  border-color: #0369a1;
-  box-shadow: 0 0 0 2px rgba(3, 105, 161, 0.22);
+  border-color: var(--accent, #0369a1);
+  box-shadow: 0 0 0 2px var(--accent-soft, rgba(3, 105, 161, 0.22));
+}
+
+.voltage-check-row {
+  border-color: color-mix(in srgb, #f87171 45%, var(--line));
+  background: var(--surface-muted, #fff7ed);
+  color: var(--ink);
+}
+
+.voltage-check-row:hover,
+.voltage-check-row.is-focused {
+  border-color: #f87171;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.25);
+}
+
+.pm-tip-voltage-check {
+  background: #7f1d1d !important;
+  color: #fff7ed !important;
+  border: none !important;
+  font-size: 12px;
+  padding: 5px 8px !important;
+}
+
+.pm-tip-voltage-check::before {
+  border-top-color: #7f1d1d !important;
+}
+
+.leaflet-container.pm-voltage-check-active .pm-ss-wrap {
+  filter: none;
+}
+
+.pm-voltage-check-wash {
+  pointer-events: none;
 }
 
 .siting-near-list {
@@ -403,7 +438,7 @@ textarea {
   grid-template-columns: 18px 1fr auto;
   gap: 4px;
   align-items: baseline;
-  color: #334155;
+  color: var(--ink-secondary, #334155);
 }
 
 .siting-near-rank {
@@ -924,6 +959,7 @@ textarea {
   font-weight: 700;
   margin-bottom: 8px;
   letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .legend-row {
@@ -931,7 +967,7 @@ textarea {
   align-items: center;
   gap: 8px;
   margin: 5px 0;
-  color: #334155;
+  color: var(--ink);
 }
 
 .legend-note {

@@ -5,9 +5,10 @@ import { formatCapacity } from '@/domain/geo';
 import type { AssetLifecycle, TrunkLine, VoltageCode } from '@/domain/types';
 import { VOLTAGE_CATALOG } from '@/domain/types';
 import { linesConnectedTo } from '@/lib/networkRepo';
-import { OWNER_OPTIONS } from '@/lib/reports';
+import { OWNER_OPTIONS, downloadCsv } from '@/lib/reports';
 import type { SitingCandidate } from '@/lib/sitingSuggestions';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
+import type { VoltageCheckCell } from '@/lib/voltageCheck';
 import { SCENE_PRESETS } from '@/lib/mapScope';
 import { isDraftStale } from '@/lib/personalDrafts';
 import { useNetworkStore } from '@/store/networkStore';
@@ -62,9 +63,11 @@ export function SidePanel() {
               ? 'Reports'
               : panel === 'siting'
                 ? '33 kV Siting'
-                : panel === 'print'
-                  ? 'Print Map'
-                  : 'Settings';
+                : panel === 'voltage-check'
+                  ? 'Check voltage — far from 33 kV'
+                  : panel === 'print'
+                    ? 'Print Map'
+                    : 'Settings';
 
   return (
     <aside className="side-panel">
@@ -89,6 +92,7 @@ export function SidePanel() {
         {panel === 'layers' && <LayersForm />}
         {panel === 'reports' && <ReportsForm />}
         {panel === 'siting' && <SitingForm />}
+        {panel === 'voltage-check' && <VoltageCheckForm />}
         {panel === 'print' && <PrintForm />}
         {panel === 'settings' && <SettingsForm />}
       </div>
@@ -1833,6 +1837,314 @@ function SitingForm() {
             type="button"
             className="primary-btn ghost"
             onClick={clearSitingAnalysis}
+          >
+            Clear results
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function VoltageCheckForm() {
+  const analysis = useNetworkStore((s) => s.voltageCheckAnalysis);
+  const busy = useNetworkStore((s) => s.voltageCheckBusy);
+  const showOnMap = useNetworkStore((s) => s.showVoltageCheckOnMap);
+  const list = useNetworkStore((s) => s.voltageCheckList);
+  const focusedId = useNetworkStore((s) => s.focusedVoltageCheckId);
+  const selectedDistricts = useNetworkStore((s) => s.voltageCheckDistricts);
+  const cutOffKm = useNetworkStore((s) => s.voltageCheckCutOffKm);
+  const voltageCheckBasemap = useNetworkStore((s) => s.voltageCheckBasemap);
+  const availableDistricts = useNetworkStore((s) => s.availableDistricts);
+  const runVoltageCheckAnalysis = useNetworkStore((s) => s.runVoltageCheckAnalysis);
+  const clearVoltageCheckAnalysis = useNetworkStore((s) => s.clearVoltageCheckAnalysis);
+  const setShowVoltageCheckOnMap = useNetworkStore((s) => s.setShowVoltageCheckOnMap);
+  const focusVoltageCheckCell = useNetworkStore((s) => s.focusVoltageCheckCell);
+  const setVoltageCheckDistricts = useNetworkStore((s) => s.setVoltageCheckDistricts);
+  const toggleVoltageCheckDistrict = useNetworkStore((s) => s.toggleVoltageCheckDistrict);
+  const setVoltageCheckCutOffKm = useNetworkStore((s) => s.setVoltageCheckCutOffKm);
+  const setVoltageCheckBasemap = useNetworkStore((s) => s.setVoltageCheckBasemap);
+  const focusOnlyDistrict = useNetworkStore((s) => s.focusOnlyDistrict);
+  const toggleDistrictFocus = useNetworkStore((s) => s.toggleDistrictFocus);
+
+  const districtOptions = (
+    availableDistricts.length ? availableDistricts : [...SITING_DISTRICTS]
+  )
+    .slice()
+    .sort((a, b) => a.localeCompare(b));
+
+  const [cutOffText, setCutOffText] = useState(
+    cutOffKm != null ? String(cutOffKm) : '',
+  );
+  const autoCutOff = cutOffKm == null;
+
+  useEffect(() => {
+    setCutOffText(cutOffKm != null ? String(cutOffKm) : '');
+  }, [cutOffKm]);
+
+  const focusScopeDistricts = () => {
+    const names = selectedDistricts.length ? selectedDistricts : [...SITING_DISTRICTS];
+    names.forEach((name, i) => {
+      if (i === 0) focusOnlyDistrict(name);
+      else toggleDistrictFocus(name, true);
+    });
+  };
+
+  const applyCutOffFromText = (raw: string) => {
+    const t = raw.trim();
+    if (!t) {
+      setVoltageCheckCutOffKm(null);
+      return;
+    }
+    const n = Number(t);
+    if (!Number.isFinite(n) || n <= 0) {
+      setVoltageCheckCutOffKm(null);
+      setCutOffText('');
+      return;
+    }
+    setVoltageCheckCutOffKm(n);
+  };
+
+  const run = () => {
+    applyCutOffFromText(cutOffText);
+    focusScopeDistricts();
+    void runVoltageCheckAnalysis();
+  };
+
+  const exportList = () => {
+    downloadCsv(
+      'powermap-far-from-33kv.csv',
+      [
+        'Area / district',
+        'Nearest 33 kV SS',
+        'Distance km',
+        'Also far from 132 kV',
+        'Nearest 132 kV SS',
+        'Distance to 132 km',
+        'Lat',
+        'Lng',
+      ],
+      list.map((c: VoltageCheckCell) => [
+        c.district,
+        c.nearest33Name,
+        c.dist33Km.toFixed(2),
+        c.farFrom132 ? 'yes' : '',
+        c.nearest132Name ?? '',
+        c.dist132Km != null ? c.dist132Km.toFixed(2) : '',
+        c.lat,
+        c.lng,
+      ]),
+    );
+  };
+
+  return (
+    <div className="form-stack">
+      <p className="muted">
+        Inspection view of how far places sit from the nearest <strong>in-service 33 kV</strong>{' '}
+        substation. Pick any district(s) and a cut-off (or leave Auto). Colour marks far tails —
+        not measured voltage. Use Google map for place names, or no basemap for a clearer wash.
+      </p>
+
+      <div className="field">
+        <span className="section-label">Basemap</span>
+        <div className="chip-group" role="group" aria-label="Voltage check basemap">
+          {(
+            [
+              { id: 'google' as const, label: 'Google map' },
+              { id: 'none' as const, label: 'No basemap' },
+            ] as const
+          ).map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              className={`chip${voltageCheckBasemap === b.id ? ' on' : ''}`}
+              onClick={() => setVoltageCheckBasemap(b.id)}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <label className="field">
+        <span className="section-label">Cut-off from nearest 33 kV</span>
+        <div className="btn-row" style={{ alignItems: 'center', gap: 8 }}>
+          <input
+            type="number"
+            min={1}
+            max={80}
+            step={0.5}
+            placeholder="Auto"
+            disabled={autoCutOff}
+            value={autoCutOff ? '' : cutOffText}
+            onChange={(e) => setCutOffText(e.target.value)}
+            onBlur={(e) => applyCutOffFromText(e.target.value)}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <span className="muted">km</span>
+        </div>
+        <label className="check-row" style={{ marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={autoCutOff}
+            onChange={(e) => {
+              if (e.target.checked) {
+                setVoltageCheckCutOffKm(null);
+                setCutOffText('');
+              } else {
+                const seed = analysis?.cutOffKm ?? 8;
+                setVoltageCheckCutOffKm(seed);
+                setCutOffText(String(Number(seed.toFixed(1))));
+              }
+            }}
+          />
+          Auto from typical 33 kV spacing
+          {analysis && autoCutOff ? ` (${analysis.cutOffKm.toFixed(1)} km last run)` : ''}
+        </label>
+      </label>
+
+      <div className="field">
+        <div className="district-focus-header">
+          <span className="section-label">Districts</span>
+          <span className="btn-row">
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => setVoltageCheckDistricts([...SITING_DISTRICTS])}
+            >
+              Study trio
+            </button>
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => setVoltageCheckDistricts(districtOptions)}
+            >
+              All
+            </button>
+          </span>
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          {selectedDistricts.length} selected · tick any district below
+        </p>
+        <div className="district-check-list voltage-check-districts">
+          {districtOptions.map((name) => {
+            const on = selectedDistricts.some((d) => d.toLowerCase() === name.toLowerCase());
+            return (
+              <label key={name} className={`district-check${on ? '' : ' is-dimmed'}`}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggleVoltageCheckDistrict(name)}
+                />
+                <span>{name}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="btn-row">
+        <button
+          type="button"
+          className="primary-btn"
+          disabled={busy || selectedDistricts.length === 0}
+          onClick={run}
+        >
+          {busy ? 'Analysing…' : analysis ? 'Re-run check' : 'Run check'}
+        </button>
+        <button
+          type="button"
+          className="primary-btn ghost"
+          disabled={busy || selectedDistricts.length === 0}
+          onClick={focusScopeDistricts}
+        >
+          Focus districts
+        </button>
+      </div>
+
+      {analysis && (
+        <>
+          <div className="siting-stats">
+            <div>
+              <span className="muted">33 kV SS in scope</span>
+              <strong>{analysis.ss33Count}</strong>
+            </div>
+            <div>
+              <span className="muted">Typical spacing</span>
+              <strong>{analysis.targetSpacingKm.toFixed(1)} km</strong>
+            </div>
+            <div>
+              <span className="muted">Cut-off used</span>
+              <strong>{analysis.cutOffKm.toFixed(1)} km</strong>
+            </div>
+            <div>
+              <span className="muted">Districts</span>
+              <strong>{analysis.districts.length}</strong>
+            </div>
+            <div>
+              <span className="muted">Far cells</span>
+              <strong>{analysis.cells.length}</strong>
+            </div>
+            <div>
+              <span className="muted">List rows</span>
+              <strong>{list.length}</strong>
+            </div>
+          </div>
+
+          {analysis.message && <p className="muted">{analysis.message}</p>}
+
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={showOnMap}
+              onChange={(e) => setShowVoltageCheckOnMap(e.target.checked)}
+            />
+            Show wash on map
+          </label>
+
+          <div className="btn-row">
+            <button
+              type="button"
+              className="primary-btn ghost"
+              disabled={list.length === 0}
+              onClick={exportList}
+            >
+              Export CSV
+            </button>
+          </div>
+
+          <div className="suggestion-list">
+            {list.map((c: VoltageCheckCell) => (
+              <div
+                key={c.id}
+                className={`siting-row voltage-check-row${focusedId === c.id ? ' is-focused' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => focusVoltageCheckCell(c.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    focusVoltageCheckCell(c.id);
+                  }
+                }}
+              >
+                <div>
+                  <strong>
+                    {c.dist33Km.toFixed(1)} km · {c.district}
+                  </strong>
+                  <p className="muted">
+                    Nearest 33 kV: {c.nearest33Name}
+                    {c.farFrom132 ? ' · also far from 132 kV' : ''}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            className="primary-btn ghost"
+            onClick={clearVoltageCheckAnalysis}
           >
             Clear results
           </button>

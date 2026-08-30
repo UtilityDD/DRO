@@ -1405,6 +1405,15 @@ button {
   box-shadow: var(--dro-shadow);
 }
 
+.mode-powermap .pm-root .map-legend .legend-title,
+.mode-powermap .pm-root .map-legend .legend-row {
+  color: var(--dro-text) !important;
+}
+
+.mode-powermap .pm-root .map-legend .legend-note {
+  color: var(--dro-muted) !important;
+}
+
 .mode-powermap .pm-root .map-root,
 .mode-powermap .pm-root .leaflet-container {
   background: var(--dro-bg-soft);
@@ -1567,10 +1576,47 @@ button {
 .mode-powermap .pm-root .related-line-card,
 .mode-powermap .pm-root .endpoint-coords,
 .mode-powermap .pm-root .sync-pill,
+.mode-powermap .pm-root .siting-stats,
+.mode-powermap .pm-root .siting-row,
+.mode-powermap .pm-root .voltage-check-row,
 .mode-powermap .pm-root kbd {
   background: var(--surface-muted) !important;
   color: var(--ink) !important;
   border-color: var(--line) !important;
+}
+
+.mode-powermap .pm-root .siting-stats strong,
+.mode-powermap .pm-root .siting-row strong,
+.mode-powermap .pm-root .voltage-check-row strong,
+.mode-powermap .pm-root .siting-near-list,
+.mode-powermap .pm-root .siting-near-list li {
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .siting-stats .muted,
+.mode-powermap .pm-root .siting-row .muted,
+.mode-powermap .pm-root .voltage-check-row .muted {
+  color: var(--muted) !important;
+}
+
+.mode-powermap .pm-root .siting-row {
+  border-color: color-mix(in srgb, #38bdf8 45%, var(--line)) !important;
+}
+
+.mode-powermap .pm-root .siting-row:hover,
+.mode-powermap .pm-root .siting-row.is-focused {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-soft) !important;
+}
+
+.mode-powermap .pm-root .voltage-check-row {
+  border-color: color-mix(in srgb, #f87171 40%, var(--line)) !important;
+}
+
+.mode-powermap .pm-root .voltage-check-row:hover,
+.mode-powermap .pm-root .voltage-check-row.is-focused {
+  border-color: #f87171 !important;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.25) !important;
 }
 
 .mode-powermap .pm-root .chip.on {
