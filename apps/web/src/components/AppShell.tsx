@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth';
 import { canAccessPath, canView, api, type Office } from '../api';
+import { recoverIfChunkError } from '../lib/chunkReload';
 import { PageHeadingProvider } from '../lib/pageHeading';
 import { PresentLaser } from './PresentLaser';
+import { RouteSuspense } from './RouteSuspense';
 
 type ThemeId =
   | 'home'
@@ -331,7 +333,10 @@ const prefetched = new Set<string>();
 function prefetchRoute(to: string) {
   if (prefetched.has(to)) return;
   prefetched.add(to);
-  routeChunkLoaders[to]?.().catch(() => prefetched.delete(to));
+  routeChunkLoaders[to]?.().catch((err) => {
+    prefetched.delete(to);
+    recoverIfChunkError(err);
+  });
   if (to === '/powermap') {
     // Warm the district geometry into the HTTP/SW cache ahead of the first render.
     fetch('/geo/wb-districts.geojson').catch(() => {});
@@ -381,6 +386,9 @@ export function AppShell() {
     setMoreOpen(false);
     setPresentNav(false);
     setHeading('');
+    if (import.meta.env.PROD) {
+      void import('../lib/pwaRegister').then((m) => m.checkForAppUpdate());
+    }
   }, [location.pathname]);
 
   useEffect(() => {
@@ -749,7 +757,9 @@ export function AppShell() {
 
           <div className={`page-content${mapMode ? ' page-content-flush' : ''}`}>
             <PageHeadingProvider set={setHeading}>
-              <Outlet />
+              <RouteSuspense>
+                <Outlet />
+              </RouteSuspense>
             </PageHeadingProvider>
           </div>
         </div>

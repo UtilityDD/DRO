@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      injectRegister: process.env.NODE_ENV === 'development' ? false : 'auto',
+      injectRegister: false,
       includeAssets: [
         'favicon.png',
         'favicon-32.png',
@@ -36,7 +36,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//, /^\/assets\//],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         runtimeCaching: [
           {
