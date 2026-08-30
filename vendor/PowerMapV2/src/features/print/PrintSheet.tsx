@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import { formatCapacity, installedMva, parallelCircuitLatLngs } from '@/domain/geo';
 import type { Substation, TrunkLine } from '@/domain/types';
-import { createBasemapLayer } from '@/features/map/boundaryLayers';
+import { createBasemapLayer, basemapToBack } from '@/features/map/boundaryLayers';
 import { feederLabelOffsetPx, feederLabelPlacement } from '@/features/map/feederLabels';
 import { lineStyle, substationIcon } from '@/features/map/symbology';
 import { layoutSsLabels } from '@/features/print/labelLayout';
@@ -10,6 +10,8 @@ import {
   buildPrintAssets,
   buildPrintStyleSheet,
   paperSizeMm,
+  printSheetTitle,
+  PRINT_BASEMAPS,
   type PrintSettings,
 } from '@/lib/printLayout';
 import { useNetworkStore } from '@/store/networkStore';
@@ -67,6 +69,7 @@ function listColumnCount(n: number): number {
 function PrintMiniMap({
   substations,
   lines,
+  inDistrictIds,
   bounds,
   districtBoundaries,
   settings,
@@ -74,6 +77,7 @@ function PrintMiniMap({
 }: {
   substations: Substation[];
   lines: TrunkLine[];
+  inDistrictIds: string[];
   bounds: [[number, number], [number, number]] | null;
   districtBoundaries: { name: string; latLngRings: [number, number][][] }[];
   settings: PrintSettings;
@@ -83,39 +87,40 @@ function PrintMiniMap({
   const mapRef = useRef<L.Map | null>(null);
   const networkRef = useRef<L.FeatureGroup | null>(null);
   const districtsLayerRef = useRef<L.FeatureGroup | null>(null);
+  const basemapRef = useRef<L.Layer | null>(null);
   const placeLabelsRef = useRef<() => void>(() => {});
   const boundsRef = useRef(bounds);
   const settingsRef = useRef(settings);
+  const inDistrictRef = useRef(inDistrictIds);
   boundsRef.current = bounds;
   settingsRef.current = settings;
+  inDistrictRef.current = inDistrictIds;
 
   const fitToContent = (map: L.Map) => {
     const s = settingsRef.current;
-    const group = networkRef.current;
     const districts = districtsLayerRef.current;
     map.invalidateSize(false);
     const size = map.getSize();
     if (size.x < 40 || size.y < 40) return;
 
+    // Prefer district (+ stored core bounds). Do not fit to outside stubs —
+    // that zooms the sheet out and wastes the page.
     let target: L.LatLngBounds | null = null;
     if (districts && districts.getLayers().length > 0) {
       const db = districts.getBounds();
       if (db.isValid()) target = db;
     }
-    if (group && group.getLayers().length > 0) {
-      const gb = group.getBounds();
-      if (gb.isValid()) target = target ? target.extend(gb) : gb;
-    }
-    if (!target && boundsRef.current) {
-      target = L.latLngBounds(boundsRef.current);
+    if (boundsRef.current) {
+      const bb = L.latLngBounds(boundsRef.current);
+      if (bb.isValid()) target = target ? target.extend(bb) : bb;
     }
     if (!target || !target.isValid()) {
       map.setView([25.85, 88.55], 9);
       return;
     }
 
-    const padX = Math.max(6, Math.round(size.x * 0.02));
-    const padY = Math.max(6, Math.round(size.y * 0.02));
+    const padX = Math.max(4, Math.round(size.x * 0.012));
+    const padY = Math.max(4, Math.round(size.y * 0.012));
     map.fitBounds(target, {
       animate: false,
       padding: [padY, padX],
@@ -135,7 +140,13 @@ function PrintMiniMap({
       boxZoom: false,
       keyboard: false,
     });
-    createBasemapLayer('esri').addTo(map);
+    const initialBasemap = settingsRef.current.basemap || 'esri';
+    if (initialBasemap !== 'none') {
+      const layer = createBasemapLayer(initialBasemap);
+      layer.addTo(map);
+      basemapRef.current = layer;
+    }
+    map.getContainer().classList.toggle('basemap-none', initialBasemap === 'none');
     const districts = L.featureGroup().addTo(map);
     const network = L.featureGroup().addTo(map);
     districtsLayerRef.current = districts;
@@ -170,8 +181,31 @@ function PrintMiniMap({
       mapRef.current = null;
       networkRef.current = null;
       districtsLayerRef.current = null;
+      basemapRef.current = null;
     };
   }, []);
+
+  // Swap basemap when preview selection changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const id = settings.basemap || 'esri';
+    if (basemapRef.current) {
+      map.removeLayer(basemapRef.current);
+      basemapRef.current = null;
+    }
+    if (id !== 'none') {
+      const next = createBasemapLayer(id);
+      next.addTo(map);
+      basemapToBack(next);
+      basemapRef.current = next;
+    }
+    map.getContainer().classList.toggle('basemap-none', id === 'none');
+    window.requestAnimationFrame(() => {
+      fitToContent(map);
+      placeLabelsRef.current();
+    });
+  }, [settings.basemap]);
 
   // Draw district boundaries
   useEffect(() => {
@@ -187,37 +221,14 @@ function PrintMiniMap({
           group.addLayer(
             L.polygon(ring, {
               color: '#0f172a',
-              weight: 1.75,
+              weight: 1.5,
               opacity: 0.9,
               fillColor: '#64748b',
-              fillOpacity: 0.05,
+              fillOpacity: 0.04,
               interactive: false,
             }),
           );
         });
-        const ring = d.latLngRings[0];
-        if (ring?.length) {
-          let lat = 0;
-          let lng = 0;
-          ring.forEach(([a, b]) => {
-            lat += a;
-            lng += b;
-          });
-          lat /= ring.length;
-          lng /= ring.length;
-          group.addLayer(
-            L.marker([lat, lng], {
-              icon: L.divIcon({
-                className: 'print-map-label print-district-label',
-                html: `<span>${escapeHtml(d.name)}</span>`,
-                iconSize: [0, 0],
-                iconAnchor: [0, 0],
-              }),
-              interactive: false,
-              zIndexOffset: 80,
-            }),
-          );
-        }
       });
     }
 
@@ -273,6 +284,9 @@ function PrintMiniMap({
     });
 
     substations.forEach((ss) => {
+      // In-district symbols only here. Outside symbols are added after fitBounds
+      // when the SS falls inside the page view.
+      if (inDistrictIds.length && !inDistrictIds.includes(ss.id)) return;
       group.addLayer(
         L.marker([ss.lat, ss.lng], {
           icon: substationIcon(ss.voltageCode, ss.status, false),
@@ -327,68 +341,141 @@ function PrintMiniMap({
     };
 
     const placeLabels = () => {
-      if (!settings.showSsNames) return;
       group.eachLayer((layer) => {
-        const any = layer as L.Layer & { options?: { pmPrintLabel?: boolean } };
-        if (any.options?.pmPrintLabel) group.removeLayer(layer);
+        const any = layer as L.Layer & {
+          options?: { pmPrintLabel?: boolean; pmPrintOutsideSs?: boolean };
+        };
+        if (any.options?.pmPrintLabel || any.options?.pmPrintOutsideSs) {
+          group.removeLayer(layer);
+        }
       });
 
-      const placements = layoutSsLabels(
-        map,
-        substations.map((ss) => ({
-          id: ss.id,
-          name: ss.name,
-          lat: ss.lat,
-          lng: ss.lng,
-        })),
-      );
+      const inSet = new Set(inDistrictIds);
+      const coreSs =
+        inDistrictIds.length > 0
+          ? substations.filter((ss) => inSet.has(ss.id))
+          : substations;
 
-      placements.forEach((p) => {
-        if (p.callout) {
-          group.addLayer(
-            L.polyline(
-              [
-                [p.anchorLat, p.anchorLng],
-                [p.labelLat, p.labelLng],
-              ],
-              {
-                color: '#94a3b8',
-                weight: 0.8,
-                opacity: 0.7,
-                dashArray: '2 3',
+      if (settings.showSsNames) {
+        const placements = layoutSsLabels(
+          map,
+          coreSs.map((ss) => ({
+            id: ss.id,
+            name: ss.name,
+            lat: ss.lat,
+            lng: ss.lng,
+          })),
+        );
+
+        placements.forEach((p) => {
+          if (p.callout) {
+            group.addLayer(
+              L.polyline(
+                [
+                  [p.anchorLat, p.anchorLng],
+                  [p.labelLat, p.labelLng],
+                ],
+                {
+                  color: '#94a3b8',
+                  weight: 0.8,
+                  opacity: 0.7,
+                  dashArray: '2 3',
+                  interactive: false,
+                  pmPrintLabel: true,
+                } as L.PolylineOptions & { pmPrintLabel: boolean },
+              ),
+            );
+            group.addLayer(
+              L.circleMarker([p.anchorLat, p.anchorLng], {
+                radius: 2.2,
+                color: '#475569',
+                weight: 1,
+                fillColor: '#ffffff',
+                fillOpacity: 1,
                 interactive: false,
                 pmPrintLabel: true,
-              } as L.PolylineOptions & { pmPrintLabel: boolean },
-            ),
-          );
-          group.addLayer(
-            L.circleMarker([p.anchorLat, p.anchorLng], {
-              radius: 2.2,
-              color: '#475569',
-              weight: 1,
-              fillColor: '#ffffff',
-              fillOpacity: 1,
-              interactive: false,
-              pmPrintLabel: true,
-            } as L.CircleMarkerOptions & { pmPrintLabel: boolean }),
-          );
-        }
+              } as L.CircleMarkerOptions & { pmPrintLabel: boolean }),
+            );
+          }
 
-        const icon = L.divIcon({
-          className: `print-map-label print-ss-label${p.callout ? ' is-callout' : ''}`,
-          html: `<span>${escapeHtml(p.name)}</span>`,
-          iconSize: [0, 0],
-          iconAnchor: [0, 0],
+          const icon = L.divIcon({
+            className: `print-map-label print-ss-label${p.callout ? ' is-callout' : ''}`,
+            html: `<span>${escapeHtml(p.name)}</span>`,
+            iconSize: [0, 0],
+            iconAnchor: [0, 0],
+          });
+          group.addLayer(
+            L.marker([p.labelLat, p.labelLng], {
+              icon,
+              interactive: false,
+              zIndexOffset: 500,
+              pmPrintLabel: true,
+            } as L.MarkerOptions & { pmPrintLabel: boolean }),
+          );
         });
-        group.addLayer(
-          L.marker([p.labelLat, p.labelLng], {
-            icon,
-            interactive: false,
-            zIndexOffset: 500,
-            pmPrintLabel: true,
-          } as L.MarkerOptions & { pmPrintLabel: boolean }),
-        );
-      });
+      }
+
+      // Outside linked ends: symbol + name if the SS sits in the page view;
+      // otherwise feeder stub name only (no symbol off-page).
+      if (inDistrictIds.length > 0) {
+        const view = map.getBounds().pad(0.02);
+        const labeled = new Set<string>();
+        lines.forEach((line) => {
+          const fromIn = inSet.has(line.fromId);
+          const toIn = inSet.has(line.toId);
+          if (fromIn === toIn) return;
+          const inside = ssById.get(fromIn ? line.fromId : line.toId);
+          const outside = ssById.get(fromIn ? line.toId : line.fromId);
+          if (!inside || !outside || labeled.has(outside.id)) return;
+          labeled.add(outside.id);
+
+          const onPage = view.contains(L.latLng(outside.lat, outside.lng));
+          if (onPage) {
+            group.addLayer(
+              L.marker([outside.lat, outside.lng], {
+                icon: substationIcon(outside.voltageCode, outside.status, false),
+                interactive: false,
+                zIndexOffset: 420,
+                pmPrintOutsideSs: true,
+              } as L.MarkerOptions & { pmPrintOutsideSs: boolean }),
+            );
+            if (settings.showSsNames) {
+              const icon = L.divIcon({
+                className: 'print-map-label print-ss-label print-link-label',
+                html: `<span>${escapeHtml(outside.name)}</span>`,
+                iconSize: [0, 0],
+                iconAnchor: [0, 0],
+              });
+              group.addLayer(
+                L.marker([outside.lat, outside.lng], {
+                  icon,
+                  interactive: false,
+                  zIndexOffset: 480,
+                  pmPrintLabel: true,
+                } as L.MarkerOptions & { pmPrintLabel: boolean }),
+              );
+            }
+          } else if (settings.showSsNames) {
+            const t = 0.78;
+            const lat = inside.lat + (outside.lat - inside.lat) * t;
+            const lng = inside.lng + (outside.lng - inside.lng) * t;
+            const icon = L.divIcon({
+              className: 'print-map-label print-ss-label print-link-label is-callout',
+              html: `<span>${escapeHtml(outside.name)}</span>`,
+              iconSize: [0, 0],
+              iconAnchor: [0, 0],
+            });
+            group.addLayer(
+              L.marker([lat, lng], {
+                icon,
+                interactive: false,
+                zIndexOffset: 480,
+                pmPrintLabel: true,
+              } as L.MarkerOptions & { pmPrintLabel: boolean }),
+            );
+          }
+        });
+      }
     };
     placeLabelsRef.current = () => {
       placeFeederLengths();
@@ -404,7 +491,15 @@ function PrintMiniMap({
       placeLabels();
     }, 140);
     return () => window.clearTimeout(t);
-  }, [substations, lines, bounds, settings.showSsNames, settings.showFeederLength, layoutKey]);
+  }, [
+    substations,
+    lines,
+    inDistrictIds,
+    bounds,
+    settings.showSsNames,
+    settings.showFeederLength,
+    layoutKey,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -457,21 +552,27 @@ export function PrintSheet({
   const layoutKey = `${settings.paperId}-${settings.orientation}-${size.widthMm}x${size.heightMm}-${settings.listSide}`;
 
   const listRows = useMemo(() => {
-    const rows = [...(bundle?.substations ?? [])].sort((a, b) => {
+    const inDistrict = new Set(bundle?.inDistrictIds ?? []);
+    const source =
+      inDistrict.size > 0
+        ? (bundle?.substations ?? []).filter((s) => inDistrict.has(s.id))
+        : (bundle?.substations ?? []);
+    return [...source].sort((a, b) => {
       const va = Number(a.voltageCode);
       const vb = Number(b.voltageCode);
       if (vb !== va) return vb - va;
       return a.name.localeCompare(b.name);
     });
-    return rows;
   }, [bundle]);
 
   const totalMva = listRows.reduce((sum, s) => sum + installedMva(s.transformers), 0);
   const listCols = listColumnCount(listRows.length);
-  const districtLabel =
-    settings.districts.length === 0
-      ? 'All districts (filtered network)'
-      : settings.districts.join(', ');
+  const sheetTitle = printSheetTitle(settings, bundle?.districtNames ?? []);
+  const sheetSub =
+    settings.subtitle.trim() ||
+    (listRows.length
+      ? `${listRows.length} substations · ${totalMva.toFixed(0)} MVA`
+      : '');
 
   useEffect(() => {
     document.body.classList.add('print-preview-open');
@@ -485,12 +586,40 @@ export function PrintSheet({
     }
     pageStyle.textContent = buildPrintStyleSheet(settings);
 
+    const chromeSel =
+      '.app-shell > .app-bar, .app-shell > .bottom-nav, .app-shell .sheet-root, .app-shell .present-nav-root, .present-laser-layer, .app-shell .pm-desk-toolbar, .app-shell .page-masthead';
+
+    const hideShellChrome = () => {
+      document.querySelectorAll<HTMLElement>(chromeSel).forEach((el) => {
+        if (el.dataset.pmPrintHide === undefined) {
+          el.dataset.pmPrintHide = el.getAttribute('style') ?? '';
+        }
+        el.style.setProperty('display', 'none', 'important');
+        el.style.setProperty('visibility', 'hidden', 'important');
+        el.style.setProperty('height', '0', 'important');
+      });
+    };
+    const restoreShellChrome = () => {
+      document.querySelectorAll<HTMLElement>('[data-pm-print-hide]').forEach((el) => {
+        const prev = el.dataset.pmPrintHide;
+        el.removeAttribute('data-pm-print-hide');
+        if (!prev) el.removeAttribute('style');
+        else el.setAttribute('style', prev);
+      });
+    };
+
+    // Hide as soon as preview opens — print engines often use a narrow page
+    // width that re-shows mobile app-bar / bottom-nav via !important CSS.
+    hideShellChrome();
+
     const onBeforePrint = () => {
       document.body.classList.add('is-printing');
+      hideShellChrome();
       window.dispatchEvent(new Event('powermap:print-prepare'));
     };
     const onAfterPrint = () => {
       document.body.classList.remove('is-printing');
+      // Keep chrome hidden while preview stays open; restore on unmount.
       setIsPrinting(false);
     };
     window.addEventListener('beforeprint', onBeforePrint);
@@ -499,6 +628,7 @@ export function PrintSheet({
     return () => {
       document.body.classList.remove('print-preview-open');
       document.body.classList.remove('is-printing');
+      restoreShellChrome();
       pageStyle?.remove();
       window.removeEventListener('beforeprint', onBeforePrint);
       window.removeEventListener('afterprint', onAfterPrint);
@@ -508,12 +638,23 @@ export function PrintSheet({
   const doPrint = () => {
     setIsPrinting(true);
     document.body.classList.add('is-printing');
-    // Expand to real paper mm, then let Leaflet measure before print()
+    document
+      .querySelectorAll<HTMLElement>(
+        '.app-shell > .app-bar, .app-shell > .bottom-nav, .app-shell .sheet-root, .app-shell .present-nav-root, .present-laser-layer, .app-shell .pm-desk-toolbar, .app-shell .page-masthead',
+      )
+      .forEach((el) => {
+        if (el.dataset.pmPrintHide === undefined) {
+          el.dataset.pmPrintHide = el.getAttribute('style') ?? '';
+        }
+        el.style.setProperty('display', 'none', 'important');
+        el.style.setProperty('visibility', 'hidden', 'important');
+        el.style.setProperty('height', '0', 'important');
+      });
     window.requestAnimationFrame(() => {
       window.dispatchEvent(new Event('powermap:print-prepare'));
       window.setTimeout(() => {
         window.dispatchEvent(new Event('powermap:print-prepare'));
-        window.setTimeout(() => window.print(), 400);
+        window.setTimeout(() => window.print(), 800);
       }, 200);
     });
   };
@@ -598,6 +739,23 @@ export function PrintSheet({
               </select>
             </label>
           )}
+          <label>
+            Basemap
+            <select
+              value={settings.basemap || 'esri'}
+              onChange={(e) =>
+                setPrintSettings({
+                  basemap: e.target.value as PrintSettings['basemap'],
+                })
+              }
+            >
+              {PRINT_BASEMAPS.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="btn-row">
           <button type="button" className="primary-btn" onClick={doPrint} disabled={busy}>
@@ -629,29 +787,28 @@ export function PrintSheet({
           }
         >
           <header className="print-sheet-header">
-            <div>
-              <h1>{settings.title || 'Power Network Map'}</h1>
-              <p>
-                {settings.subtitle || districtLabel}
-                {bundle
-                  ? ` · ${bundle.substations.length} substations · ${bundle.lines.length} feeders`
-                  : ''}
-                {` · ${size.widthMm}×${size.heightMm} mm`}
-              </p>
+            <div className="print-sheet-title">
+              <h1>{sheetTitle}</h1>
+              {sheetSub ? <p>{sheetSub}</p> : null}
             </div>
-            <div className="print-sheet-legend">
+            <div className="print-sheet-legend" aria-label="Voltage legend">
               <span>
-                <i className="sym square" /> 400
+                <i className="sym square" />
+                400
               </span>
               <span>
-                <i className="sym diamond" /> 220
+                <i className="sym diamond" />
+                220
               </span>
               <span>
-                <i className="sym hex" /> 132
+                <i className="sym hex" />
+                132
               </span>
               <span>
-                <i className="sym circle" /> 33
+                <i className="sym circle" />
+                33
               </span>
+              <span className="print-legend-note">outline = proposed</span>
             </div>
           </header>
 
@@ -663,6 +820,7 @@ export function PrintSheet({
                 <PrintMiniMap
                   substations={bundle.substations}
                   lines={bundle.lines}
+                  inDistrictIds={bundle.inDistrictIds}
                   bounds={bundle.bounds}
                   districtBoundaries={bundle.districtBoundaries}
                   settings={settings}
@@ -673,9 +831,9 @@ export function PrintSheet({
 
             <aside className="print-side-list">
               <div className="print-side-head">
-                <h2>Substation capacities</h2>
+                <h2>Capacities</h2>
                 <p>
-                  {listRows.length} nos · {totalMva.toFixed(1)} MVA · {listCols} col
+                  {listRows.length} SS · {totalMva.toFixed(1)} MVA
                 </p>
               </div>
               <ol className="print-ss-list">
@@ -700,7 +858,7 @@ export function PrintSheet({
                   <li className="print-ss-empty">No substations in selection.</li>
                 )}
               </ol>
-              <p className="print-side-foot">* Proposed · Filled symbols = existing</p>
+              <p className="print-side-foot">* Proposed</p>
             </aside>
           </div>
         </div>

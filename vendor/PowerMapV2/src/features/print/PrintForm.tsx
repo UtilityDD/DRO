@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
-import { PRINT_PAPERS, paperSizeMm, type PrintPaperId } from '@/lib/printLayout';
+import { PRINT_PAPERS, PRINT_BASEMAPS, paperSizeMm, type PrintPaperId } from '@/lib/printLayout';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 
 const QUICK_DISTRICTS = [...SITING_DISTRICTS];
@@ -46,13 +46,14 @@ export function PrintForm() {
         <input
           value={settings.title}
           onChange={(e) => setPrintSettings({ title: e.target.value })}
+          placeholder="Auto: Power Map of {District}"
         />
       </Field>
       <Field label="Subtitle (optional)">
         <input
           value={settings.subtitle}
           onChange={(e) => setPrintSettings({ subtitle: e.target.value })}
-          placeholder="Auto-fills from selected districts if empty"
+          placeholder="Auto: SS count · MVA"
         />
       </Field>
 
@@ -170,11 +171,27 @@ export function PrintForm() {
       </div>
       <p className="muted">
         {settings.districts.length === 0
-          ? 'No district filter — uses all substations (still respects proposed toggle).'
-          : `${settings.districts.length} district(s) selected.`}
+          ? 'No district filter — full network (still respects proposed toggle).'
+          : `${settings.districts.length} district(s) — map zooms to the area. Linked outside SS show a symbol + name when they fall in the page view.`}
       </p>
 
       <p className="section-label">Map content</p>
+      <div className="field">
+        <span>Basemap</span>
+        <div className="chip-group" style={{ marginTop: 6 }}>
+          {PRINT_BASEMAPS.map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              className={`chip${(settings.basemap || 'esri') === b.id ? ' on' : ''}`}
+              aria-pressed={(settings.basemap || 'esri') === b.id}
+              onClick={() => setPrintSettings({ basemap: b.id })}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <label className="check-row">
         <input
           type="checkbox"

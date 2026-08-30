@@ -755,14 +755,6 @@ export function AppShell() {
         </div>
       </div>
 
-      {mapMode && !present && (
-        <div className="present-fab-stack">
-          {appearanceBtn('fab')}
-          {laserBtn('fab')}
-          {presentBtn('fab')}
-        </div>
-      )}
-
       {present && (
         <>
           <button

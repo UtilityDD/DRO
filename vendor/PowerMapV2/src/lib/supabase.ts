@@ -32,4 +32,15 @@ export const T = {
   vTapLaterals: 'pm_v_tap_laterals',
   editors: 'pm_editors',
   editSuggestions: 'pm_edit_suggestions',
+  networkStamp: 'pm_network_stamp',
 } as const;
+
+export function getPowerMapClient() {
+  return supabase;
+}
+export function isPowerMapConfigured() {
+  return supabaseConfigured;
+}
+export function getPowerMapTables() {
+  return T;
+}

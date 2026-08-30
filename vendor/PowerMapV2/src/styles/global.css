@@ -1871,47 +1871,74 @@ code {
   flex-direction: column;
   overflow: hidden;
   height: auto;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 .print-sheet-header {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 10px 14px 8px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 10px 4px;
   border-bottom: 1px solid #cbd5e1;
+  flex: 0 0 auto;
 }
 
-.print-sheet-header h1 {
+.print-sheet-title h1 {
   margin: 0;
-  font-size: 18px;
-  letter-spacing: -0.02em;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
 }
 
-.print-sheet-header p {
-  margin: 4px 0 0;
-  font-size: 11px;
+.print-sheet-title p {
+  margin: 1px 0 0;
+  font-size: 9px;
   color: #64748b;
+  line-height: 1.2;
 }
 
 .print-sheet-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 10px;
-  color: #475569;
-  justify-content: flex-end;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 8px;
+  font-weight: 600;
+  color: #334155;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #f8fafc;
 }
 
 .print-sheet-legend span {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .print-sheet-legend .sym {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
+}
+
+.print-legend-note {
+  margin-left: 2px;
+  padding-left: 6px;
+  border-left: 1px solid #e2e8f0;
+  font-weight: 500;
+  color: #64748b;
+  text-transform: none;
+}
+
+.print-link-label span {
+  font-weight: 500 !important;
+  color: #475569 !important;
+  font-style: italic;
 }
 
 .print-sheet-body {
@@ -1967,6 +1994,7 @@ code {
   border-top: 1px solid #cbd5e1;
   background: #f8fafc;
   flex-shrink: 0;
+  max-height: 22%;
 }
 
 .print-side-head {
@@ -1974,28 +2002,28 @@ code {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 2px 8px;
   border-bottom: 1px solid #e2e8f0;
 }
 
 .print-side-head h2 {
   margin: 0;
-  font-size: 10px;
+  font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .print-side-head p {
   margin: 0;
-  font-size: 9px;
+  font-size: 8px;
   color: #64748b;
 }
 
 .print-ss-list {
   list-style: none;
   margin: 0;
-  padding: 4px 6px 6px;
-  overflow: visible;
+  padding: 2px 6px 4px;
+  overflow: hidden;
   flex: 1;
   column-count: var(--print-list-cols, 2);
   column-gap: 8px;
@@ -2018,7 +2046,8 @@ code {
 }
 
 .print-ss-idx {
-  font-family: var(--mono);
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
   color: #94a3b8;
   font-size: 7px;
   text-align: right;
@@ -2033,6 +2062,12 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  letter-spacing: 0.01em;
+}
+
+.print-ss-list li.is-outside .print-ss-name {
+  font-weight: 500;
+  color: #64748b;
 }
 
 .print-ss-cap {
@@ -2040,14 +2075,16 @@ code {
   margin: 0;
   padding: 0;
   font-size: 7.5px;
-  font-family: var(--mono);
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
   color: #0f172a;
   white-space: nowrap;
 }
 
 .print-ss-kv {
-  font-family: var(--mono);
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
   font-size: 7px;
   color: #64748b;
   white-space: nowrap;
@@ -2108,8 +2145,10 @@ code {
   border-radius: 0;
   background: transparent;
   color: #0f172a;
-  font-size: 9px;
-  font-weight: 700;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   line-height: 1.15;
   white-space: nowrap;
   box-shadow: none;
@@ -2136,8 +2175,9 @@ code {
   border-radius: 2px;
   background: transparent;
   color: #334155;
-  font-size: 9px;
-  font-weight: 700;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 8.5px;
+  font-weight: 600;
   letter-spacing: 0.02em;
   white-space: nowrap;
   pointer-events: none;
@@ -2155,9 +2195,11 @@ code {
   border-radius: 0;
   background: transparent;
   color: #1e293b;
-  font-size: 8px;
-  font-family: var(--mono);
+  font-size: 7.5px;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  letter-spacing: 0.01em;
   white-space: nowrap;
   box-shadow: none;
   text-shadow:
@@ -2194,11 +2236,12 @@ code {
    Keep only non-size print polish here so CSS variables cannot stretch the sheet. */
 @media print {
   .print-sheet-header {
-    padding: 3mm 4mm 2mm !important;
+    padding: 2mm 3mm 1.5mm !important;
   }
 
+  .print-sheet-title h1,
   .print-sheet-header h1 {
-    font-size: 14pt !important;
+    font-size: 11pt !important;
   }
 
   .print-ss-list {

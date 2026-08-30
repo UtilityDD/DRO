@@ -20,8 +20,23 @@ import {
   pointAlong,
 } from '@/domain/geo';
 import { idbGetAll, idbPut, idbDelete, idbReplaceAll, idbGetMeta, idbSetMeta } from '@/lib/idb';
-import { supabase, supabaseConfigured, T } from '@/lib/supabase';
+import {
+  getPowerMapClient,
+  getPowerMapTables,
+  isPowerMapConfigured,
+} from '@/lib/supabase';
 import legacyNetwork from '@/data/legacyNetwork.json';
+
+/** Resolve via getters so DRO’s late-bound client (after /api/powermap/config) is seen. */
+function pmClient() {
+  return getPowerMapClient();
+}
+function pmReady() {
+  return isPowerMapConfigured() && Boolean(getPowerMapClient());
+}
+function pmTables() {
+  return getPowerMapTables();
+}
 
 export interface NetworkState {
   substations: Substation[];
@@ -31,7 +46,18 @@ export interface NetworkState {
   orgUnits: OrgUnit[];
   backend: 'local' | 'supabase';
   loaded: boolean;
+  /** Dump stamp — reused until the live network revision changes (NSC-style). */
+  networkVersion?: string;
+  /** True when this paint came from IndexedDB because the stamp matched. */
+  networkCacheHit?: boolean;
 }
+
+const NETWORK_VERSION_META = 'networkVersion';
+
+export type LoadNetworkOpts = {
+  /** Ignore IndexedDB stamp match and pull full pm_v_* rows. */
+  force?: boolean;
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -46,6 +72,92 @@ function emptyNetwork(): NetworkState {
     orgUnits: DEFAULT_ORG,
     backend: 'local',
     loaded: false,
+    networkVersion: undefined,
+    networkCacheHit: false,
+  };
+}
+
+/** Build a fallback stamp when pm_network_stamp is not deployed yet. */
+async function computeFallbackStamp(): Promise<string | null> {
+  if (!pmReady()) return null;
+  try {
+    const [ss, ln, touch] = await Promise.all([
+      pmClient()!.from(pmTables().vSubstations).select('id', { count: 'exact', head: true }),
+      pmClient()!.from(pmTables().vLines).select('id', { count: 'exact', head: true }),
+      pmClient()!
+        .from(pmTables().assets)
+        .select('updated_at')
+        .eq('is_deleted', false)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const ssCount = ss.count ?? 0;
+    const lnCount = ln.count ?? 0;
+    const maxUpdated =
+      touch.data && typeof (touch.data as { updated_at?: string }).updated_at === 'string'
+        ? (touch.data as { updated_at: string }).updated_at
+        : '';
+    if (!ssCount && !lnCount && !maxUpdated) return null;
+    return `c:${ssCount}|${lnCount}|${maxUpdated}`;
+  } catch (err) {
+    console.warn('[PowerMap] fallback stamp failed', err);
+    return null;
+  }
+}
+
+/**
+ * Cheap network identity. Prefer powermap.network_meta (032); otherwise
+ * counts + max(updated_at). Same string → client keeps IndexedDB dump.
+ */
+export async function fetchNetworkStamp(): Promise<string | null> {
+  if (!pmReady()) return null;
+  const client = pmClient()!;
+  const primary = pmTables().networkStamp || 'pm_network_stamp';
+  const candidates = [primary, 'pm_network_stamp', 'v_network_stamp'].filter(
+    (v, i, a) => a.indexOf(v) === i,
+  );
+  for (const table of candidates) {
+    try {
+      const { data, error } = await client.from(table).select('version').limit(1).maybeSingle();
+      if (error) {
+        console.warn('[PowerMap] stamp', table, error.message);
+        continue;
+      }
+      const version = data && typeof (data as { version?: string }).version === 'string'
+        ? (data as { version: string }).version
+        : null;
+      if (version) return version;
+    } catch (err) {
+      console.warn('[PowerMap] stamp', table, err);
+    }
+  }
+  return computeFallbackStamp();
+}
+
+async function loadCachedNetworkIfFresh(liveVersion: string): Promise<NetworkState | null> {
+  const cachedVersion = await idbGetMeta<string>(NETWORK_VERSION_META);
+  if (!cachedVersion || cachedVersion !== liveVersion) return null;
+
+  const [substations, lines, tapNodes, tapLaterals, orgUnits] = await Promise.all([
+    idbGetAll('substations'),
+    idbGetAll('lines'),
+    idbGetAll('tapNodes'),
+    idbGetAll('tapLaterals'),
+    idbGetAll('orgUnits'),
+  ]);
+  if (!substations.length && !lines.length) return null;
+
+  return {
+    substations,
+    lines,
+    tapNodes,
+    tapLaterals,
+    orgUnits: orgUnits.length ? orgUnits : DEFAULT_ORG,
+    backend: 'supabase',
+    loaded: true,
+    networkVersion: liveVersion,
+    networkCacheHit: true,
   };
 }
 
@@ -140,9 +252,9 @@ function demoSeed(): NetworkState {
 }
 
 async function tryLoadSupabase(): Promise<NetworkState | null> {
-  if (!supabaseConfigured || !supabase) return null;
+  if (!pmReady()) return null;
   try {
-    const { data: ssRows, error: ssErr } = await supabase.from(T.vSubstations).select('*').limit(1);
+    const { data: ssRows, error: ssErr } = await pmClient()!.from(pmTables().vSubstations).select('*').limit(1);
     if (ssErr) {
       console.warn('[PowerMap] Supabase bridge not ready:', ssErr.message);
       return null;
@@ -156,12 +268,12 @@ async function tryLoadSupabase(): Promise<NetworkState | null> {
       { data: orgs },
       { data: xfmrs },
     ] = await Promise.all([
-      supabase.from(T.vSubstations).select('*'),
-      supabase.from(T.vLines).select('*'),
-      supabase.from(T.vTapNodes).select('*'),
-      supabase.from(T.vTapLaterals).select('*'),
-      supabase.from(T.orgUnits).select('*'),
-      supabase.from(T.transformers).select('*'),
+      pmClient()!.from(pmTables().vSubstations).select('*'),
+      pmClient()!.from(pmTables().vLines).select('*'),
+      pmClient()!.from(pmTables().vTapNodes).select('*'),
+      pmClient()!.from(pmTables().vTapLaterals).select('*'),
+      pmClient()!.from(pmTables().orgUnits).select('*'),
+      pmClient()!.from(pmTables().transformers).select('*'),
     ]);
 
     if (e1 || e2) {
@@ -278,6 +390,7 @@ async function tryLoadSupabase(): Promise<NetworkState | null> {
       orgUnits: mappedOrg,
       backend: 'supabase',
       loaded: true,
+      networkCacheHit: false,
     };
   } catch (err) {
     console.warn('[PowerMap] Supabase load error', err);
@@ -330,6 +443,7 @@ async function loadLocal(): Promise<NetworkState> {
     return seed;
   }
 
+  const cachedVersion = await idbGetMeta<string>(NETWORK_VERSION_META);
   return {
     substations,
     lines,
@@ -338,14 +452,31 @@ async function loadLocal(): Promise<NetworkState> {
     orgUnits: orgUnits.length ? orgUnits : DEFAULT_ORG,
     backend: 'local',
     loaded: true,
+    networkVersion: cachedVersion,
+    networkCacheHit: Boolean(cachedVersion),
   };
 }
 
-export async function loadNetwork(): Promise<NetworkState> {
+export async function loadNetwork(opts: LoadNetworkOpts = {}): Promise<NetworkState> {
+  const force = Boolean(opts.force);
+
+  if (!force && pmReady()) {
+    const liveVersion = await fetchNetworkStamp();
+    if (liveVersion) {
+      const cached = await loadCachedNetworkIfFresh(liveVersion);
+      if (cached) {
+        console.info('[PowerMap] network dump reused', liveVersion);
+        return cached;
+      }
+    }
+  }
+
   const remote = await tryLoadSupabase();
   if (remote && (remote.substations.length > 0 || remote.lines.length > 0)) {
     await idbReplaceAll(remote);
-    return remote;
+    const liveVersion = (await fetchNetworkStamp()) || `pull:${Date.now()}`;
+    await idbSetMeta(NETWORK_VERSION_META, liveVersion);
+    return { ...remote, networkVersion: liveVersion, networkCacheHit: false };
   }
   if (remote && remote.backend === 'supabase') {
     const local = await loadLocal();
@@ -354,11 +485,21 @@ export async function loadNetwork(): Promise<NetworkState> {
   return loadLocal();
 }
 
+/** After a cloud write, refresh the local dump stamp so this device stays consistent. */
+async function rememberLiveStamp() {
+  try {
+    const v = await fetchNetworkStamp();
+    if (v) await idbSetMeta(NETWORK_VERSION_META, v);
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function persistSubstation(ss: Substation) {
   await idbPut('substations', ss);
-  if (!supabase || !supabaseConfigured) return;
+  if (!pmReady()) return;
   try {
-    const { error: aErr } = await supabase.from(T.assets).upsert({
+    const { error: aErr } = await pmClient()!.from(pmTables().assets).upsert({
       id: ss.id,
       asset_kind: 'substation',
       name: ss.name,
@@ -373,14 +514,14 @@ export async function persistSubstation(ss: Substation) {
     });
     if (aErr) throw aErr;
 
-    const { data: v } = await supabase
-      .from(T.voltageLevels)
+    const { data: v } = await pmClient()!
+      .from(pmTables().voltageLevels)
       .select('id')
       .eq('code', ss.voltageCode)
       .maybeSingle();
     if (!v?.id) return;
 
-    const { error: sErr } = await supabase.from(T.substations).upsert({
+    const { error: sErr } = await pmClient()!.from(pmTables().substations).upsert({
       asset_id: ss.id,
       voltage_level_id: v.id,
       lat: ss.lat,
@@ -388,9 +529,9 @@ export async function persistSubstation(ss: Substation) {
     });
     if (sErr) throw sErr;
 
-    await supabase.from(T.transformers).delete().eq('substation_asset_id', ss.id);
+    await pmClient()!.from(pmTables().transformers).delete().eq('substation_asset_id', ss.id);
     if (ss.transformers.length) {
-      const { error: tErr } = await supabase.from(T.transformers).insert(
+      const { error: tErr } = await pmClient()!.from(pmTables().transformers).insert(
         ss.transformers.map((t, i) => ({
           id: t.id,
           substation_asset_id: ss.id,
@@ -401,6 +542,7 @@ export async function persistSubstation(ss: Substation) {
       );
       if (tErr) throw tErr;
     }
+    await rememberLiveStamp();
   } catch (err) {
     console.warn('[PowerMap] persistSubstation cloud failed', err);
   }
@@ -408,9 +550,9 @@ export async function persistSubstation(ss: Substation) {
 
 export async function persistLine(line: TrunkLine) {
   await idbPut('lines', line);
-  if (!supabase || !supabaseConfigured) return;
+  if (!pmReady()) return;
   try {
-    const { error: aErr } = await supabase.from(T.assets).upsert({
+    const { error: aErr } = await pmClient()!.from(pmTables().assets).upsert({
       id: line.id,
       asset_kind: 'line',
       name: line.name,
@@ -424,14 +566,14 @@ export async function persistLine(line: TrunkLine) {
     });
     if (aErr) throw aErr;
 
-    const { data: v } = await supabase
-      .from(T.voltageLevels)
+    const { data: v } = await pmClient()!
+      .from(pmTables().voltageLevels)
       .select('id')
       .eq('code', line.voltageCode)
       .maybeSingle();
     if (!v?.id) return;
 
-    const { error: lErr } = await supabase.from(T.lines).upsert({
+    const { error: lErr } = await pmClient()!.from(pmTables().lines).upsert({
       asset_id: line.id,
       voltage_level_id: v.id,
       from_asset_id: line.fromId,
@@ -442,6 +584,7 @@ export async function persistLine(line: TrunkLine) {
       length_km: line.lengthKm,
     });
     if (lErr) throw lErr;
+    await rememberLiveStamp();
   } catch (err) {
     console.warn('[PowerMap] persistLine cloud failed', err);
   }
@@ -449,9 +592,9 @@ export async function persistLine(line: TrunkLine) {
 
 export async function persistTapNode(tap: TapNode) {
   await idbPut('tapNodes', tap);
-  if (!supabase || !supabaseConfigured) return;
+  if (!pmReady()) return;
   try {
-    await supabase.from(T.assets).upsert({
+    await pmClient()!.from(pmTables().assets).upsert({
       id: tap.id,
       asset_kind: 'tap_node',
       name: tap.name,
@@ -459,13 +602,14 @@ export async function persistTapNode(tap: TapNode) {
       remarks: tap.remarks || null,
       is_deleted: false,
     });
-    await supabase.from(T.tapNodes).upsert({
+    await pmClient()!.from(pmTables().tapNodes).upsert({
       asset_id: tap.id,
       parent_line_asset_id: tap.parentLineId,
       position_ratio: tap.positionRatio,
       lat: tap.lat,
       lng: tap.lng,
     });
+    await rememberLiveStamp();
   } catch (err) {
     console.warn('[PowerMap] persistTapNode cloud failed', err);
   }
@@ -473,14 +617,14 @@ export async function persistTapNode(tap: TapNode) {
 
 export async function persistTapLateral(lateral: TapLateral) {
   await idbPut('tapLaterals', lateral);
-  if (!supabase || !supabaseConfigured) return;
+  if (!pmReady()) return;
   try {
-    const { data: v } = await supabase
-      .from(T.voltageLevels)
+    const { data: v } = await pmClient()!
+      .from(pmTables().voltageLevels)
       .select('id')
       .eq('code', lateral.voltageCode)
       .maybeSingle();
-    await supabase.from(T.assets).upsert({
+    await pmClient()!.from(pmTables().assets).upsert({
       id: lateral.id,
       asset_kind: 'tap_lateral',
       name: lateral.name,
@@ -491,7 +635,7 @@ export async function persistTapLateral(lateral: TapLateral) {
       is_deleted: false,
     });
     if (v?.id) {
-      await supabase.from(T.tapLaterals).upsert({
+      await pmClient()!.from(pmTables().tapLaterals).upsert({
         asset_id: lateral.id,
         voltage_level_id: v.id,
         from_tap_asset_id: lateral.fromTapId,
@@ -501,6 +645,7 @@ export async function persistTapLateral(lateral: TapLateral) {
         length_km: lateral.lengthKm,
       });
     }
+    await rememberLiveStamp();
   } catch (err) {
     console.warn('[PowerMap] persistTapLateral cloud failed', err);
   }
@@ -519,9 +664,10 @@ export async function removeEntity(
           ? 'tapNodes'
           : 'tapLaterals';
   await idbDelete(store, id);
-  if (!supabase || !supabaseConfigured) return;
+  if (!pmReady()) return;
   try {
-    await supabase.from(T.assets).update({ is_deleted: true }).eq('id', id);
+    await pmClient()!.from(pmTables().assets).update({ is_deleted: true }).eq('id', id);
+    await rememberLiveStamp();
   } catch (err) {
     console.warn('[PowerMap] removeEntity cloud failed', err);
   }
@@ -529,17 +675,17 @@ export async function removeEntity(
 
 /** Probe whether the public pm_* bridge responds. */
 export async function probeSupabaseBridge(): Promise<{ ok: boolean; message: string; counts?: { ss: number; lines: number } }> {
-  if (!supabase || !supabaseConfigured) {
+  if (!pmReady()) {
     return { ok: false, message: 'Not connected' };
   }
-  const { error } = await supabase.from(T.vSubstations).select('id', { count: 'exact', head: true });
+  const { error } = await pmClient()!.from(pmTables().vSubstations).select('id', { count: 'exact', head: true });
   if (error) {
     console.warn('[PowerMap] probe', error.message);
     return { ok: false, message: 'Not connected' };
   }
   const [{ count: ss }, { count: lines }] = await Promise.all([
-    supabase.from(T.vSubstations).select('id', { count: 'exact', head: true }),
-    supabase.from(T.vLines).select('id', { count: 'exact', head: true }),
+    pmClient()!.from(pmTables().vSubstations).select('id', { count: 'exact', head: true }),
+    pmClient()!.from(pmTables().vLines).select('id', { count: 'exact', head: true }),
   ]);
   return {
     ok: true,
@@ -558,7 +704,7 @@ export async function persistSubstationBundle(
   await idbPut('substations', ss);
   await Promise.all(relatedLines.map((l) => idbPut('lines', l)));
 
-  if (!supabase || !supabaseConfigured) {
+  if (!pmReady()) {
     return { ok: true, usedRpc: false, message: 'Saved on this device' };
   }
 
@@ -592,7 +738,7 @@ export async function persistSubstationBundle(
     remarks: l.remarks,
   }));
 
-  const { data, error } = await supabase.rpc('pm_admin_update_substation_bundle', {
+  const { data, error } = await pmClient()!.rpc('pm_admin_update_substation_bundle', {
     p_ss: ssPayload,
     p_transformers: xfmrPayload,
     p_lines: linesPayload,
@@ -636,14 +782,14 @@ export async function pushNetworkToSupabase(state: {
   tapNodes: TapNode[];
   tapLaterals: TapLateral[];
 }): Promise<{ ok: boolean; message: string }> {
-  if (!supabase || !supabaseConfigured) {
+  if (!pmReady()) {
     return { ok: false, message: 'Could not publish — try again later' };
   }
 
   const probe = await probeSupabaseBridge();
   if (!probe.ok) return { ok: false, message: 'Could not publish — try again later' };
 
-  const { data: voltages, error: vErr } = await supabase.from(T.voltageLevels).select('id, code');
+  const { data: voltages, error: vErr } = await pmClient()!.from(pmTables().voltageLevels).select('id, code');
   if (vErr || !voltages?.length) {
     console.warn('[PowerMap] pushNetwork', vErr?.message);
     return { ok: false, message: 'Could not publish — try again later' };
@@ -651,14 +797,14 @@ export async function pushNetworkToSupabase(state: {
   const voltageId = Object.fromEntries(voltages.map((v: { code: string; id: string }) => [v.code, v.id]));
 
   // Soft-delete prior network
-  await supabase
-    .from(T.assets)
+  await pmClient()!
+    .from(pmTables().assets)
     .update({ is_deleted: true })
     .eq('is_deleted', false)
     .in('asset_kind', ['substation', 'line', 'tap_node', 'tap_lateral']);
 
   for (const o of state.orgUnits) {
-    const { error } = await supabase.from(T.orgUnits).upsert({
+    const { error } = await pmClient()!.from(pmTables().orgUnits).upsert({
       id: o.id,
       parent_id: o.parentId,
       type: o.type,
@@ -674,7 +820,7 @@ export async function pushNetworkToSupabase(state: {
   }
 
   for (const ss of state.substations) {
-    const { error: aErr } = await supabase.from(T.assets).upsert({
+    const { error: aErr } = await pmClient()!.from(pmTables().assets).upsert({
       id: ss.id,
       asset_kind: 'substation',
       name: ss.name,
@@ -695,7 +841,7 @@ export async function pushNetworkToSupabase(state: {
     const vid = voltageId[ss.voltageCode];
     if (!vid) return { ok: false, message: `Could not publish ${ss.name}` };
 
-    const { error: sErr } = await supabase.from(T.substations).upsert({
+    const { error: sErr } = await pmClient()!.from(pmTables().substations).upsert({
       asset_id: ss.id,
       voltage_level_id: vid,
       lat: ss.lat,
@@ -706,9 +852,9 @@ export async function pushNetworkToSupabase(state: {
       return { ok: false, message: `Could not publish ${ss.name}` };
     }
 
-    await supabase.from(T.transformers).delete().eq('substation_asset_id', ss.id);
+    await pmClient()!.from(pmTables().transformers).delete().eq('substation_asset_id', ss.id);
     if (ss.transformers.length) {
-      const { error: tErr } = await supabase.from(T.transformers).insert(
+      const { error: tErr } = await pmClient()!.from(pmTables().transformers).insert(
         ss.transformers.map((t, i) => ({
           id: t.id,
           substation_asset_id: ss.id,
@@ -725,7 +871,7 @@ export async function pushNetworkToSupabase(state: {
   }
 
   for (const line of state.lines) {
-    const { error: aErr } = await supabase.from(T.assets).upsert({
+    const { error: aErr } = await pmClient()!.from(pmTables().assets).upsert({
       id: line.id,
       asset_kind: 'line',
       name: line.name,
@@ -741,7 +887,7 @@ export async function pushNetworkToSupabase(state: {
     }
 
     const vid = voltageId[line.voltageCode];
-    const { error: lErr } = await supabase.from(T.lines).upsert({
+    const { error: lErr } = await pmClient()!.from(pmTables().lines).upsert({
       asset_id: line.id,
       voltage_level_id: vid,
       from_asset_id: line.fromId,
@@ -758,7 +904,7 @@ export async function pushNetworkToSupabase(state: {
   }
 
   for (const tap of state.tapNodes) {
-    await supabase.from(T.assets).upsert({
+    await pmClient()!.from(pmTables().assets).upsert({
       id: tap.id,
       asset_kind: 'tap_node',
       name: tap.name,
@@ -766,7 +912,7 @@ export async function pushNetworkToSupabase(state: {
       remarks: tap.remarks || null,
       is_deleted: false,
     });
-    await supabase.from(T.tapNodes).upsert({
+    await pmClient()!.from(pmTables().tapNodes).upsert({
       asset_id: tap.id,
       parent_line_asset_id: tap.parentLineId,
       position_ratio: tap.positionRatio,
@@ -777,7 +923,7 @@ export async function pushNetworkToSupabase(state: {
 
   for (const lat of state.tapLaterals) {
     const vid = voltageId[lat.voltageCode];
-    await supabase.from(T.assets).upsert({
+    await pmClient()!.from(pmTables().assets).upsert({
       id: lat.id,
       asset_kind: 'tap_lateral',
       name: lat.name,
@@ -786,7 +932,7 @@ export async function pushNetworkToSupabase(state: {
       is_deleted: false,
     });
     if (vid) {
-      await supabase.from(T.tapLaterals).upsert({
+      await pmClient()!.from(pmTables().tapLaterals).upsert({
         asset_id: lat.id,
         voltage_level_id: vid,
         from_tap_asset_id: lat.fromTapId,

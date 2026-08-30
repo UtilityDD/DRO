@@ -1076,7 +1076,7 @@ button {
 }
 
 .mode-powermap .present-fab-stack {
-  top: calc(var(--appbar-h) + 4.6rem);
+  display: none !important;
 }
 
 .pm-page {
@@ -1090,6 +1090,7 @@ button {
 .pm-root {
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .pm-booting {
@@ -1162,7 +1163,9 @@ button {
   justify-content: space-between;
   gap: 0.75rem;
   flex: 0 0 auto;
-  padding: 0.35rem 1rem 0.55rem;
+  padding: 0.35rem 0.85rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
 }
 
 .pm-desk-search {
@@ -1179,11 +1182,77 @@ button {
   box-shadow: var(--shadow);
 }
 
+.pm-desk-search:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .pm-desk-search kbd {
   font-size: 0.68rem;
   padding: 0.08rem 0.35rem;
   border-radius: 6px;
   background: var(--bg-soft);
+}
+
+.pm-desk-version {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0.2rem 0.35rem;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  text-align: left;
+}
+.pm-desk-version:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.pm-desk-version:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.pm-load-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2100;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  pointer-events: none;
+}
+
+.pm-load-card {
+  padding: 1.5rem 2rem;
+  text-align: center;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.pm-load-card p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.pm-load-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent, #2563eb);
+  margin: 0 auto 0.75rem;
+  animation: pm-spin 0.7s linear infinite;
+}
+
+@keyframes pm-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .pm-boot {
@@ -8913,15 +8982,8 @@ html[data-appearance='dark'] .login-card {
 
 .app-shell[data-theme="powermap"] .page-masthead,
 .app-shell[data-theme="map"] .page-masthead {
-  align-items: center;
-  padding: 0.45rem 1.25rem 0.15rem;
-}
-
-.app-shell[data-theme="powermap"] .page-masthead-kicker,
-.app-shell[data-theme="map"] .page-masthead-kicker,
-.app-shell[data-theme="powermap"] .page-masthead p,
-.app-shell[data-theme="map"] .page-masthead p {
-  display: none;
+  align-items: flex-end;
+  padding: 0.55rem 1.25rem 0.35rem;
 }
 
 .app-shell[data-theme="powermap"] .page-masthead h1,
@@ -9436,8 +9498,10 @@ html[data-appearance='dark'] .login-card {
 .present-laser-layer {
   position: fixed;
   inset: 0;
-  z-index: 240;
+  /* Body portal — above Power Map side panel, Leaflet panes, search/modals */
+  z-index: 2147483000;
   pointer-events: none;
+  isolation: isolate;
 }
 
 .present-laser-trail {
@@ -9586,5 +9650,47 @@ html[data-appearance='dark'] .login-card {
   .app-shell[data-present="on"] .present-hud {
     top: auto;
     bottom: calc(0.75rem + var(--safe-bottom));
+  }
+}
+
+/* Power Map PDF — never include DRO shell chrome on the printed page.
+   Narrow print page width re-enables mobile app-bar/bottom-nav; beat those rules. */
+@media print {
+  body.print-preview-open .app-shell > .app-bar,
+  body.print-preview-open .app-shell > .bottom-nav,
+  body.print-preview-open .app-shell .sidebar,
+  body.print-preview-open .app-shell .page-masthead,
+  body.print-preview-open .app-shell .pm-desk-toolbar,
+  body.print-preview-open .app-shell .present-fab-stack,
+  body.print-preview-open .app-shell .present-hud,
+  body.print-preview-open .app-shell .present-hotzone,
+  body.print-preview-open .app-shell .present-nav-root,
+  body.print-preview-open .app-shell .sheet-root,
+  body.print-preview-open .app-shell .present-laser-layer,
+  body.print-preview-open .present-laser-layer,
+  body.is-printing .app-shell > .app-bar,
+  body.is-printing .app-shell > .bottom-nav,
+  body.is-printing .app-shell .sidebar,
+  body.is-printing .app-shell .page-masthead,
+  body.is-printing .app-shell .pm-desk-toolbar,
+  body.is-printing .app-shell .present-fab-stack,
+  body.is-printing .app-shell .present-hud,
+  body.is-printing .app-shell .present-hotzone,
+  body.is-printing .app-shell .present-nav-root,
+  body.is-printing .app-shell .sheet-root,
+  body.is-printing .app-shell .present-laser-layer,
+  body.is-printing .present-laser-layer,
+  body.print-preview-open .app-bar,
+  body.print-preview-open .bottom-nav,
+  body.is-printing .app-bar,
+  body.is-printing .bottom-nav {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
   }
 }

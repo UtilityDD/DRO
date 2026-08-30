@@ -28,6 +28,8 @@ export type PrintSettings = {
   showProposed: boolean;
   showDistrictBoundaries: boolean;
   listSide: 'left' | 'right';
+  /** Print preview / PDF basemap (same set as the live map). */
+  basemap: 'google' | 'google-hybrid' | 'osm' | 'esri' | 'none';
 };
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
@@ -36,14 +38,26 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   customWidthMm: 420,
   customHeightMm: 297,
   districts: [],
-  title: 'Power Network Map',
+  title: '',
   subtitle: '',
   showSsNames: true,
   showFeederLength: true,
   showProposed: true,
   showDistrictBoundaries: true,
   listSide: 'right',
+  basemap: 'esri',
 };
+
+export const PRINT_BASEMAPS: {
+  id: PrintSettings['basemap'];
+  label: string;
+}[] = [
+  { id: 'esri', label: 'Light Gray' },
+  { id: 'osm', label: 'OpenStreetMap' },
+  { id: 'google', label: 'Google Roads' },
+  { id: 'google-hybrid', label: 'Google Hybrid' },
+  { id: 'none', label: 'No basemap' },
+];
 
 export function paperSizeMm(settings: PrintSettings): { widthMm: number; heightMm: number } {
   if (settings.paperId === 'custom') {
@@ -65,6 +79,25 @@ export function paperSizeMm(settings: PrintSettings): { widthMm: number; heightM
 export function cssPageSize(settings: PrintSettings): string {
   const { widthMm, heightMm } = paperSizeMm(settings);
   return `${widthMm}mm ${heightMm}mm`;
+}
+
+/** Clear sheet title — e.g. "Power Map of Malda District". */
+export function printSheetTitle(
+  settings: Pick<PrintSettings, 'title' | 'districts'>,
+  fallbackDistricts: string[] = [],
+): string {
+  const custom = settings.title.trim();
+  if (custom && !/^power network map$/i.test(custom)) return custom;
+  const names = (settings.districts.length ? settings.districts : fallbackDistricts)
+    .map((n) => n.trim())
+    .filter(Boolean);
+  if (!names.length) return 'Power Network Map';
+  if (names.length === 1) {
+    const n = names[0];
+    return /district$/i.test(n) ? `Power Map of ${n}` : `Power Map of ${n} District`;
+  }
+  if (names.length === 2) return `Power Map of ${names[0]} & ${names[1]}`;
+  return `Power Map of ${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
 /** Named ISO @page size so browser print dialog matches; custom uses exact mm. */
@@ -110,6 +143,34 @@ body.is-printing .print-sheet {
   ${box}
   box-shadow: none !important;
   overflow: hidden !important;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+}
+body.is-printing .print-sheet-header h1,
+body.is-printing .print-sheet-header p,
+body.is-printing .print-sheet-legend,
+body.is-printing .print-side-list,
+body.is-printing .print-ss-list,
+body.is-printing .print-ss-name,
+body.is-printing .print-ss-cap,
+body.is-printing .print-ss-kv,
+body.is-printing .print-ss-idx,
+body.is-printing .print-map-label span,
+body.is-printing .print-ss-label span,
+body.is-printing .print-feeder-label span,
+body.is-printing .print-district-label span {
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+}
+body.is-printing .print-ss-label span,
+body.is-printing .print-district-label span {
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+}
+body.is-printing .print-feeder-label span,
+body.is-printing .print-ss-cap,
+body.is-printing .print-ss-kv,
+body.is-printing .print-ss-idx {
+  font-variant-numeric: tabular-nums !important;
+  font-weight: 600 !important;
 }
 body.is-printing .print-sheet-body {
   flex: 1 1 auto !important;
@@ -130,9 +191,62 @@ body.is-printing .print-map-canvas.leaflet-container {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  body.print-preview-open .pm-shell > :not(.print-overlay),
-  body.print-preview-open .app-shell > :not(.print-overlay) {
+  /* Hide map chrome; keep .print-overlay. Do NOT hide .app-shell children —
+     the overlay is nested under .pm-shell, so that rule blanked the PDF. */
+  body.print-preview-open .pm-shell > :not(.print-overlay) {
     display: none !important;
+  }
+  /* DRO app chrome — must not appear on the PDF page.
+     Print preview is often a narrow page width, which re-enables mobile
+     .app-bar / .bottom-nav { display: … !important } — beat that specificity. */
+  body.print-preview-open .app-shell > .app-bar,
+  body.print-preview-open .app-shell > .bottom-nav,
+  body.print-preview-open .app-shell .sidebar,
+  body.print-preview-open .app-shell .page-masthead,
+  body.print-preview-open .app-shell .pm-desk-toolbar,
+  body.print-preview-open .app-shell .present-fab-stack,
+  body.print-preview-open .app-shell .present-hud,
+  body.print-preview-open .app-shell .present-hotzone,
+  body.print-preview-open .app-shell .present-nav-root,
+  body.print-preview-open .app-shell .sheet-root,
+  body.print-preview-open .app-shell .present-laser-layer,
+  body.is-printing .app-shell > .app-bar,
+  body.is-printing .app-shell > .bottom-nav,
+  body.is-printing .app-shell .sidebar,
+  body.is-printing .app-shell .page-masthead,
+  body.is-printing .app-shell .pm-desk-toolbar,
+  body.is-printing .app-shell .present-fab-stack,
+  body.is-printing .app-shell .present-hud,
+  body.is-printing .app-shell .present-hotzone,
+  body.is-printing .app-shell .present-nav-root,
+  body.is-printing .app-shell .sheet-root,
+  body.is-printing .app-shell .present-laser-layer,
+  body.print-preview-open .app-bar,
+  body.print-preview-open .bottom-nav,
+  body.is-printing .app-bar,
+  body.is-printing .bottom-nav {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+  body.print-preview-open .app-body,
+  body.print-preview-open .main,
+  body.print-preview-open .page-content,
+  body.print-preview-open .pm-page,
+  body.print-preview-open .pm-root,
+  body.print-preview-open .pm-shell {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+    padding: 0 !important;
+    margin: 0 !important;
   }
   .print-overlay,
   .print-stage,
@@ -215,10 +329,35 @@ export type PrintDistrictBoundary = {
 export type PrintAssetBundle = {
   substations: Substation[];
   lines: TrunkLine[];
+  /** SS that sit inside the selected district polygon(s). */
+  inDistrictIds: string[];
   districtNames: string[];
   districtBoundaries: PrintDistrictBoundary[];
   bounds: [[number, number], [number, number]] | null;
 };
+
+function expandBoundsWithPoints(
+  bounds: [[number, number], [number, number]] | null,
+  points: Array<{ lat: number; lng: number }>,
+): [[number, number], [number, number]] | null {
+  if (!points.length) return bounds;
+  let minLat = bounds ? bounds[0][0] : Infinity;
+  let minLng = bounds ? bounds[0][1] : Infinity;
+  let maxLat = bounds ? bounds[1][0] : -Infinity;
+  let maxLng = bounds ? bounds[1][1] : -Infinity;
+  for (const p of points) {
+    if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
+    minLat = Math.min(minLat, p.lat);
+    maxLat = Math.max(maxLat, p.lat);
+    minLng = Math.min(minLng, p.lng);
+    maxLng = Math.max(maxLng, p.lng);
+  }
+  if (!Number.isFinite(minLat)) return bounds;
+  return [
+    [minLat, minLng],
+    [maxLat, maxLng],
+  ];
+}
 
 /** Filter network to selected districts (empty = use all available from caller). */
 export async function buildPrintAssets(
@@ -238,20 +377,53 @@ export async function buildPrintAssets(
   const statusOk = (status: string) =>
     status === 'existing' || (includeProposed && status === 'proposed');
 
-  let ss: Substation[];
+  const eligible = substations.filter((s) => statusOk(s.status));
+
+  let core: Substation[];
   if (!matched.length) {
-    ss = substations.filter((s) => statusOk(s.status));
+    core = eligible;
   } else {
-    ss = substations.filter(
-      (s) => statusOk(s.status) && matched.some((d) => pointInPoly(s.lng, s.lat, d)),
-    );
+    core = eligible.filter((s) => matched.some((d) => pointInPoly(s.lng, s.lat, d)));
   }
 
-  // Boundaries to draw: selected districts, or districts that contain printed SS
+  const coreIds = new Set(core.map((s) => s.id));
+
+  // Lines that touch any in-district SS (feeds leaving the district included).
+  const touchingLines = lines.filter((l) => {
+    if (!statusOk(l.status)) return false;
+    if (!matched.length) return coreIds.has(l.fromId) && coreIds.has(l.toId);
+    return coreIds.has(l.fromId) || coreIds.has(l.toId);
+  });
+
+  // Pull in the far-end SS outside the district so those feeders actually draw.
+  const byId = new Map(eligible.map((s) => [s.id, s]));
+  const expanded = new Map(core.map((s) => [s.id, s]));
+  if (matched.length) {
+    for (const l of touchingLines) {
+      for (const id of [l.fromId, l.toId]) {
+        if (expanded.has(id)) continue;
+        const remote = byId.get(id);
+        if (remote) expanded.set(id, remote);
+      }
+    }
+  }
+
+  const ss = [...expanded.values()];
+  const ssIds = new Set(ss.map((s) => s.id));
+
+  // Keep every line whose both ends are now on the sheet (core↔core, core↔external).
+  const filteredLines = matched.length
+    ? lines.filter(
+        (l) => statusOk(l.status) && ssIds.has(l.fromId) && ssIds.has(l.toId) &&
+          (coreIds.has(l.fromId) || coreIds.has(l.toId)),
+      )
+    : touchingLines;
+
+  // Boundaries to draw: selected districts, or districts that contain printed core SS
   let boundaryDistricts = matched;
-  if (!boundaryDistricts.length && ss.length) {
+  if (!boundaryDistricts.length && core.length) {
     const hit = new Set<string>();
-    for (const s of ss) {
+    for (const s of core) {
       const d = allDistricts.find((x) => pointInPoly(s.lng, s.lat, x));
       if (d) hit.add(d.name);
     }
@@ -264,12 +436,6 @@ export async function buildPrintAssets(
       ring.map((p) => [p[1], p[0]] as [number, number]),
     ),
   }));
-
-  const ssIds = new Set(ss.map((s) => s.id));
-  const filteredLines = lines.filter((l) => {
-    if (!statusOk(l.status)) return false;
-    return ssIds.has(l.fromId) || ssIds.has(l.toId);
-  });
 
   let bounds: [[number, number], [number, number]] | null = null;
   if (boundaryDistricts.length) {
@@ -293,18 +459,16 @@ export async function buildPrintAssets(
         [maxLat, maxLng],
       ];
     }
-  } else if (ss.length) {
-    const lats = ss.map((s) => s.lat);
-    const lngs = ss.map((s) => s.lng);
-    bounds = [
-      [Math.min(...lats), Math.min(...lngs)],
-      [Math.max(...lats), Math.max(...lngs)],
-    ];
   }
+
+  // Frame = district (+ in-district SS only). Outside connectors stay off the fit
+  // so the map stays zoomed to the selected area.
+  bounds = expandBoundsWithPoints(bounds, core);
 
   return {
     substations: ss,
     lines: filteredLines,
+    inDistrictIds: [...coreIds],
     districtNames: boundaryDistricts.map((d) => d.name),
     districtBoundaries,
     bounds,

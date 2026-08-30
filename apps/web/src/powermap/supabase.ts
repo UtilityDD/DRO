@@ -15,6 +15,8 @@ const T_PUBLIC = {
   vTapLaterals: 'pm_v_tap_laterals',
   editors: 'pm_editors',
   editSuggestions: 'pm_edit_suggestions',
+  /** Tiny stamp row — same idea as NSC/AT&C dump version. */
+  networkStamp: 'pm_network_stamp',
 };
 
 const T_POWERMAP = {
@@ -32,6 +34,7 @@ const T_POWERMAP = {
   vTapLaterals: 'v_tap_laterals',
   editors: 'editors',
   editSuggestions: 'edit_suggestions',
+  networkStamp: 'v_network_stamp',
 };
 
 export let T = { ...T_PUBLIC };
@@ -40,6 +43,17 @@ export let supabase: SupabaseClient | null = null;
 export let supabaseConfigured = false;
 
 export type PowerMapLive = { ok: boolean; table?: string; reason?: string };
+
+/** Prefer these getters from networkRepo — avoids stale ESM bindings of `let` exports. */
+export function getPowerMapClient() {
+  return supabase;
+}
+export function isPowerMapConfigured() {
+  return supabaseConfigured;
+}
+export function getPowerMapTables() {
+  return T;
+}
 
 function applyClient(url: string, key: string, schema = 'public') {
   const usePm = schema === 'powermap';

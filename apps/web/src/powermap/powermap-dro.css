@@ -97,8 +97,27 @@
   border-color: var(--border);
 }
 
-.pm-root .primary-btn,
-.pm-root .side-panel .primary-btn {
-  background: var(--accent);
-  color: var(--on-accent);
+/* Print sheet: clean small-type stack (overrides any leftover mono). */
+.pm-root .print-sheet,
+.pm-root .print-sheet-header,
+.pm-root .print-side-list,
+.pm-root .print-ss-label span,
+.pm-root .print-feeder-label span,
+.pm-root .print-district-label span {
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+/* Single load UI lives on PowerMapPage (.pm-load-overlay). */
+.pm-root .boot-overlay {
+  display: none !important;
+}
+
+/* Keep remaining overlays inside the map pane, not the full DRO viewport. */
+.pm-root .map-stage {
+  position: relative;
+}
+
+.pm-root .search-overlay,
+.pm-root .modal-overlay {
+  position: absolute;
 }

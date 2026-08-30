@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { App as PowerMapApp } from '../../../../vendor/PowerMapV2/src/App';
 import { useNetworkStore } from '@/store/networkStore';
@@ -9,17 +9,30 @@ import 'leaflet/dist/leaflet.css';
 import '../powermap/powermap.css';
 import '../powermap/powermap-dro.css';
 
+function searchHotkeyLabel() {
+  if (typeof navigator === 'undefined') return 'Ctrl+K';
+  const platform = navigator.platform || '';
+  const ua = navigator.userAgent || '';
+  const mac = /Mac|iPhone|iPad|iPod/.test(platform) || /Mac OS X/.test(ua);
+  return mac ? '⌘K' : 'Ctrl+K';
+}
+
 export function PowerMapPage() {
   const loaded = useNetworkStore((s) => s.loaded);
   const backend = useNetworkStore((s) => s.backend);
   const substations = useNetworkStore((s) => s.substations);
   const lines = useNetworkStore((s) => s.lines);
+  const networkVersion = useNetworkStore((s) => s.networkVersion);
+  const networkCacheHit = useNetworkStore((s) => s.networkCacheHit);
+  const reloadFromSupabase = useNetworkStore((s) => s.reloadFromSupabase);
   const setSearchOpen = useNetworkStore((s) => s.setSearchOpen);
   const searchOpen = useNetworkStore((s) => s.searchOpen);
   // The map's own mount effect calls bootstrap(), and React runs child effects
   // before the parent's, so mounting it before the credentials land would load
   // the offline copy and never retry. Hold it back until they resolve.
   const [clientReady, setClientReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const hotkey = useMemo(() => searchHotkeyLabel(), []);
 
   usePageHeading('Power Map');
 
@@ -66,6 +79,24 @@ export function PowerMapPage() {
     };
   }, []);
 
+  const onRefresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    void reloadFromSupabase().finally(() => setRefreshing(false));
+  };
+
+  const versionLabel = networkVersion
+    ? networkVersion.startsWith('r:')
+      ? networkVersion.split('|')[0]
+      : networkVersion.startsWith('c:')
+        ? 'c…'
+        : networkVersion.length > 24
+          ? `${networkVersion.slice(0, 22)}…`
+          : networkVersion
+    : 'no-stamp';
+
+  const showLoadOverlay = !clientReady || !loaded;
+
   return (
     <div className="pm-page">
       <div className="pm-desk-toolbar">
@@ -73,10 +104,11 @@ export function PowerMapPage() {
           type="button"
           className="pm-desk-search"
           onClick={() => setSearchOpen(!searchOpen)}
+          disabled={!loaded}
         >
           <Search size={15} />
           Search network
-          <kbd>⌘K</kbd>
+          <kbd>{hotkey}</kbd>
         </button>
         {loaded && backend !== 'supabase' ? (
           <span
@@ -85,20 +117,37 @@ export function PowerMapPage() {
           >
             Offline copy · {substations.length} SS · {lines.length} lines — not live
           </span>
+        ) : loaded ? (
+          <button
+            type="button"
+            className="pm-desk-version muted"
+            onClick={onRefresh}
+            disabled={refreshing}
+            title={
+              networkCacheHit
+                ? `Dump stamp unchanged (${networkVersion || '—'}) — reused device copy. Click to force a fresh download.`
+                : `Fresh pull from Supabase (${networkVersion || 'stamp missing'}). Click to refresh again.`
+            }
+          >
+            {`${networkCacheHit ? 'Cached' : 'Live'} · ${versionLabel} · ${substations.length} SS · ${lines.length} lines`}
+            {refreshing ? ' · refreshing…' : ''}
+          </button>
         ) : (
-          <span className="muted">
-            {loaded
-              ? `Live · ${substations.length} SS · ${lines.length} lines`
-              : 'Loading network…'}
+          <span className="pm-desk-version muted" aria-hidden>
+            —
           </span>
         )}
       </div>
       <div className="pm-root">
-        {clientReady ? (
-          <PowerMapApp />
-        ) : (
-          <p className="pm-boot muted">Connecting to the network…</p>
+        {showLoadOverlay && (
+          <div className="pm-load-overlay" role="status" aria-live="polite">
+            <div className="pm-load-card">
+              <div className="pm-load-spinner" />
+              <p>{clientReady ? 'Loading network…' : 'Connecting…'}</p>
+            </div>
+          </div>
         )}
+        {clientReady ? <PowerMapApp /> : null}
       </div>
     </div>
   );

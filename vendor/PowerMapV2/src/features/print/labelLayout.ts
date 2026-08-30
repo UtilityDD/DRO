@@ -21,9 +21,9 @@ export type SsLabelPlacement = {
 type Box = { x: number; y: number; w: number; h: number };
 
 function estimateSize(name: string): { w: number; h: number } {
-  // Rough px size matching .print-ss-label span
-  const w = Math.min(160, Math.max(36, name.length * 5.4 + 10));
-  return { w, h: 14 };
+  // Rough px size matching .print-ss-label span (~8.5px Segoe UI)
+  const w = Math.min(160, Math.max(36, name.length * 5.1 + 8));
+  return { w, h: 13 };
 }
 
 function overlaps(a: Box, b: Box, pad = 2): boolean {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type Ripple = { id: number; x: number; y: number };
 
@@ -116,9 +117,10 @@ export function PresentLaser({ active }: { active: boolean }) {
     };
   }, [active]);
 
-  if (!active) return null;
+  if (!active || typeof document === 'undefined') return null;
 
-  return (
+  // Portal to body so Power Map side panel / map stacking contexts cannot cover it.
+  return createPortal(
     <div className="present-laser-layer" aria-hidden>
       <canvas ref={canvasRef} className="present-laser-trail" />
       <div ref={rootRef} className="present-laser">
@@ -133,6 +135,7 @@ export function PresentLaser({ active }: { active: boolean }) {
           style={{ left: ripple.x, top: ripple.y }}
         />
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }

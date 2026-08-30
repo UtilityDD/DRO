@@ -180,12 +180,13 @@ Supabase fetches time out at 20s and fall back to local JSON when a file exists.
 
 ---
 
-## 7. Versioned dumps (NSC, AT&C, later other desks)
+## 7. Versioned dumps (NSC, AT&C, Power Map)
 
 Ops dumps usually change **once a day**, rarely 2–3 times. Do not re-download Supabase on every chart open.
 
-Shared client store: `apps/web/src/lib/dumpCache.ts` (IndexedDB `dro-ops-dumps`).  
-NSC still uses its own IDB (`nscCache.ts`) because pending / withheld are two large queues.
+Shared client store for desk dumps: `apps/web/src/lib/dumpCache.ts` (IndexedDB `dro-ops-dumps`).  
+NSC still uses its own IDB (`nscCache.ts`) because pending / withheld are two large queues.  
+Power Map keeps the full network in its own IDB (`powermap-dro-v2`) and keys reuse by a **network stamp**.
 
 ### AT&C
 
@@ -225,6 +226,33 @@ Key files:
 - `server/src/nsc_import.js` — upload job + invalidate
 - `server/src/nsc_snap_cache.js` — in-process memo
 
+### Power Map
+
+**Version** = `pm_network_stamp.version` after migration `032_powermap_network_revision.sql`  
+(`r:{revision}|ss:{n}|ln:{n}`). Until that SQL is applied in the **Power Map** project, the client falls back to  
+`c:{ssCount}|{lineCount}|{max(assets.updated_at)}`.
+
+| Layer | Behaviour |
+|-------|-----------|
+| Browser IndexedDB (`powermap-dro-v2`) | Full substations / lines / taps / org units |
+| Meta key `networkVersion` | Last stamp that matches the stored dump |
+| Client (`vendor/PowerMapV2/src/lib/networkRepo.ts` → `loadNetwork`) | Fetch stamp first. Same stamp → **reuse IDB**, no `pm_v_*` pull. Mismatch or empty cache → full pull, then store stamp |
+| Toolbar | Shows `Cached · r:N · …` or `Live · r:N · …`. Click forces `loadNetwork({ force: true })` |
+| Editor saves | Cloud write bumps `powermap.network_meta.revision` (triggers in 032); client refreshes local stamp |
+
+Run `032` in the Power Map Supabase SQL editor (**utility.dipankar@gmail.com** / `unsmtschmcvftfqwabaq`). Without it, fallback stamps still avoid most full reloads when nothing changed.
+
+Verified live stamp example after apply: `r:2|ss:152|ln:183`.
+
+Do **not** full-pull `pm_v_substations` + `pm_v_lines` on every Power Map visit once a stamp is available.
+
+Key files:
+
+- `supabase/sql/032_powermap_network_revision.sql` — revision table, triggers, `pm_network_stamp`
+- `vendor/PowerMapV2/src/lib/networkRepo.ts` — `fetchNetworkStamp` / versioned `loadNetwork`
+- `apps/web/src/pages/PowerMapPage.tsx` — version badge + force refresh
+- `apps/web/src/powermap/supabase.ts` — `networkStamp` table name on the public bridge
+
 ---
 
 ## 8. Power Map
@@ -232,11 +260,11 @@ Key files:
 Embedded from `vendor/PowerMapV2`. DRO wraps it in `PowerMapPage.tsx`:
 
 - No vendor TopBar; wrapper class is `pm-shell` (not `app-shell`, which collides with DRO).
-- Do not block the page on `/api/powermap/config`. Call `ensurePowerMapClient()` in the background.
-- Live substations: Power Map project `powermap` schema / public `pm_*` views.
+- Gate `<PowerMapApp />` until `ensurePowerMapClient()` finishes so bootstrap does not lock onto a stale offline seed.
+- Live substations: Power Map project `powermap` schema / public `pm_*` views (`POWERMAP_SUPABASE_URL` + `POWERMAP_ANON_KEY` on Vercel — not the DRO portal project).
 - Geometry (`/geo/*.geojson`) is cached long-term (Vercel + service worker). Do not shrink it to “save bandwidth.”
-
----
+- Network dump is **versioned** (see §7 Power Map). Prefer stamp reuse over re-downloading the whole grid.
+- Neighbour / out-of-DRO EHV stubs are normal rows with remarks; do not invent cross-border links without OSM evidence.
 
 ## 9. Adding a desk or API
 
@@ -306,6 +334,7 @@ Full checklist: [DEPLOYMENT.md](DEPLOYMENT.md).
 | Login works locally, not on Vercel | No config file on Vercel; env / schema wrong | `SUPABASE_SCHEMA=public`, DRO URL + service_role |
 | Pages spin after login | Store not ready / hung Supabase | Auth tables unlock API; fetches time out at 20s |
 | Withheld chart blank / timeout | Full dump re-fetched every visit | Trust dump version; use Refresh only after upload |
+| Power Map always re-downloads | Stamp unused / 032 not applied | Prefer stamp reuse; run `032` in Power Map project |
 | Power Map looks like a second app | Vendor `app-shell` / TopBar | Keep `pm-shell` + DRO masthead |
 | Vite “not loading” on Windows | Bound to IPv6 only | `server.host: true` (already set) |
 | `Invalid schema: dro` | Schema not exposed | Use `public` |
@@ -322,4 +351,4 @@ Full checklist: [DEPLOYMENT.md](DEPLOYMENT.md).
 5. Push `origin` then `slm` when the user wants production.
 6. Hard-refresh the live site and click the desk you touched.
 
-When in doubt: **do not** empty-replace `portal_users`, **do not** full-pull NSC on every page view, **do not** deploy this repo to SLM.
+When in doubt: **do not** empty-replace `portal_users`, **do not** full-pull NSC on every page view, **do not** full-pull Power Map `pm_v_*` when the network stamp is unchanged, **do not** deploy this repo to SLM.

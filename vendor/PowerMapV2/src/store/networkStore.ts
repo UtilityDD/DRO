@@ -46,6 +46,7 @@ import {
   createTapOnLine,
   linesConnectedTo,
   loadNetwork,
+  emptyNetwork,
   persistLine,
   persistSubstation,
   persistTapLateral,
@@ -155,6 +156,10 @@ interface NetworkStore extends UiState {
   filters: NetworkFilters;
   mapLayers: MapLayerSettings;
   availableDistricts: string[];
+  /** Live dump stamp (NSC-style). Empty until first successful stamp/fetch. */
+  networkVersion: string | null;
+  /** True when the last load reused IndexedDB because the stamp matched. */
+  networkCacheHit: boolean;
 
   bootstrap: () => Promise<void>;
   reloadFromSupabase: () => Promise<void>;
@@ -330,6 +335,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   filters: defaultFilters,
   mapLayers: defaultMapLayers,
   availableDistricts: [],
+  networkVersion: null,
+  networkCacheHit: false,
 
   tool: 'cursor',
   selection: null,
@@ -345,7 +352,13 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   mapFocus: null,
 
   bootstrap: async () => {
-    const data = await loadNetwork();
+    let data;
+    try {
+      data = await loadNetwork();
+    } catch (err) {
+      console.error('[PowerMap] bootstrap load failed', err);
+      data = { ...emptyNetwork(), loaded: true };
+    }
     set({
       loaded: true,
       backend: data.backend,
@@ -354,6 +367,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       tapNodes: data.tapNodes,
       tapLaterals: data.tapLaterals,
       orgUnits: data.orgUnits,
+      networkVersion: data.networkVersion || null,
+      networkCacheHit: Boolean(data.networkCacheHit),
     });
     // When embedded, the host portal owns identity. Re-apply it so an editor's
     // scope resolves against the substations that just loaded, and ignore any
@@ -394,7 +409,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   },
 
   reloadFromSupabase: async () => {
-    const data = await loadNetwork();
+    const data = await loadNetwork({ force: true });
     set({
       backend: data.backend,
       substations: data.substations,
@@ -402,6 +417,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       tapNodes: data.tapNodes,
       tapLaterals: data.tapLaterals,
       orgUnits: data.orgUnits,
+      networkVersion: data.networkVersion || null,
+      networkCacheHit: false,
     });
     get().flashStatus(
       data.backend === 'supabase'
