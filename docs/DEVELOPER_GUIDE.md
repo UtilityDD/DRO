@@ -235,10 +235,12 @@ Key files:
 | Layer | Behaviour |
 |-------|-----------|
 | Browser IndexedDB (`powermap-dro-v2`) | Full substations / lines / taps / org units |
+| IDB store `personalDrafts` (DB v2) | Editor-only on-device SS + feeder drafts — **never** live map / never cloud until promote ships |
 | Meta key `networkVersion` | Last stamp that matches the stored dump |
 | Client (`vendor/PowerMapV2/src/lib/networkRepo.ts` → `loadNetwork`) | Fetch stamp first. Same stamp → **reuse IDB**, no `pm_v_*` pull. Mismatch or empty cache → full pull, then store stamp |
 | Toolbar | Shows `Cached · r:N · …` or `Live · r:N · …`. Click forces `loadNetwork({ force: true })` |
-| Editor saves | Cloud write bumps `powermap.network_meta.revision` (triggers in 032); client refreshes local stamp |
+| Super-admin saves | Cloud write bumps `powermap.network_meta.revision` (triggers in 032); client refreshes local stamp |
+| Editor saves (SS + feeders) | **Personal drafts** in IDB only (comment required). Promote → suggestion comes later |
 
 Run `032` in the Power Map Supabase SQL editor (**utility.dipankar@gmail.com** / `unsmtschmcvftfqwabaq`). Without it, fallback stamps still avoid most full reloads when nothing changed.
 
@@ -250,6 +252,7 @@ Key files:
 
 - `supabase/sql/032_powermap_network_revision.sql` — revision table, triggers, `pm_network_stamp`
 - `vendor/PowerMapV2/src/lib/networkRepo.ts` — `fetchNetworkStamp` / versioned `loadNetwork`
+- `vendor/PowerMapV2/src/lib/personalDrafts.ts` — on-device draft CRUD + stale-live check
 - `apps/web/src/pages/PowerMapPage.tsx` — version badge + force refresh
 - `apps/web/src/powermap/supabase.ts` — `networkStamp` table name on the public bridge
 
@@ -265,6 +268,33 @@ Embedded from `vendor/PowerMapV2`. DRO wraps it in `PowerMapPage.tsx`:
 - Geometry (`/geo/*.geojson`) is cached long-term (Vercel + service worker). Do not shrink it to “save bandwidth.”
 - Network dump is **versioned** (see §7 Power Map). Prefer stamp reuse over re-downloading the whole grid.
 - Neighbour / out-of-DRO EHV stubs are normal rows with remarks; do not invent cross-border links without OSM evidence.
+
+### Layers vs ownership (what is DB vs code)
+
+| Item | Storage |
+|------|---------|
+| Layers panel toggles, basemap, scenes, district focus | **Client only** (Zustand). Not a DB catalog — keep it that way for view prefs. |
+| Scene presets (`mapScope.ts`) | **Code** |
+| Voltage chips / colours (`VOLTAGE_CATALOG`) | **Code** UI; DB has `voltage_levels` for FKs on write |
+| Asset `owner` value | **Database** — `powermap.assets.owner` (`text`) |
+| Ownership dropdown list (`OWNER_OPTIONS`) | **Code** — WBSEDCL, WBSETCL, POWERGRID, NTPC, DVC, CESC |
+| Report owner bucketing | **Code** — `normalizeOwner()` (33 kV → WBSEDCL; blank 132/220 → WBSETCL) |
+
+### Personal drafts (editors)
+
+Authorized editors save SS + feeder edits to **this device** (IndexedDB `personalDrafts`), with a required personal comment. Live map and cloud suggestions are unchanged until a later **promote → suggestion** flow. Settings → **My drafts**; teal map markers (orange = pending suggestions for super admin).
+
+### Ownership fill + EHV SQL (Power Map project)
+
+Run these in the **Power Map** SQL editor (`unsmtschmcvftfqwabaq`), in order when applying for the first time:
+
+| Script | Purpose |
+|--------|---------|
+| `033_powermap_ehv_owner_wbsetcl.sql` | Blank 132/220 SS → WBSETCL |
+| `034_raiganj_132_kush_gang.sql` | Raiganj GSS → Kushmandi GSS + Gangarampur GSS (132 kV, proposed); Kushmandi GSS class → 132 |
+| `035_powermap_fill_owners.sql` | Canonicalize aliases; fill all blank SS/line/tap owners by voltage; force 33 kV SS → WBSEDCL |
+
+After network SQL, hard-refresh Power Map (or force toolbar reload) so the stamp / dump updates.
 
 ## 9. Adding a desk or API
 
@@ -335,6 +365,8 @@ Full checklist: [DEPLOYMENT.md](DEPLOYMENT.md).
 | Pages spin after login | Store not ready / hung Supabase | Auth tables unlock API; fetches time out at 20s |
 | Withheld chart blank / timeout | Full dump re-fetched every visit | Trust dump version; use Refresh only after upload |
 | Power Map always re-downloads | Stamp unused / 032 not applied | Prefer stamp reuse; run `032` in Power Map project |
+| Owner blank / wrong on map | SQL fill not applied | Run `035_powermap_fill_owners.sql` in Power Map project |
+| Editor save did not change live map | By design — personal drafts | Check Settings → My drafts; promote→suggestion not shipped yet |
 | Power Map looks like a second app | Vendor `app-shell` / TopBar | Keep `pm-shell` + DRO masthead |
 | Vite “not loading” on Windows | Bound to IPv6 only | `server.host: true` (already set) |
 | `Invalid schema: dro` | Schema not exposed | Use `public` |
