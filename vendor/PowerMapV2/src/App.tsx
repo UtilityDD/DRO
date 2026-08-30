@@ -8,6 +8,26 @@ import { StatusBar } from '@/features/shell/StatusBar';
 import { ToolRail } from '@/features/shell/ToolRail';
 import { useNetworkStore } from '@/store/networkStore';
 
+function ScopeBadge() {
+  const sceneId = useNetworkStore((s) => s.sceneId);
+  const filters = useNetworkStore((s) => s.filters);
+  const focusedDistricts = useNetworkStore((s) => s.mapLayers.focusedDistricts);
+  const dimAll = useNetworkStore((s) => s.mapLayers.dimAllDistricts);
+  const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
+  // Recompute when scope inputs change (getter itself is stable).
+  void sceneId;
+  void filters;
+  void focusedDistricts;
+  void dimAll;
+  const label = scopeBadgeLabel();
+  return (
+    <div className="scope-badge" title="Current map / report / print scope">
+      <span className="scope-badge-kicker">Reporting on</span>
+      <span className="scope-badge-text">{label}</span>
+    </div>
+  );
+}
+
 export function App() {
   const bootstrap = useNetworkStore((s) => s.bootstrap);
   const loaded = useNetworkStore((s) => s.loaded);
@@ -33,6 +53,7 @@ export function App() {
             </div>
           )}
           <MapView />
+          <ScopeBadge />
           <div className="map-legend">
             <div className="legend-title">Symbology</div>
             <div className="legend-row"><span className="sym square" /> 400 kV</div>

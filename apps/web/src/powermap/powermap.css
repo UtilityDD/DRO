@@ -3,7 +3,10 @@
   --bg: #e8eef4;
   --surface: rgba(255, 255, 255, 0.92);
   --surface-solid: #ffffff;
+  --surface-muted: #f8fafc;
+  --surface-soft: #f1f5f9;
   --ink: #0f172a;
+  --ink-secondary: #334155;
   --muted: #64748b;
   --line: rgba(15, 23, 42, 0.08);
   --accent: #0b6e4f;
@@ -169,7 +172,8 @@
   gap: 8px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: white;
+  background: var(--surface-solid);
+  color: var(--ink);
   border: 1px solid var(--line);
   font-size: 12px;
 }
@@ -215,7 +219,7 @@
   padding: 8px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: #f8fafc;
+  background: var(--surface-muted);
 }
 
 .pm-root .related-lines{
@@ -229,12 +233,12 @@
   padding: 8px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: #f8fafc;
+  background: var(--surface-muted);
 }
 
 .pm-root .related-corridor.is-double{
-  border-color: #94a3b8;
-  background: #f1f5f9;
+  border-color: color-mix(in srgb, var(--ink) 28%, var(--line));
+  background: var(--surface-soft);
 }
 
 .pm-root .related-corridor-head h4{
@@ -250,7 +254,7 @@
   padding: 8px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface-solid);
 }
 
 .pm-root .related-line-card h4{
@@ -285,8 +289,9 @@
   gap: 6px;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid #94a3b8;
-  background: #f1f5f9;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--ink);
 }
 
 .pm-root .scope-checklist{
@@ -297,11 +302,22 @@
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface-solid);
+  color: var(--ink);
 }
 
 .pm-root .scope-checklist-tall{
   max-height: 180px;
+}
+
+.pm-root .scope-checklist .check-row{
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 3px 4px;
+}
+
+.pm-root .scope-checklist .check-row:hover{
+  background: var(--surface-muted);
 }
 
 .pm-root .suggestion-list{
@@ -315,8 +331,9 @@
   gap: 6px;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid #fdba74;
-  background: #fff7ed;
+  border: 1px solid color-mix(in srgb, #f97316 45%, var(--line));
+  background: color-mix(in srgb, #f97316 12%, var(--surface-solid));
+  color: var(--ink);
   cursor: pointer;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
@@ -601,8 +618,8 @@
   margin: 0;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #fff7ed;
-  color: #9a3412;
+  background: color-mix(in srgb, #f97316 16%, var(--surface-solid));
+  color: color-mix(in srgb, #9a3412 70%, var(--ink));
   font-size: 11px;
   line-height: 1.35;
 }
@@ -616,8 +633,8 @@
   padding: 5px 10px;
   border-radius: 999px;
   border: none;
-  background: #f1f5f9;
-  color: #475569;
+  background: var(--surface-soft);
+  color: var(--ink-secondary);
   cursor: pointer;
   max-width: min(320px, 42vw);
   white-space: nowrap;
@@ -716,6 +733,66 @@
   min-width: 140px;
 }
 
+.pm-root .scope-badge{
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 550;
+  max-width: min(420px, calc(100% - 32px));
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+.pm-root .scope-badge-kicker{
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.pm-root .scope-badge-text{
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.pm-root .scene-chip-group{
+  margin-bottom: 4px;
+}
+
+.pm-root .print-scope-card{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.pm-root .print-scope-card > div{
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pm-root .print-scope-card strong{
+  font-size: 13px;
+  line-height: 1.3;
+}
+
 .pm-root .coord-chip{
   position: absolute;
   top: 14px;
@@ -725,7 +802,8 @@
   min-width: 240px;
   padding: 10px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--surface);
+  color: var(--ink);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
   text-align: center;
@@ -746,7 +824,7 @@
   gap: 16px;
   font-size: 13px;
   font-family: var(--mono);
-  color: #334155;
+  color: var(--ink-secondary);
 }
 
 .pm-root .coord-readout{
@@ -754,9 +832,10 @@
   gap: 8px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--surface-muted);
   border: 1px solid var(--line);
   font-size: 12px;
+  color: var(--ink);
 }
 
 .pm-root .coord-readout > div{
@@ -837,13 +916,14 @@
 .pm-root .side-panel{
   width: min(300px, 34vw);
   border-left: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--surface);
   backdrop-filter: blur(16px);
   display: flex;
   flex-direction: column;
   min-height: 0;
   animation: slideIn 0.22s ease;
   font-size: 12px;
+  color: var(--ink);
 }
 
 @keyframes slideIn {
@@ -885,7 +965,8 @@
 
 .pm-root .icon-btn{
   border: none;
-  background: #f1f5f9;
+  background: var(--surface-soft);
+  color: var(--ink);
   width: 30px;
   height: 30px;
   border-radius: 8px;
@@ -919,7 +1000,7 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 5px 7px;
-  background: white;
+  background: var(--surface-solid);
   color: var(--ink);
   font-size: 12px;
   font-weight: 500;
@@ -1011,6 +1092,7 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  color: var(--ink);
 }
 
 .pm-root .chip-group{
@@ -1021,7 +1103,8 @@
 
 .pm-root .chip{
   border: 1px solid var(--line);
-  background: white;
+  background: var(--surface-solid);
+  color: var(--ink);
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 12px;
@@ -1060,8 +1143,9 @@
   gap: 4px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--surface-muted);
   border: 1px solid var(--line);
+  color: var(--ink);
 }
 
 .pm-root .endpoint-coords > div{
@@ -1131,12 +1215,12 @@
 }
 
 .pm-root .primary-btn.ghost{
-  background: #f1f5f9;
+  background: var(--surface-soft);
   color: var(--ink);
 }
 
 .pm-root .danger-btn{
-  background: #fee2e2;
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface-solid));
   color: var(--danger);
 }
 
@@ -1145,8 +1229,9 @@
   gap: 8px;
   padding: 12px;
   border-radius: 12px;
-  background: #f8fafc;
+  background: var(--surface-muted);
   border: 1px solid var(--line);
+  color: var(--ink);
 }
 
 .pm-root .report-card > div{
@@ -1188,7 +1273,7 @@
 
 .pm-root .report-tab{
   border: 1px solid var(--line);
-  background: #f8fafc;
+  background: var(--surface-muted);
   color: var(--ink);
   border-radius: 999px;
   padding: 4px 8px;
@@ -1220,26 +1305,27 @@
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface-solid);
 }
 
 .pm-root .report-table{
   width: 100%;
   border-collapse: collapse;
   font-size: 11px;
+  color: var(--ink);
 }
 
 .pm-root .report-table th, .pm-root .report-table td{
   padding: 6px 7px;
   text-align: left;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
   vertical-align: top;
 }
 
 .pm-root .report-table th{
   position: sticky;
   top: 0;
-  background: #f1f5f9;
+  background: var(--surface-soft);
   z-index: 1;
   font-size: 10px;
   text-transform: uppercase;
@@ -1252,15 +1338,36 @@
 }
 
 .pm-root .report-table tbody tr:hover{
-  background: #f0f9ff;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-solid));
 }
 
 .pm-root .report-table tbody tr.is-overloaded{
-  background: #fff7ed;
+  background: color-mix(in srgb, #f97316 14%, var(--surface-solid));
 }
 
 .pm-root .report-table tbody tr.is-overloaded:hover{
-  background: #ffedd5;
+  background: color-mix(in srgb, #f97316 22%, var(--surface-solid));
+}
+
+.pm-root .report-table tbody tr.report-group-row, .pm-root .report-table tbody tr.report-group-row:hover{
+  cursor: default;
+  background: var(--surface-muted);
+}
+
+.pm-root .report-table tbody tr.report-group-row td{
+  border-bottom-color: var(--line);
+  padding-top: 8px;
+  padding-bottom: 6px;
+}
+
+.pm-root .report-table tbody tr.report-total-row, .pm-root .report-table tbody tr.report-total-row:hover{
+  cursor: default;
+  background: var(--surface-soft);
+  font-weight: 600;
+}
+
+.pm-root .report-table-compact th, .pm-root .report-table-compact td{
+  white-space: nowrap;
 }
 
 .pm-root .report-name{
@@ -1354,7 +1461,8 @@
 }
 
 .pm-root .boot-card, .pm-root .search-modal, .pm-root .modal-card{
-  background: white;
+  background: var(--surface-solid);
+  color: var(--ink);
   border-radius: 16px;
   box-shadow: var(--shadow);
   border: 1px solid var(--line);
@@ -1393,6 +1501,8 @@
   padding: 16px 18px;
   font-size: 15px;
   border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
 }
 
 .pm-root .search-results{
@@ -1414,10 +1524,11 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  color: var(--ink);
 }
 
 .pm-root .search-results button:hover{
-  background: #f8fafc;
+  background: var(--surface-muted);
 }
 
 .pm-root .search-results strong{
@@ -1447,7 +1558,7 @@
 
 .pm-root .modal-card p{
   margin: 0 0 18px;
-  color: #334155;
+  color: var(--ink-secondary);
   line-height: 1.45;
 }
 
@@ -1587,7 +1698,8 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 10px;
-  background: #f8fafc;
+  background: var(--surface-muted);
+  color: var(--ink);
 }
 
 .pm-root .district-focus-header{
@@ -1648,7 +1760,9 @@
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: #e2e8f0;
+  background: var(--surface-soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
 }
 
 .pm-root .pm-tip{
@@ -1913,6 +2027,7 @@
   border-left: 1px solid #e2e8f0;
   font-weight: 500;
   color: #64748b;
+  text-transform: none;
 }
 
 .pm-root .print-link-label span{
@@ -2215,8 +2330,7 @@
     padding: 2mm 3mm 1.5mm !important;
   }
 
-  .pm-root .print-sheet-title h1,
-  .pm-root .print-sheet-header h1{
+  .pm-root .print-sheet-title h1, .pm-root .print-sheet-header h1{
     font-size: 11pt !important;
   }
 

@@ -5,11 +5,40 @@ import { formatCapacity } from '@/domain/geo';
 import type { AssetLifecycle, TrunkLine, VoltageCode } from '@/domain/types';
 import { VOLTAGE_CATALOG } from '@/domain/types';
 import { linesConnectedTo } from '@/lib/networkRepo';
+import { OWNER_OPTIONS } from '@/lib/reports';
 import type { SitingCandidate } from '@/lib/sitingSuggestions';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
+import { SCENE_PRESETS } from '@/lib/mapScope';
 import { useNetworkStore } from '@/store/networkStore';
 import { ReportsForm } from '@/features/shell/ReportsPanel';
 import { PrintForm } from '@/features/print/PrintForm';
+
+function OwnerSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+}) {
+  const known = (OWNER_OPTIONS as readonly string[]).includes(value);
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">—</option>
+      {OWNER_OPTIONS.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+      {value && !known && <option value={value}>{value}</option>}
+    </select>
+  );
+}
 
 export function SidePanel() {
   const panel = useNetworkStore((s) => s.panel);
@@ -405,7 +434,18 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
         </Field>
         <div className="field-row">
           <Field label="Voltage">
-            <select value={voltageCode} onChange={(e) => setVoltageCode(e.target.value as VoltageCode)}>
+            <select
+              value={voltageCode}
+              onChange={(e) => {
+                const next = e.target.value as VoltageCode;
+                setVoltageCode(next);
+                // Suggest owner only when blank
+                if (!owner.trim()) {
+                  if (next === '33') setOwner('WBSEDCL');
+                  else if (next === '132' || next === '220') setOwner('WBSETCL');
+                }
+              }}
+            >
               {VOLTAGE_CATALOG.map((v) => (
                 <option key={v.code} value={v.code}>
                   {v.label}
@@ -524,18 +564,18 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
               ))}
           </select>
         </Field>
+        <Field label="Ownership">
+          <OwnerSelect
+            value={owner}
+            onChange={setOwner}
+            disabled={!canEdit}
+          />
+        </Field>
         <Field label="Proposed Improvement">
           <input
             value={proposalRef}
             onChange={(e) => setProposalRef(e.target.value)}
             placeholder="e.g. Augmentation 2×10 MVA, new bay…"
-          />
-        </Field>
-        <Field label="Progress">
-          <input
-            value={owner}
-            onChange={(e) => setOwner(e.target.value)}
-            placeholder="e.g. DPR submitted, land acquired, 40% civil…"
           />
         </Field>
         <Field label="Remarks">
@@ -1205,6 +1245,10 @@ function FiltersForm() {
 function LayersForm() {
   const mapLayers = useNetworkStore((s) => s.mapLayers);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
+  const sceneId = useNetworkStore((s) => s.sceneId);
+  const applyScene = useNetworkStore((s) => s.applyScene);
+  const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
+  const filters = useNetworkStore((s) => s.filters);
   const setMapLayers = useNetworkStore((s) => s.setMapLayers);
   const clearDistrictFocus = useNetworkStore((s) => s.clearDistrictFocus);
   const dimAllDistricts = useNetworkStore((s) => s.dimAllDistricts);
@@ -1213,6 +1257,8 @@ function LayersForm() {
   const focused = mapLayers.focusedDistricts;
   const focusing = focused.length > 0;
   const allDimmed = mapLayers.dimAllDistricts;
+  void filters;
+  const badge = scopeBadgeLabel();
 
   const setUndimmed = (name: string, undimmed: boolean) => {
     const all = availableDistricts;
@@ -1240,6 +1286,30 @@ function LayersForm() {
 
   return (
     <div className="form-stack">
+      <p className="section-label">Scene</p>
+      <p className="muted" style={{ marginTop: 0 }}>
+        One-click job presets. Reporting on: <strong>{badge}</strong>
+      </p>
+      <div className="chip-group scene-chip-group" role="group" aria-label="Map scenes">
+        {SCENE_PRESETS.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`chip${sceneId === s.id ? ' on' : ''}`}
+            title={s.blurb}
+            aria-pressed={sceneId === s.id}
+            onClick={() => applyScene(s.id)}
+          >
+            {s.label}
+          </button>
+        ))}
+        {sceneId === 'custom' && (
+          <button type="button" className="chip on" disabled aria-pressed>
+            Custom
+          </button>
+        )}
+      </div>
+
       <p className="muted">
         With the <strong>Select</strong> tool, click a district on the map to undim it (others dim).
         Hold <kbd>Shift</kbd> and click to undim several.

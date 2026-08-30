@@ -26,6 +26,12 @@ import {
   type EditorAccount,
 } from '@/lib/editorsRepo';
 import {
+  buildScopeBadgeLabel,
+  printPatchFromScope,
+  sceneById,
+  type SceneId,
+} from '@/lib/mapScope';
+import {
   canEditorTouchLine,
   canEditorTouchSubstation,
   resolveEditableSubstationIds,
@@ -155,6 +161,8 @@ interface NetworkStore extends UiState {
   orgUnits: OrgUnit[];
   filters: NetworkFilters;
   mapLayers: MapLayerSettings;
+  /** Active scene preset; `custom` after manual filter/layer edits. */
+  sceneId: SceneId;
   availableDistricts: string[];
   /** Live dump stamp (NSC-style). Empty until first successful stamp/fetch. */
   networkVersion: string | null;
@@ -189,6 +197,9 @@ interface NetworkStore extends UiState {
   adoptSitingCandidate: (id: string) => void;
   setPrintSettings: (patch: Partial<PrintSettings>) => void;
   setPrintPreviewOpen: (open: boolean) => void;
+  applyScene: (id: Exclude<SceneId, 'custom'>) => void;
+  syncPrintFromScope: () => void;
+  scopeBadgeLabel: () => string;
   approveSuggestion: (id: string) => Promise<void>;
   rejectSuggestion: (id: string) => Promise<void>;
   editorCanEditSs: (ssId: string) => boolean;
@@ -327,6 +338,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   focusedSitingId: null,
   printSettings: { ...DEFAULT_PRINT_SETTINGS },
   printPreviewOpen: false,
+  sceneId: 'overview',
   substations: [],
   lines: [],
   tapNodes: [],
@@ -735,6 +747,61 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
 
   setPrintPreviewOpen: (printPreviewOpen) => set({ printPreviewOpen }),
 
+  applyScene: (id) => {
+    const scene = sceneById(id);
+    if (!scene) return;
+    const prev = get().mapLayers;
+    const nextLayers: MapLayerSettings = {
+      ...prev,
+      ...scene.mapLayers,
+    };
+    // District-focus keeps the user's current undimmed set.
+    if (id === 'district-focus') {
+      nextLayers.focusedDistricts = prev.focusedDistricts;
+      nextLayers.dimAllDistricts = prev.dimAllDistricts;
+    }
+    set({
+      sceneId: id,
+      filters: { ...get().filters, ...scene.filters },
+      mapLayers: nextLayers,
+    });
+    if (scene.syncPrint) get().syncPrintFromScope();
+    if (id === 'district-focus' && !nextLayers.focusedDistricts.length && !nextLayers.dimAllDistricts) {
+      get().flashStatus('District focus · click a district to undim');
+    } else {
+      get().flashStatus(`Scene · ${scene.label}`);
+    }
+  },
+
+  syncPrintFromScope: () => {
+    const patch = printPatchFromScope({
+      filters: get().filters,
+      mapLayers: get().mapLayers,
+    });
+    const badge = get().scopeBadgeLabel();
+    set({
+      printSettings: {
+        ...get().printSettings,
+        ...patch,
+        subtitle: badge,
+      },
+    });
+    get().flashStatus(
+      patch.districts.length
+        ? `Print scope · ${patch.districts.length} district(s)`
+        : 'Print scope · full network',
+    );
+  },
+
+  scopeBadgeLabel: () => {
+    const { sceneId, filters, mapLayers } = get();
+    return buildScopeBadgeLabel({
+      sceneId,
+      filters,
+      focusedDistricts: mapLayers.dimAllDistricts ? [] : mapLayers.focusedDistricts,
+    });
+  },
+
   authorizeEditor: async (portalUsername, scope) => {
     if (!get().requireSuperAdmin()) return false;
     const username = portalUsername.trim();
@@ -838,9 +905,11 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     }, 2800);
   },
 
-  setFilters: (patch) => set({ filters: { ...get().filters, ...patch } }),
+  setFilters: (patch) =>
+    set({ filters: { ...get().filters, ...patch }, sceneId: 'custom' }),
 
-  setMapLayers: (patch) => set({ mapLayers: { ...get().mapLayers, ...patch } }),
+  setMapLayers: (patch) =>
+    set({ mapLayers: { ...get().mapLayers, ...patch }, sceneId: 'custom' }),
 
   setAvailableDistricts: (availableDistricts) => set({ availableDistricts }),
 
@@ -856,6 +925,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       next = [...current, name];
     }
     set({
+      sceneId: 'custom',
       mapLayers: {
         ...get().mapLayers,
         showDistricts: true,
@@ -874,6 +944,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
 
   clearDistrictFocus: () => {
     set({
+      sceneId: 'custom',
       mapLayers: {
         ...get().mapLayers,
         focusedDistricts: [],
@@ -885,6 +956,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
 
   dimAllDistricts: () => {
     set({
+      sceneId: 'custom',
       mapLayers: {
         ...get().mapLayers,
         showDistricts: true,
@@ -897,6 +969,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
 
   focusOnlyDistrict: (name) => {
     set({
+      sceneId: 'custom',
       mapLayers: {
         ...get().mapLayers,
         showDistricts: true,

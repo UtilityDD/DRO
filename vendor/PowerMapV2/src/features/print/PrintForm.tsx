@@ -18,6 +18,17 @@ export function PrintForm() {
   const setPrintSettings = useNetworkStore((s) => s.setPrintSettings);
   const setPrintPreviewOpen = useNetworkStore((s) => s.setPrintPreviewOpen);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
+  const syncPrintFromScope = useNetworkStore((s) => s.syncPrintFromScope);
+  const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
+  const sceneId = useNetworkStore((s) => s.sceneId);
+  const filters = useNetworkStore((s) => s.filters);
+  const focusedDistricts = useNetworkStore((s) => s.mapLayers.focusedDistricts);
+  const dimAll = useNetworkStore((s) => s.mapLayers.dimAllDistricts);
+  void sceneId;
+  void filters;
+  void focusedDistricts;
+  void dimAll;
+  const badge = scopeBadgeLabel();
 
   const districts =
     availableDistricts.length > 0
@@ -41,6 +52,16 @@ export function PrintForm() {
         Office wall / desk maps — clean basemap, SS names, feeder lengths, and a capacity
         list beside the map. Choose paper size and districts, then open print preview.
       </p>
+
+      <div className="print-scope-card">
+        <div>
+          <span className="muted">Map scope</span>
+          <strong>{badge}</strong>
+        </div>
+        <button type="button" className="primary-btn ghost" onClick={() => syncPrintFromScope()}>
+          Use current scope
+        </button>
+      </div>
 
       <Field label="Title">
         <input

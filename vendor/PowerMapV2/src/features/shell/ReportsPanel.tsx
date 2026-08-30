@@ -1,13 +1,17 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
+import { buildPrintAssets } from '@/lib/printLayout';
 import {
   REPORT_TABS,
+  buildDistrictDossier,
   buildExecutiveReport,
   buildFeederReportRows,
   buildSsReportRows,
+  exportDistrictDossierCsv,
   exportExecutiveCsv,
   exportFeedersCsv,
   exportSsCsv,
+  type DistrictDossier,
   type FeederReportRow,
   type ReportTabId,
   type SsReportRow,
@@ -25,16 +29,70 @@ function km(v: number | null | undefined) {
 
 export function ReportsForm() {
   const [tab, setTab] = useState<ReportTabId>('executive');
-  const visibleSubstations = useNetworkStore((s) => s.visibleSubstations);
-  const visibleLines = useNetworkStore((s) => s.visibleLines);
   const allSubstations = useNetworkStore((s) => s.substations);
+  const allLines = useNetworkStore((s) => s.lines);
   const orgUnits = useNetworkStore((s) => s.orgUnits);
+  const mapLayers = useNetworkStore((s) => s.mapLayers);
+  const filters = useNetworkStore((s) => s.filters);
+  const sceneId = useNetworkStore((s) => s.sceneId);
+  const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
   const setSelection = useNetworkStore((s) => s.setSelection);
   const setMapFocus = useNetworkStore((s) => s.setMapFocus);
   const flashStatus = useNetworkStore((s) => s.flashStatus);
+  const setPanel = useNetworkStore((s) => s.setPanel);
+  const syncPrintFromScope = useNetworkStore((s) => s.syncPrintFromScope);
+  const setPrintPreviewOpen = useNetworkStore((s) => s.setPrintPreviewOpen);
 
-  const substations = visibleSubstations();
-  const lines = visibleLines();
+  const filteredSs = useMemo(
+    () => useNetworkStore.getState().visibleSubstations(),
+    [allSubstations, allLines, filters],
+  );
+  const filteredLines = useMemo(
+    () => useNetworkStore.getState().visibleLines(),
+    [allSubstations, allLines, filters],
+  );
+
+  const focusedDistricts = mapLayers.dimAllDistricts
+    ? []
+    : mapLayers.focusedDistricts;
+  const focusKey = focusedDistricts.join('|');
+
+  const [scoped, setScoped] = useState<{
+    substations: typeof filteredSs;
+    lines: typeof filteredLines;
+    inDistrictIds: string[];
+    districtNames: string[];
+  } | null>(null);
+  const [scopeBusy, setScopeBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!focusedDistricts.length) {
+      setScoped(null);
+      setScopeBusy(false);
+      return;
+    }
+    setScopeBusy(true);
+    void buildPrintAssets(filteredSs, filteredLines, focusedDistricts, {
+      includeProposed: filters.showProposed && filters.statuses.includes('proposed'),
+    }).then((bundle) => {
+      if (cancelled) return;
+      setScoped({
+        substations: bundle.substations,
+        lines: bundle.lines,
+        inDistrictIds: bundle.inDistrictIds,
+        districtNames: bundle.districtNames,
+      });
+      setScopeBusy(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusKey, filteredSs, filteredLines, filters.showProposed, filters.statuses]);
+
+  const substations = scoped?.substations ?? filteredSs;
+  const lines = scoped?.lines ?? filteredLines;
+  const badge = scopeBadgeLabel();
 
   const executive = useMemo(
     () => buildExecutiveReport(substations, lines),
@@ -56,6 +114,23 @@ export function ReportsForm() {
     () => buildFeederReportRows(lines, allSubstations, 'proposed'),
     [lines, allSubstations],
   );
+
+  const dossier: DistrictDossier | null = useMemo(() => {
+    if (!scoped || !scoped.inDistrictIds.length) return null;
+    return buildDistrictDossier(
+      scoped.substations,
+      scoped.lines,
+      scoped.inDistrictIds,
+      scoped.districtNames.length ? scoped.districtNames : focusedDistricts,
+      orgUnits,
+    );
+  }, [scoped, focusedDistricts, orgUnits]);
+
+  useEffect(() => {
+    if (tab === 'dossier' && !focusedDistricts.length) {
+      setTab('executive');
+    }
+  }, [tab, focusedDistricts.length]);
 
   const focusSs = (row: SsReportRow) => {
     setSelection({ kind: 'substation', id: row.id });
@@ -79,11 +154,18 @@ export function ReportsForm() {
 
   const exportCurrent = () => {
     if (tab === 'executive') exportExecutiveCsv(executive);
+    else if (tab === 'dossier' && dossier) exportDistrictDossierCsv(dossier);
     else if (tab === 'existing-ss') exportSsCsv(existingSs, 'existing');
     else if (tab === 'proposed-ss') exportSsCsv(proposedSs, 'proposed');
     else if (tab === 'existing-feeders') exportFeedersCsv(existingFeeders, 'existing');
     else exportFeedersCsv(proposedFeeders, 'proposed');
     flashStatus('CSV exported');
+  };
+
+  const openPrint = () => {
+    syncPrintFromScope();
+    setPanel('print');
+    setPrintPreviewOpen(true);
   };
 
   const exportGeoJson = () => {
@@ -121,12 +203,22 @@ export function ReportsForm() {
     flashStatus('GeoJSON exported');
   };
 
+  const tabs = REPORT_TABS.filter(
+    (t) => t.id !== 'dossier' || focusedDistricts.length > 0,
+  );
+
   return (
     <div className="form-stack reports-panel">
-      <p className="muted reports-filter-note">Respects current map filters.</p>
+      <p className="muted reports-filter-note">
+        Reporting on: <strong>{badge}</strong>
+        {scopeBusy ? ' · resolving districts…' : ''}
+        {focusedDistricts.length
+          ? ' · in-district + connecting feeders'
+          : ' · map filters (focus a district for the dossier)'}
+      </p>
 
       <div className="report-tabs" role="tablist" aria-label="Report type">
-        {REPORT_TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -141,10 +233,22 @@ export function ReportsForm() {
       </div>
 
       {tab === 'executive' && <ExecutiveView report={executive} />}
+      {tab === 'dossier' &&
+        (dossier ? (
+          <DossierView
+            dossier={dossier}
+            onSelectSs={focusSs}
+            onSelectFeeder={focusFeeder}
+          />
+        ) : (
+          <p className="muted">
+            Focus one or more districts on the map (or Layers) to build a district dossier.
+          </p>
+        ))}
       {tab === 'existing-ss' && (
         <SsTable
           rows={existingSs}
-          empty="No existing substations in the current filter."
+          empty="No existing substations in the current scope."
           onSelect={focusSs}
           showLoading
         />
@@ -152,7 +256,7 @@ export function ReportsForm() {
       {tab === 'proposed-ss' && (
         <SsTable
           rows={proposedSs}
-          empty="No proposed substations in the current filter."
+          empty="No proposed substations in the current scope."
           onSelect={focusSs}
           showLoading={false}
         />
@@ -160,7 +264,7 @@ export function ReportsForm() {
       {tab === 'existing-feeders' && (
         <FeederTable
           rows={existingFeeders}
-          empty="No existing feeders in the current filter."
+          empty="No existing feeders in the current scope."
           onSelect={focusFeeder}
           showLoading
         />
@@ -168,7 +272,7 @@ export function ReportsForm() {
       {tab === 'proposed-feeders' && (
         <FeederTable
           rows={proposedFeeders}
-          empty="No proposed feeders in the current filter."
+          empty="No proposed feeders in the current scope."
           onSelect={focusFeeder}
           showLoading={false}
         />
@@ -181,7 +285,101 @@ export function ReportsForm() {
         <button type="button" className="primary-btn ghost" onClick={exportGeoJson}>
           Export GeoJSON
         </button>
+        <button type="button" className="primary-btn ghost" onClick={openPrint}>
+          Print scope
+        </button>
       </div>
+      {sceneId === 'custom' && (
+        <p className="muted">Scene is Custom — filters or layers were changed manually.</p>
+      )}
+    </div>
+  );
+}
+
+function DossierView({
+  dossier,
+  onSelectSs,
+  onSelectFeeder,
+}: {
+  dossier: DistrictDossier;
+  onSelectSs: (row: SsReportRow) => void;
+  onSelectFeeder: (row: FeederReportRow) => void;
+}) {
+  return (
+    <div className="form-stack">
+      <p className="section-label">{dossier.districtNames.join(' · ') || 'District'}</p>
+      <div className="report-card">
+        <div>
+          <span>In-district SS</span>
+          <strong>{dossier.inDistrictCount}</strong>
+        </div>
+        <div>
+          <span>Linked outside</span>
+          <strong>{dossier.linkedOutsideCount}</strong>
+        </div>
+        <div>
+          <span>In-district MVA</span>
+          <strong>{dossier.mvaInDistrict.toFixed(1)}</strong>
+        </div>
+        <div>
+          <span>Internal feeders</span>
+          <strong>{dossier.feedersInternal}</strong>
+        </div>
+        <div>
+          <span>Leaving feeders</span>
+          <strong>{dossier.feedersLeaving}</strong>
+        </div>
+        <div>
+          <span>Feeder km</span>
+          <strong>{dossier.feederKm.toFixed(1)}</strong>
+        </div>
+        <div>
+          <span>Overloaded SS</span>
+          <strong className={dossier.overloadedSs ? 'is-warn' : ''}>
+            {dossier.overloadedSs}
+          </strong>
+        </div>
+        <div>
+          <span>Isolated SS</span>
+          <strong>{dossier.isolatedInDistrict}</strong>
+        </div>
+      </div>
+
+      <p className="section-label">In-district substations</p>
+      <SsTable
+        rows={dossier.inDistrictSs}
+        empty="No substations inside the focused district(s)."
+        onSelect={onSelectSs}
+        showLoading
+      />
+
+      {dossier.linkedOutsideSs.length > 0 && (
+        <>
+          <p className="section-label">Linked outside hubs</p>
+          <SsTable
+            rows={dossier.linkedOutsideSs}
+            empty=""
+            onSelect={onSelectSs}
+            showLoading={false}
+          />
+        </>
+      )}
+
+      <p className="section-label">Internal feeders</p>
+      <FeederTable
+        rows={dossier.internalFeeders}
+        empty="No feeders wholly inside the district(s)."
+        onSelect={onSelectFeeder}
+        showLoading
+      />
+
+      <p className="section-label">Feeders leaving</p>
+      <FeederTable
+        rows={dossier.leavingFeeders}
+        empty="No feeders leave the focused district(s)."
+        onSelect={onSelectFeeder}
+        showLoading
+      />
     </div>
   );
 }
@@ -191,6 +389,12 @@ function ExecutiveView({
 }: {
   report: ReturnType<typeof buildExecutiveReport>;
 }) {
+  const voltageRows = report.byVoltage.filter(
+    (v) => v.ssExisting || v.ssProposed || v.lineExisting || v.lineProposed,
+  );
+  const ownerRows = report.byOwner;
+  const detailRows = report.byOwnerVoltage;
+
   return (
     <div className="form-stack">
       <div className="report-card">
@@ -203,20 +407,20 @@ function ExecutiveView({
           <strong>{report.ssProposed}</strong>
         </div>
         <div>
-          <span>Existing feeders</span>
-          <strong>{report.lineExisting}</strong>
-        </div>
-        <div>
-          <span>Proposed feeders</span>
-          <strong>{report.lineProposed}</strong>
-        </div>
-        <div>
           <span>Installed MVA</span>
           <strong>{report.installedMvaExisting.toFixed(1)}</strong>
         </div>
         <div>
           <span>Planned MVA</span>
           <strong>{report.installedMvaProposed.toFixed(1)}</strong>
+        </div>
+        <div>
+          <span>Existing feeders</span>
+          <strong>{report.lineExisting}</strong>
+        </div>
+        <div>
+          <span>Proposed feeders</span>
+          <strong>{report.lineProposed}</strong>
         </div>
         <div>
           <span>Existing km</span>
@@ -227,61 +431,115 @@ function ExecutiveView({
           <strong>{report.lineKmProposed.toFixed(1)}</strong>
         </div>
         <div>
-          <span>Avg SS loading</span>
-          <strong>{pct(report.avgLoadingSs)}</strong>
-        </div>
-        <div>
-          <span>Avg feeder loading</span>
-          <strong>{pct(report.avgLoadingLine)}</strong>
-        </div>
-        <div>
           <span>Overloaded SS</span>
           <strong className={report.overloadedSs ? 'is-warn' : ''}>{report.overloadedSs}</strong>
-        </div>
-        <div>
-          <span>Overloaded feeders</span>
-          <strong className={report.overloadedLines ? 'is-warn' : ''}>
-            {report.overloadedLines}
-          </strong>
         </div>
         <div>
           <span>Isolated SS</span>
           <strong>{report.isolatedSs}</strong>
         </div>
-        <div>
-          <span>Double / multi ckt</span>
-          <strong>{report.doubleCircuit}</strong>
-        </div>
-        <div>
-          <span>Oldest year</span>
-          <strong>{report.oldestYear ?? '—'}</strong>
-        </div>
       </div>
 
-      <p className="section-label">By voltage</p>
+      <p className="section-label">SS & capacity by voltage</p>
       <div className="report-table-wrap">
-        <table className="report-table">
+        <table className="report-table report-table-compact">
           <thead>
             <tr>
               <th>Voltage</th>
-              <th>SS ex</th>
-              <th>SS pr</th>
-              <th>Fd ex</th>
-              <th>km</th>
-              <th>MVA</th>
+              <th>Ex SS</th>
+              <th>Ex MVA</th>
+              <th>Pr SS</th>
+              <th>Pr MVA</th>
             </tr>
           </thead>
           <tbody>
-            {report.byVoltage.map((v) => (
+            {voltageRows.map((v) => (
               <tr key={v.code}>
                 <td>{v.label}</td>
-                <td>{v.ssExisting}</td>
-                <td>{v.ssProposed}</td>
-                <td>{v.lineExisting}</td>
-                <td>{v.lineKmExisting.toFixed(1)}</td>
-                <td>{v.mvaExisting.toFixed(1)}</td>
+                <td>{v.ssExisting || '—'}</td>
+                <td>{v.mvaExisting ? v.mvaExisting.toFixed(1) : '—'}</td>
+                <td>{v.ssProposed || '—'}</td>
+                <td>{v.mvaProposed ? v.mvaProposed.toFixed(1) : '—'}</td>
               </tr>
             ))}
+            <tr className="report-total-row">
+              <td>Total</td>
+              <td>{report.ssExisting}</td>
+              <td>{report.installedMvaExisting.toFixed(1)}</td>
+              <td>{report.ssProposed}</td>
+              <td>{report.installedMvaProposed.toFixed(1)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p className="section-label">SS & capacity by owner</p>
+      <p className="muted" style={{ marginTop: 0 }}>
+        WBSEDCL · WBSETCL · POWERGRID · NTPC · others (33 kV → WBSEDCL; blank 132/220 → WBSETCL)
+      </p>
+      <div className="report-table-wrap">
+        <table className="report-table report-table-compact">
+          <thead>
+            <tr>
+              <th>Owner</th>
+              <th>Ex SS</th>
+              <th>Ex MVA</th>
+              <th>Pr SS</th>
+              <th>Pr MVA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ownerRows.map((o) => (
+              <tr key={o.owner}>
+                <td>{o.owner}</td>
+                <td>{o.ssExisting || '—'}</td>
+                <td>{o.mvaExisting ? o.mvaExisting.toFixed(1) : '—'}</td>
+                <td>{o.ssProposed || '—'}</td>
+                <td>{o.mvaProposed ? o.mvaProposed.toFixed(1) : '—'}</td>
+              </tr>
+            ))}
+            {!ownerRows.length && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  No substations in scope
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="section-label">Owner × voltage</p>
+      <div className="report-table-wrap">
+        <table className="report-table report-table-compact">
+          <thead>
+            <tr>
+              <th>Owner</th>
+              <th>kV</th>
+              <th>Ex SS</th>
+              <th>Ex MVA</th>
+              <th>Pr SS</th>
+              <th>Pr MVA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detailRows.map((r) => (
+              <tr key={`${r.owner}-${r.voltageCode}`}>
+                <td>{r.owner}</td>
+                <td>{r.voltageCode}</td>
+                <td>{r.ssExisting || '—'}</td>
+                <td>{r.mvaExisting ? r.mvaExisting.toFixed(1) : '—'}</td>
+                <td>{r.ssProposed || '—'}</td>
+                <td>{r.mvaProposed ? r.mvaProposed.toFixed(1) : '—'}</td>
+              </tr>
+            ))}
+            {!detailRows.length && (
+              <tr>
+                <td colSpan={6} className="muted">
+                  No substations in scope
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -300,9 +558,28 @@ function SsTable({
   onSelect: (row: SsReportRow) => void;
   showLoading: boolean;
 }) {
-  if (!rows.length) return <p className="muted">{empty}</p>;
+  if (!rows.length) return empty ? <p className="muted">{empty}</p> : null;
 
   const totalMva = rows.reduce((sum, r) => sum + r.mva, 0);
+
+  // Group headers: voltage then owner
+  type Block = { key: string; label: string; rows: SsReportRow[]; mva: number };
+  const blocks: Block[] = [];
+  for (const r of rows) {
+    const key = `${r.voltageCode}|${r.owner}`;
+    const last = blocks[blocks.length - 1];
+    if (last && last.key === key) {
+      last.rows.push(r);
+      last.mva += r.mva;
+    } else {
+      blocks.push({
+        key,
+        label: `${r.voltageCode} kV · ${r.owner}`,
+        rows: [r],
+        mva: r.mva,
+      });
+    }
+  }
 
   return (
     <div className="form-stack">
@@ -324,45 +601,58 @@ function SsTable({
           <thead>
             <tr>
               <th>Name</th>
-              <th>kV</th>
+              <th>Owner</th>
               <th>Capacity</th>
               {showLoading && <th>Load</th>}
               <th>Org</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr
-                key={r.id}
-                className={r.overloaded ? 'is-overloaded' : undefined}
-                onClick={() => onSelect(r)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onSelect(r);
-                  }
-                }}
-                tabIndex={0}
-                title="Click to select on map"
-              >
-                <td>
-                  <div className="report-name">{r.name}</div>
-                  {(r.year || r.proposedImprovement || r.progress) && (
-                    <div className="muted report-sub">
-                      {[r.year, r.proposedImprovement, r.progress].filter(Boolean).join(' · ')}
-                    </div>
-                  )}
-                </td>
-                <td>{r.voltageCode}</td>
-                <td>
-                  <div>{r.capacity}</div>
-                  <div className="muted report-sub">{r.mva.toFixed(1)} MVA</div>
-                </td>
-                {showLoading && (
-                  <td className={r.overloaded ? 'is-warn' : undefined}>{pct(r.loadingPct)}</td>
-                )}
-                <td>{r.orgName}</td>
-              </tr>
+            {blocks.map((block) => (
+              <Fragment key={block.key}>
+                <tr className="report-group-row">
+                  <td colSpan={showLoading ? 5 : 4}>
+                    <strong>{block.label}</strong>
+                    <span className="muted">
+                      {' '}
+                      · {block.rows.length} SS · {block.mva.toFixed(1)} MVA
+                    </span>
+                  </td>
+                </tr>
+                {block.rows.map((r) => (
+                  <tr
+                    key={r.id}
+                    className={r.overloaded ? 'is-overloaded' : undefined}
+                    onClick={() => onSelect(r)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelect(r);
+                      }
+                    }}
+                    tabIndex={0}
+                    title="Click to select on map"
+                  >
+                    <td>
+                      <div className="report-name">{r.name}</div>
+                      {(r.year || r.proposedImprovement) && (
+                        <div className="muted report-sub">
+                          {[r.year, r.proposedImprovement].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </td>
+                    <td>{r.owner}</td>
+                    <td>
+                      <div>{r.capacity}</div>
+                      <div className="muted report-sub">{r.mva.toFixed(1)} MVA</div>
+                    </td>
+                    {showLoading && (
+                      <td className={r.overloaded ? 'is-warn' : undefined}>{pct(r.loadingPct)}</td>
+                    )}
+                    <td>{r.orgName}</td>
+                  </tr>
+                ))}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -382,7 +672,7 @@ function FeederTable({
   onSelect: (row: FeederReportRow) => void;
   showLoading: boolean;
 }) {
-  if (!rows.length) return <p className="muted">{empty}</p>;
+  if (!rows.length) return empty ? <p className="muted">{empty}</p> : null;
 
   const totalKm = rows.reduce((sum, r) => sum + (r.lengthKm ?? 0), 0);
 

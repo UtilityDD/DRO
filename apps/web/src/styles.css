@@ -248,6 +248,29 @@ html[data-appearance='dark'] body {
   --accent-soft: rgba(203, 213, 225, 0.18);
 }
 
+.app-shell[data-appearance='dark'] .upload-modal,
+.app-shell[data-appearance='dark'] .crm-modal,
+.app-shell[data-appearance='dark'] .tw-modal,
+.app-shell[data-appearance='dark'] .atc-help-modal,
+.app-shell[data-appearance='dark'] .atc-edit-modal {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
+.app-shell[data-appearance='dark'] .crm-modal-back,
+.app-shell[data-appearance='dark'] .upload-modal-backdrop {
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.app-shell[data-appearance='dark'] .hier-tab.on,
+.app-shell[data-appearance='dark'] .hier-chip {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: var(--border);
+}
+
 .app-shell[data-appearance='dark'] input,
 .app-shell[data-appearance='dark'] select,
 .app-shell[data-appearance='dark'] textarea {
@@ -1123,11 +1146,18 @@ button {
   --bg: var(--dro-bg);
   --surface: var(--dro-surface);
   --surface-solid: var(--dro-surface);
+  --surface-muted: var(--dro-bg-soft);
+  --surface-soft: var(--dro-bg-soft);
   --ink: var(--dro-text);
+  --ink-secondary: var(--dro-muted);
   --muted: var(--dro-muted);
   --line: var(--dro-border);
+  --text: var(--dro-text);
+  --bg-soft: var(--dro-bg-soft);
+  --border: var(--dro-border);
   --accent: #2563eb;
   --accent-soft: rgba(37, 99, 235, 0.12);
+  --on-accent: #ffffff;
   --danger: var(--dro-danger);
   --shadow: var(--dro-shadow);
   --radius: var(--dro-radius);
@@ -1141,6 +1171,10 @@ button {
 .app-shell[data-appearance='dark'].mode-powermap .pm-root {
   --accent: #60a5fa;
   --accent-soft: rgba(96, 165, 250, 0.2);
+  --on-accent: #0b1220;
+  --surface-muted: #1a2438;
+  --surface-soft: #162033;
+  --bg-soft: #1a2438;
 }
 
 .mode-powermap .pm-root .pm-shell {
@@ -1426,22 +1460,137 @@ button {
 
 .mode-powermap .pm-root input,
 .mode-powermap .pm-root select,
-.mode-powermap .pm-root textarea {
-  background: var(--dro-bg-soft);
-  color: var(--dro-text);
-  border-color: var(--dro-border);
+.mode-powermap .pm-root textarea,
+.mode-powermap .pm-root .field input,
+.mode-powermap .pm-root .field select,
+.mode-powermap .pm-root .field textarea {
+  background: var(--surface-muted) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
 }
 
-.mode-powermap .pm-root .search-overlay {
-  background: rgba(15, 23, 42, 0.45);
+.mode-powermap .pm-root .side-panel {
+  background: var(--surface-solid) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+.mode-powermap .pm-root .side-panel .muted,
+.mode-powermap .pm-root .side-panel .field {
+  color: var(--muted) !important;
+}
+
+.mode-powermap .pm-root .side-panel .section-label,
+.mode-powermap .pm-root .side-panel .check-row,
+.mode-powermap .pm-root .side-panel-header h2 {
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .search-overlay,
+.mode-powermap .pm-root .modal-overlay {
+  background: rgba(2, 6, 23, 0.62);
 }
 
 .mode-powermap .pm-root .search-dialog,
+.mode-powermap .pm-root .search-modal,
+.mode-powermap .pm-root .modal-card,
 .mode-powermap .pm-root .boot-card {
-  background: var(--dro-surface);
-  color: var(--dro-text);
-  border: 1px solid var(--dro-border);
-  border-radius: var(--dro-radius);
+  background: var(--surface-solid) !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.mode-powermap .pm-root .search-input {
+  background: transparent !important;
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .chip,
+.mode-powermap .pm-root .report-tab,
+.mode-powermap .pm-root .primary-btn.ghost,
+.mode-powermap .pm-root .report-card,
+.mode-powermap .pm-root .print-scope-card,
+.mode-powermap .pm-root .report-table-wrap,
+.mode-powermap .pm-root .icon-btn,
+.mode-powermap .pm-root .coord-readout,
+.mode-powermap .pm-root .district-focus-block,
+.mode-powermap .pm-root .related-corridor,
+.mode-powermap .pm-root .related-line-card,
+.mode-powermap .pm-root .endpoint-coords,
+.mode-powermap .pm-root .sync-pill,
+.mode-powermap .pm-root kbd {
+  background: var(--surface-muted) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+.mode-powermap .pm-root .chip.on {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  border-color: transparent !important;
+}
+
+.mode-powermap .pm-root .report-tab.is-active {
+  background: var(--accent) !important;
+  color: var(--on-accent) !important;
+  border-color: var(--accent) !important;
+}
+
+.mode-powermap .pm-root .report-table,
+.mode-powermap .pm-root .report-table td,
+.mode-powermap .pm-root .report-mini-stats strong {
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .report-table th {
+  background: var(--surface-soft) !important;
+  color: var(--muted) !important;
+}
+
+.mode-powermap .pm-root .modal-card p,
+.mode-powermap .pm-root .status-kpis,
+.mode-powermap .pm-root .report-mini-stats,
+.mode-powermap .pm-root .report-sub {
+  color: var(--muted) !important;
+}
+
+.mode-powermap .pm-root .scope-checklist,
+.mode-powermap .pm-root .editor-row,
+.mode-powermap .pm-root .admin-box,
+.mode-powermap .pm-root .circuit-switcher {
+  background: var(--surface-solid) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+.mode-powermap .pm-root .admin-box,
+.mode-powermap .pm-root .circuit-switcher {
+  background: var(--surface-muted) !important;
+}
+
+.mode-powermap .pm-root .scope-checklist .check-row {
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .scope-checklist .check-row:hover {
+  background: var(--surface-muted) !important;
+}
+
+.mode-powermap .pm-root .scope-checklist .muted,
+.mode-powermap .pm-root .editor-row .muted {
+  color: var(--muted) !important;
+}
+
+.mode-powermap .pm-root .editor-row strong {
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .suggestion-row {
+  background: color-mix(in srgb, #f97316 14%, var(--surface-solid)) !important;
+  color: var(--ink) !important;
+  border-color: color-mix(in srgb, #f97316 40%, var(--line)) !important;
 }
 
 @media (max-width: 900px) {
@@ -9666,8 +9815,6 @@ html[data-appearance='dark'] .login-card {
   body.print-preview-open .app-shell .present-hotzone,
   body.print-preview-open .app-shell .present-nav-root,
   body.print-preview-open .app-shell .sheet-root,
-  body.print-preview-open .app-shell .present-laser-layer,
-  body.print-preview-open .present-laser-layer,
   body.is-printing .app-shell > .app-bar,
   body.is-printing .app-shell > .bottom-nav,
   body.is-printing .app-shell .sidebar,

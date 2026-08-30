@@ -586,8 +586,10 @@ export function PrintSheet({
     }
     pageStyle.textContent = buildPrintStyleSheet(settings);
 
+    // Keep laser visible during on-screen preview (presenting). Hide only via
+    // @media print CSS so the pointer never lands on the PDF.
     const chromeSel =
-      '.app-shell > .app-bar, .app-shell > .bottom-nav, .app-shell .sheet-root, .app-shell .present-nav-root, .present-laser-layer, .app-shell .pm-desk-toolbar, .app-shell .page-masthead';
+      '.app-shell > .app-bar, .app-shell > .bottom-nav, .app-shell .sheet-root, .app-shell .present-nav-root, .app-shell .pm-desk-toolbar, .app-shell .page-masthead';
 
     const hideShellChrome = () => {
       document.querySelectorAll<HTMLElement>(chromeSel).forEach((el) => {
@@ -640,7 +642,7 @@ export function PrintSheet({
     document.body.classList.add('is-printing');
     document
       .querySelectorAll<HTMLElement>(
-        '.app-shell > .app-bar, .app-shell > .bottom-nav, .app-shell .sheet-root, .app-shell .present-nav-root, .present-laser-layer, .app-shell .pm-desk-toolbar, .app-shell .page-masthead',
+        '.app-shell > .app-bar, .app-shell > .bottom-nav, .app-shell .sheet-root, .app-shell .present-nav-root, .app-shell .pm-desk-toolbar, .app-shell .page-masthead',
       )
       .forEach((el) => {
         if (el.dataset.pmPrintHide === undefined) {
