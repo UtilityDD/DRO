@@ -767,6 +767,10 @@ textarea {
   background: #f1f5f9;
 }
 
+.leaflet-container.basemap-none.pm-appearance-dark {
+  background: #0f172a;
+}
+
 .map-legend {
   position: absolute;
   left: 16px;
@@ -1731,6 +1735,11 @@ textarea {
 .pm-district-label.is-dimmed span {
   opacity: 0.28;
   filter: grayscale(0.4);
+}
+
+.leaflet-container.pm-appearance-light .pm-district-label.is-dimmed span {
+  opacity: 0.42;
+  filter: grayscale(0.25);
 }
 
 .pm-district-label.is-focused span {

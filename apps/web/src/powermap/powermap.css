@@ -761,6 +761,10 @@
   background: #f1f5f9;
 }
 
+.pm-root .leaflet-container.basemap-none.pm-appearance-dark{
+  background: #0f172a;
+}
+
 .pm-root .map-legend{
   position: absolute;
   left: 16px;
@@ -1712,6 +1716,11 @@
 .pm-root .pm-district-label.is-dimmed span{
   opacity: 0.28;
   filter: grayscale(0.4);
+}
+
+.pm-root .leaflet-container.pm-appearance-light .pm-district-label.is-dimmed span{
+  opacity: 0.42;
+  filter: grayscale(0.25);
 }
 
 .pm-root .pm-district-label.is-focused span{

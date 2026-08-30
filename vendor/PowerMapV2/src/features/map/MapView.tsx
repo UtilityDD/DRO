@@ -5,7 +5,7 @@ import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import { useNetworkStore } from '@/store/networkStore';
 import { parallelCircuitLatLngs, lineDisplayLabel, formatCapacity, haversineKm } from '@/domain/geo';
-import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_BOUNDS, fitDefaultZone, type BoundaryHandle } from './boundaryLayers';
+import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_BOUNDS, fitDefaultZone, readMapAppearance, type BoundaryHandle, type MapAppearance } from './boundaryLayers';
 import { feederLabelOffsetPx, feederLabelPlacement } from './feederLabels';
 import { lineStyle, substationIcon, tapIcon } from './symbology';
 import { nearestPointOnLines, nearestSubstation } from './mapSnap';
@@ -73,6 +73,27 @@ export function MapView() {
   const mapFocus = useNetworkStore((s) => s.mapFocus);
   const hoverCoords = useNetworkStore((s) => s.hoverCoords);
   const [mapZoom, setMapZoom] = useState(10);
+  const [appearance, setAppearance] = useState<MapAppearance>(() => readMapAppearance());
+
+  // Follow DRO light/dark so mask + dim wash stay consistent with the shell.
+  useEffect(() => {
+    const sync = () => setAppearance(readMapAppearance());
+    const obs = new MutationObserver(sync);
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-appearance'],
+    });
+    const shell = document.querySelector('.app-shell');
+    if (shell) {
+      obs.observe(shell, { attributes: true, attributeFilter: ['data-appearance'] });
+    }
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener('change', sync);
+    return () => {
+      obs.disconnect();
+      mq.removeEventListener('change', sync);
+    };
+  }, []);
 
   // Init map once
   useEffect(() => {
@@ -163,6 +184,7 @@ export function MapView() {
           focusedDistricts: layers.focusedDistricts,
           dimAllDistricts: layers.dimAllDistricts,
           districtsInteractive: tool === 'cursor' && layers.showDistricts,
+          appearance: readMapAppearance(),
           onDistrictClick: (name, additive) => {
             useNetworkStore.getState().toggleDistrictFocus(name, additive);
           },
@@ -221,6 +243,8 @@ export function MapView() {
 
     const container = map.getContainer();
     container.classList.toggle('basemap-none', mapLayers.basemap === 'none');
+    container.classList.toggle('pm-appearance-dark', appearance === 'dark');
+    container.classList.toggle('pm-appearance-light', appearance === 'light');
 
     boundaryRef.current?.apply({
       showMask: mapLayers.showMask,
@@ -232,6 +256,7 @@ export function MapView() {
       focusedDistricts: mapLayers.focusedDistricts,
       dimAllDistricts: mapLayers.dimAllDistricts,
       districtsInteractive: tool === 'cursor' && mapLayers.showDistricts,
+      appearance,
       onDistrictClick: (name, additive) => {
         useNetworkStore.getState().toggleDistrictFocus(name, additive);
       },
@@ -240,6 +265,7 @@ export function MapView() {
     measureLayerRef.current?.bringToFront();
   }, [
     tool,
+    appearance,
     mapLayers.basemap,
     mapLayers.showMask,
     mapLayers.maskOpacity,

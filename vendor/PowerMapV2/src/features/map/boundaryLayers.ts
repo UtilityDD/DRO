@@ -32,6 +32,19 @@ export function fitDefaultZone(map: L.Map, bounds: L.LatLngBounds) {
 
 export type BasemapId = 'google' | 'google-hybrid' | 'osm' | 'esri' | 'none';
 
+/** DRO shell appearance (`html` / `.app-shell` `data-appearance`). */
+export type MapAppearance = 'light' | 'dark';
+
+export function readMapAppearance(): MapAppearance {
+  if (typeof document === 'undefined') return 'light';
+  const from =
+    document.querySelector('.app-shell')?.getAttribute('data-appearance') ||
+    document.documentElement.getAttribute('data-appearance');
+  if (from === 'dark') return 'dark';
+  if (from === 'light') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 export interface BoundaryLayerOptions {
   showMask: boolean;
   maskOpacity: number;
@@ -45,6 +58,8 @@ export interface BoundaryLayerOptions {
   dimAllDistricts: boolean;
   /** Allow clicking districts to focus (cursor tool). */
   districtsInteractive: boolean;
+  /** Light vs dark map chrome; defaults to live DRO appearance. */
+  appearance?: MapAppearance;
   onDistrictClick?: (name: string, additive: boolean) => void;
 }
 
@@ -260,6 +275,7 @@ function styleForDistrict(
   name: string,
   focusedDistricts: string[],
   dimAllDistricts: boolean,
+  appearance: MapAppearance,
 ): L.PathOptions {
   const focusing = focusedDistricts.length > 0;
   const bright = !dimAllDistricts && (!focusing || focusedDistricts.includes(name));
@@ -272,12 +288,40 @@ function styleForDistrict(
       fillOpacity: focusing ? 0.08 : 0.03,
     };
   }
+  // Light mode: soft slate wash. Dark mode: deep ink veil (matches mask).
+  if (appearance === 'light') {
+    return {
+      color: '#64748b',
+      weight: 1,
+      opacity: 0.45,
+      fillColor: '#94a3b8',
+      fillOpacity: 0.2,
+    };
+  }
   return {
     color: '#94a3b8',
     weight: 1,
     opacity: 0.35,
     fillColor: '#0f172a',
     fillOpacity: 0.48,
+  };
+}
+
+function maskStyle(opacity: number, appearance: MapAppearance): L.PathOptions {
+  if (appearance === 'light') {
+    return {
+      stroke: false,
+      // Slate, not near-black — reads as “outside” on Google/OSM/Esri.
+      fillColor: '#475569',
+      fillOpacity: Math.min(0.55, opacity * 0.5),
+      fillRule: 'evenodd',
+    };
+  }
+  return {
+    stroke: false,
+    fillColor: '#0f172a',
+    fillOpacity: opacity,
+    fillRule: 'evenodd',
   };
 }
 
@@ -325,24 +369,20 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
 
   const maskLayer = L.geoJSON(maskFeature as GeoJSON.GeoJsonObject, {
     interactive: false,
-    style: {
-      stroke: false,
-      fillColor: '#0f172a',
-      fillOpacity: DEFAULT_MASK_OPACITY,
-      fillRule: 'evenodd',
-    },
+    style: maskStyle(DEFAULT_MASK_OPACITY, readMapAppearance()),
   }).addTo(group);
 
   let clickHandler: BoundaryLayerOptions['onDistrictClick'];
   let latestFocused: string[] = [];
   let latestDimAll = false;
+  let latestAppearance: MapAppearance = readMapAppearance();
 
   const districtLayer = districtData
     ? L.geoJSON(districtData as GeoJSON.GeoJsonObject, {
         interactive: false,
         style: (feature) => {
           const name = districtName(feature?.properties as Record<string, unknown>);
-          return styleForDistrict(name, latestFocused, latestDimAll);
+          return styleForDistrict(name, latestFocused, latestDimAll, latestAppearance);
         },
         onEachFeature: (feature, layer) => {
           const name = districtName(feature.properties as Record<string, unknown>);
@@ -435,15 +475,12 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
     latestFocused = opts.focusedDistricts;
     latestDimAll = opts.dimAllDistricts;
     clickHandler = opts.onDistrictClick;
+    const appearance = opts.appearance ?? readMapAppearance();
+    latestAppearance = appearance;
 
     if (opts.showMask) {
       if (!group.hasLayer(maskLayer)) maskLayer.addTo(group);
-      maskLayer.setStyle({
-        stroke: false,
-        fillColor: '#0f172a',
-        fillOpacity: opts.maskOpacity,
-        fillRule: 'evenodd',
-      });
+      maskLayer.setStyle(maskStyle(opts.maskOpacity, appearance));
     } else if (group.hasLayer(maskLayer)) {
       group.removeLayer(maskLayer);
     }
@@ -459,7 +496,7 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
             );
           if (layer instanceof L.Path) {
             layer.setStyle(
-              styleForDistrict(name, opts.focusedDistricts, opts.dimAllDistricts),
+              styleForDistrict(name, opts.focusedDistricts, opts.dimAllDistricts, appearance),
             );
           }
         });

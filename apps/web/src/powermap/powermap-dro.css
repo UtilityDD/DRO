@@ -318,6 +318,20 @@
   color: var(--muted) !important;
 }
 
+/* No-basemap canvas follows shell appearance (mask/dim wash match). */
+.pm-root .leaflet-container.basemap-none.pm-appearance-light {
+  background: #f1f5f9;
+}
+
+.pm-root .leaflet-container.basemap-none.pm-appearance-dark {
+  background: #0f172a;
+}
+
+.pm-root .leaflet-container.pm-appearance-light .pm-district-label.is-dimmed span {
+  opacity: 0.42;
+  filter: grayscale(0.25);
+}
+
 .pm-root .editor-row strong {
   color: var(--ink) !important;
 }
