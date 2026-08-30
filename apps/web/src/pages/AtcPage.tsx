@@ -46,7 +46,6 @@ import {
   ensureAtcDump,
   prefetchAtcDump,
   warmAtcStamp,
-  type AtcDumpPayload,
 } from '../lib/atcDump';
 import { useAuth } from '../auth';
 
@@ -77,11 +76,6 @@ function periodMonthAbbr(period: string): string {
   const m = String(period || '').match(/^([A-Za-z]{3})'/);
   if (!m) return '';
   return m[1].charAt(0).toUpperCase() + m[1].slice(1, 3).toLowerCase();
-}
-
-/** Compact chip text: May'26 → May26 */
-function shortPeriodLabel(period: string): string {
-  return String(period || '').replace("'", '');
 }
 
 const MONTH_FY_ORDER: Record<string, number> = {
@@ -120,6 +114,126 @@ function groupPeriodsByFy(periods: string[]): Array<{ fy: string; months: string
     map.get(fy)!.push(p);
   }
   return [...map.entries()].map(([fy, months]) => ({ fy, months }));
+}
+
+const FY_GRID_MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'] as const;
+
+function periodFromFyMonth(fy: string, mon: string): string {
+  const m = String(fy).match(/FY(\d{2})-(\d{2})/);
+  if (!m) return '';
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  const idx = MONTH_FY_ORDER[mon];
+  if (!idx) return '';
+  const yy = idx >= 10 ? end : start;
+  return `${mon}'${String(yy).padStart(2, '0')}`;
+}
+
+function fyShortLabel(fy: string) {
+  return String(fy).replace(/^FY/, '');
+}
+
+function normPeriod(period: string) {
+  return String(period || '')
+    .replace(/[\u2018\u2019\u2032]/g, "'")
+    .trim();
+}
+
+function AtcYearMonthGrid({
+  fys,
+  available,
+  periodKind,
+  selected,
+  asOf,
+  onToggle,
+}: {
+  fys: string[];
+  available: Set<string>;
+  periodKind: Map<string, 'full' | 'sparse'>;
+  selected: Set<string>;
+  asOf: string;
+  onToggle: (periods: string[], checked: boolean) => void;
+}) {
+  const lookup = new Set([...available].map(normPeriod));
+  const kindOf = (period: string) => periodKind.get(period) || periodKind.get(normPeriod(period));
+  const asOfN = normPeriod(asOf);
+  if (!fys.length) {
+    return <p className="muted tight atc-ym-empty">No months loaded yet.</p>;
+  }
+  return (
+    <div className="atc-ym-wrap">
+      <table className="atc-ym" aria-label="Months on the chart">
+        <thead>
+          <tr>
+            <th scope="col">FY</th>
+            {FY_GRID_MONTHS.map((mon) => (
+              <th key={mon} scope="col">
+                {mon}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {fys.map((fy) => {
+            const fyPeriods = FY_GRID_MONTHS.map((mon) => periodFromFyMonth(fy, mon)).filter(
+              (p) => p && lookup.has(normPeriod(p))
+            );
+            const fyOn = fyPeriods.filter((p) => selected.has(normPeriod(p)));
+            const fyAll = fyPeriods.length > 0 && fyOn.length === fyPeriods.length;
+            return (
+              <tr key={fy}>
+                <th scope="row">
+                  <label className="atc-ym-fy" title={`All months in ${fyShortLabel(fy)}`}>
+                    <input
+                      type="checkbox"
+                      checked={fyAll}
+                      disabled={!fyPeriods.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = fyOn.length > 0 && !fyAll;
+                      }}
+                      onChange={(e) => onToggle(fyPeriods, e.target.checked)}
+                    />
+                    {fyShortLabel(fy)}
+                  </label>
+                </th>
+                {FY_GRID_MONTHS.map((mon) => {
+                  const period = periodFromFyMonth(fy, mon);
+                  const has = Boolean(period) && lookup.has(normPeriod(period));
+                  const kind = kindOf(period);
+                  const on = has && selected.has(normPeriod(period));
+                  const snap = has && asOfN === normPeriod(period);
+                  return (
+                    <td
+                      key={mon}
+                      className={`${has ? '' : 'empty'}${on ? ' on' : ''}${snap ? ' asof' : ''}${
+                        kind === 'sparse' ? ' sparse' : ''
+                      }`}
+                    >
+                      {has ? (
+                        <label
+                          className="atc-ym-check"
+                          title={
+                            kind === 'sparse' ? `${period} · comparison only` : period
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            aria-label={period}
+                            onChange={(e) => onToggle([period], e.target.checked)}
+                          />
+                        </label>
+                      ) : null}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /** March FY points + latest month + same calendar month in prior years */
@@ -401,7 +515,13 @@ const PARAMS: ParamDef[] = [
 /** One-office compare: AT&C vs T&D */
 const LOSS_METRICS: ParamDef[] = [
   { id: 'atc', label: 'AT&C loss', short: 'AT&C', field: 'atc_loss', kind: 'pct', targetField: 'target_atc', color: '#1a73e8' },
-  { id: 'td', label: 'T&D loss', short: 'T&D', field: 'dist_loss', kind: 'pct', targetField: 'target_dist', color: '#60a5fa' },
+  { id: 'td', label: 'T&D loss', short: 'T&D', field: 'dist_loss', kind: 'pct', targetField: 'target_dist', color: '#0f9d8e' },
+];
+
+const ENERGY_METRICS: ParamDef[] = [
+  { id: 'input', label: 'Input (MU)', short: 'Input', field: 'input_mu', kind: 'mu', color: '#1a73e8' },
+  { id: 'demand', label: 'Demand (MU)', short: 'Demand', field: 'demand_mu', kind: 'mu', color: '#00bcd4' },
+  { id: 'coll', label: 'Collection (MU)', short: 'Coll.', field: 'collection_mu', kind: 'mu', color: '#7c4dff' },
 ];
 
 type CompareBy = 'units' | 'losses' | 'energy';
@@ -1145,9 +1265,11 @@ export function AtcPage() {
   const [level, setLevel] = useState<Level>('division');
   const [division, setDivision] = useState('');
   const [asOf, setAsOf] = useState('');
+  const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
+  const seenChartMonths = useRef(new Set<string>());
   const [paramId, setParamId] = useState('atc');
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
-  const [showTarget, setShowTarget] = useState(true);
+  const [showTarget, setShowTarget] = useState(false);
   const [unitQuery, setUnitQuery] = useState('');
   const [unitsOpen, setUnitsOpen] = useState(true);
   const [panelTab, setPanelTab] = useState<
@@ -1165,9 +1287,6 @@ export function AtcPage() {
   const [activeSavedId, setActiveSavedId] = useState('');
   const skipTargetReset = useRef(false);
   const [error, setError] = useState('');
-  const [dumpVersion, setDumpVersion] = useState(
-    () => dumpMemGet<AtcDumpPayload>('atc')?.data?.version || dumpMemGet('atc')?.version || '',
-  );
   const [syncing, setSyncing] = useState(false);
   const [loading, setLoading] = useState(() => !dumpMemGet('atc'));
   const atcReq = useRef(0);
@@ -1189,7 +1308,7 @@ export function AtcPage() {
       setLevel('division');
       setDivision('');
       setParamId('atc');
-      setShowTarget(true);
+      setShowTarget(false);
       setPanelTab('chart');
     } else if (user.role === 'ccc') {
       setMode('trend');
@@ -1220,10 +1339,16 @@ export function AtcPage() {
   const param = PARAMS.find((p) => p.id === paramId) || PARAMS[0];
   const isMetricCompare = mode === 'compare' && compareBy === 'losses';
   const isIdcCompare = mode === 'compare' && compareBy === 'energy';
+  const isLossTrend = mode === 'trend' && compareBy === 'losses';
+  const isIdcTrend = mode === 'trend' && compareBy === 'energy';
+  const isMetricTrend = isLossTrend || isIdcTrend;
+  const isSingleOfficePick = isMetricCompare || isMetricTrend;
+  const metricTrendGroup = isLossTrend ? LOSS_METRICS : isIdcTrend ? ENERGY_METRICS : null;
   const metricGroup = compareBy === 'losses' ? LOSS_METRICS : null;
-  const compareKind: 'pct' | 'mu' | 'count' = isMetricCompare ? 'pct' : isIdcCompare ? 'mu' : param.kind;
+  const compareKind: 'pct' | 'mu' | 'count' =
+    isIdcCompare || isIdcTrend ? 'mu' : isMetricCompare || isLossTrend ? 'pct' : param.kind;
 
-  const applyAtcDump = (allRows: Record<string, unknown>[], allPeriods: string[], version?: string) => {
+  const applyAtcDump = (allRows: Record<string, unknown>[], allPeriods: string[]) => {
     const list = (allRows || []).filter(
       (row) => !format || String(row.source_format || 'IA').toUpperCase() === format
     );
@@ -1236,11 +1361,23 @@ export function AtcPage() {
       return String(ra?.period_sort || a).localeCompare(String(rb?.period_sort || b));
     });
     setPeriods(ps);
+    setSelectedMonths((prev) => {
+      if (!ps.length) return [];
+      const keep = new Set(prev.map(normPeriod));
+      for (const p of ps) {
+        const n = normPeriod(p);
+        if (!seenChartMonths.current.has(n)) {
+          keep.add(n);
+          seenChartMonths.current.add(n);
+        }
+      }
+      const next = ps.filter((p) => keep.has(normPeriod(p)));
+      return next.length ? next : [...ps];
+    });
     setAsOf((prev) => {
       if (prev && ps.includes(prev)) return prev;
       return ps.length ? ps[ps.length - 1] : '';
     });
-    if (version) setDumpVersion(version);
   };
 
   const loadAtc = async (force = false) => {
@@ -1248,7 +1385,7 @@ export function AtcPage() {
     await warmAtcStamp();
     const cached = dumpMemGet<{ rows: Record<string, unknown>[]; periods: string[]; version: string }>('atc');
     if (cached?.data?.rows) {
-      applyAtcDump(cached.data.rows, cached.data.periods, cached.version);
+      applyAtcDump(cached.data.rows, cached.data.periods);
       setLoading(false);
       setSyncing(Boolean(force));
     } else {
@@ -1261,11 +1398,11 @@ export function AtcPage() {
         force,
         onUpdate: (next) => {
           if (id !== atcReq.current) return;
-          applyAtcDump(next.data.rows, next.data.periods, next.version);
+          applyAtcDump(next.data.rows, next.data.periods);
         },
       });
       if (id !== atcReq.current) return;
-      applyAtcDump(snap.data.rows, snap.data.periods, snap.version);
+      applyAtcDump(snap.data.rows, snap.data.periods);
     } catch (e) {
       if (id !== atcReq.current) return;
       if (!cached) {
@@ -1288,7 +1425,7 @@ export function AtcPage() {
 
   useEffect(() => {
     const cached = dumpMemGet<{ rows: Record<string, unknown>[]; periods: string[]; version: string }>('atc');
-    if (cached?.data?.rows) applyAtcDump(cached.data.rows, cached.data.periods, cached.version);
+    if (cached?.data?.rows) applyAtcDump(cached.data.rows, cached.data.periods);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [format]);
 
@@ -1412,6 +1549,34 @@ export function AtcPage() {
     });
   }, [periods, rows]);
 
+  const chartMonthSet = useMemo(
+    () => new Set((selectedMonths.length ? selectedMonths : sortedPeriods).map(normPeriod)),
+    [selectedMonths, sortedPeriods]
+  );
+
+  const toggleChartMonths = (periodsToToggle: string[], checked: boolean) => {
+    const want = new Set(periodsToToggle.map(normPeriod).filter(Boolean));
+    if (!want.size) return;
+    const base = selectedMonths.length ? selectedMonths : sortedPeriods;
+    const n = new Set(base.map(normPeriod));
+    for (const p of want) {
+      if (checked) n.add(p);
+      else n.delete(p);
+    }
+    let next = sortedPeriods.filter((p) => n.has(normPeriod(p)));
+    if (!next.length) {
+      const fallback = periodsToToggle[periodsToToggle.length - 1];
+      next = sortedPeriods.filter((p) => normPeriod(p) === normPeriod(fallback));
+      if (!next.length) next = [fallback];
+    }
+    setSelectedMonths(next);
+    if (checked) {
+      setAsOf(periodsToToggle[periodsToToggle.length - 1]);
+    } else if (!next.some((p) => normPeriod(p) === normPeriod(asOf))) {
+      setAsOf(next[next.length - 1] || asOf);
+    }
+  };
+
   const targetAsOf = useMemo(() => {
     const withMu = [...sortedPeriods].reverse().find((p) =>
       rows.some((r) => r.period_label === p && toNum(r.input_mu) != null)
@@ -1435,19 +1600,6 @@ export function AtcPage() {
     return m;
   }, [rows]);
 
-  const coverageCaption = useMemo(() => {
-    const full = sortedPeriods.filter((p) => periodKind.get(p) === 'full');
-    const sparse = sortedPeriods.filter((p) => periodKind.get(p) === 'sparse');
-    const tag = format === 'IA' ? 'IA' : 'IB';
-    const span = (list: string[]) =>
-      list.length > 1 ? `${list[0]}–${list[list.length - 1]}` : list[0] || '';
-    const parts = [
-      full.length ? `${tag} full ${span(full)}` : `${tag} no full months yet`,
-      sparse.length ? `comparison-only ${sparse.join(', ')}` : null,
-    ].filter(Boolean);
-    return parts.join(' · ');
-  }, [sortedPeriods, periodKind, format]);
-
   // MU metrics only exist on achievement months — jump Compare as-of to a month that has values
   useEffect(() => {
     if (mode !== 'compare' || !rows.length) return;
@@ -1461,7 +1613,14 @@ export function AtcPage() {
       rows.some((r) => r.period_label === p && fields.some((f) => toNum(r[f]) != null));
     if (asOf && hasMu(asOf)) return;
     const withData = [...sortedPeriods].reverse().find(hasMu);
-    if (withData) setAsOf(withData);
+    if (withData) {
+      setAsOf(withData);
+      setSelectedMonths((prev) =>
+        prev.some((p) => normPeriod(p) === normPeriod(withData))
+          ? prev
+          : [...prev, withData]
+      );
+    }
   }, [paramId, param.kind, param.field, mode, isIdcCompare, rows, asOf, sortedPeriods]);
 
   const divisions = useMemo(() => {
@@ -1565,7 +1724,7 @@ export function AtcPage() {
       setSelectedCodes([]);
       return;
     }
-    if (isMetricCompare) {
+    if (isSingleOfficePick) {
       setSelectedCodes((prev) => {
         const keep = prev.find((c) => officeOptions.some((o) => o.code === c));
         return [keep || officeOptions[0].code];
@@ -1577,17 +1736,17 @@ export function AtcPage() {
     }
     setUnitQuery('');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- officeKey captures option codes
-  }, [officeKey, isMetricCompare, isIdcCompare]);
+  }, [officeKey, isSingleOfficePick, isIdcCompare]);
 
-  // Clamp to one office when switching into metric compare
+  // Clamp to one office when switching into metric compare / metric trend
   useEffect(() => {
-    if (!isMetricCompare || !officeOptions.length) return;
+    if (!isSingleOfficePick || !officeOptions.length) return;
     setSelectedCodes((prev) => {
       if (prev.length === 1 && officeOptions.some((o) => o.code === prev[0])) return prev;
       const keep = prev.find((c) => officeOptions.some((o) => o.code === c));
       return [keep || officeOptions[0].code];
     });
-  }, [isMetricCompare]);
+  }, [isSingleOfficePick]);
 
   const filteredOffices = useMemo(() => {
     const q = unitQuery.trim().toLowerCase();
@@ -1644,9 +1803,10 @@ export function AtcPage() {
       );
 
     const dataPeriods =
-      param.kind === 'mu'
+      (param.kind === 'mu'
         ? sortedPeriods.filter((p) => periodHasAchievement(p) || periodHasPlot(p))
-        : sortedPeriods.filter(periodHasPlot);
+        : sortedPeriods.filter(periodHasPlot)
+      ).filter((p) => chartMonthSet.has(normPeriod(p)));
     if (!dataPeriods.length) return [];
 
     const points = dataPeriods.map((p) => {
@@ -1666,18 +1826,50 @@ export function AtcPage() {
       return point;
     });
 
-    // Exactly one blank month after the last data month
-    const next = nextPeriodLabel(String(points[points.length - 1].period || ''));
-    if (next && next !== points[points.length - 1].period) {
-      const blank: Record<string, string | number | null> = { period: next };
-      for (const code of activeCodes) {
-        blank[`u_${code}`] = null;
-        if (showTarget && param.targetField) blank[`t_${code}`] = null;
+    // Blank month after the last data month only when that month is the latest snapshot
+    const lastReal = String(points[points.length - 1].period || '');
+    if (lastReal && lastReal === sortedPeriods[sortedPeriods.length - 1]) {
+      const next = nextPeriodLabel(lastReal);
+      if (next && next !== lastReal) {
+        const blank: Record<string, string | number | null> = { period: next };
+        for (const code of activeCodes) {
+          blank[`u_${code}`] = null;
+          if (showTarget && param.targetField) blank[`t_${code}`] = null;
+        }
+        points.push(blank);
       }
-      points.push(blank);
     }
     return points;
-  }, [rows, sortedPeriods, activeCodes, param, level, showTarget]);
+  }, [rows, sortedPeriods, chartMonthSet, activeCodes, param, level, showTarget]);
+
+  const metricTrendData = useMemo(() => {
+    if (!isMetricTrend || !metricTrendGroup || !activeCodes[0]) return [];
+    const code = activeCodes[0];
+    const kind = isIdcTrend ? 'mu' : 'pct';
+    const valueAt = (period: string, field: string) => {
+      const row = rows.find(
+        (r) => String(r.office_code) === code && r.period_label === period && r.office_type === level
+      );
+      return row ? chartValue(row[field], kind) : null;
+    };
+    const periodHasPlot = (period: string) =>
+      metricTrendGroup.some((m) => {
+        const v = valueAt(period, m.field);
+        return typeof v === 'number' && Number.isFinite(v);
+      });
+    const dataPeriods = sortedPeriods
+      .filter(periodHasPlot)
+      .filter((p) => chartMonthSet.has(normPeriod(p)));
+    if (!dataPeriods.length) return [];
+    return dataPeriods.map((p) => {
+      const point: Record<string, string | number | null> = { period: p };
+      for (const m of metricTrendGroup) {
+        point[m.id] = valueAt(p, m.field);
+        if (showTarget && m.targetField) point[`t_${m.id}`] = valueAt(p, m.targetField);
+      }
+      return point;
+    });
+  }, [isMetricTrend, isIdcTrend, metricTrendGroup, activeCodes, rows, sortedPeriods, chartMonthSet, level, showTarget]);
 
   const compareData = useMemo(() => {
     const period = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
@@ -1772,6 +1964,18 @@ export function AtcPage() {
     }
     return niceYAxis(vals, param.kind);
   }, [trendData, activeCodes, showTarget, param.kind]);
+
+  const metricTrendYAxis = useMemo(() => {
+    if (!metricTrendGroup) return null;
+    const vals: Array<number | null> = [];
+    for (const row of metricTrendData) {
+      for (const m of metricTrendGroup) {
+        vals.push(toNum(row[m.id]));
+        if (showTarget) vals.push(toNum(row[`t_${m.id}`]));
+      }
+    }
+    return niceYAxis(vals, isIdcTrend ? 'mu' : 'pct');
+  }, [metricTrendData, metricTrendGroup, showTarget, isIdcTrend]);
 
   const compareYAxis = useMemo(() => {
     const vals: Array<number | null> = [];
@@ -1885,15 +2089,21 @@ export function AtcPage() {
         .sort((a, b) => String(a.office_name).localeCompare(String(b.office_name)));
     }
     return rows
-      .filter((r) => r.office_type === level && activeCodes.includes(String(r.office_code)))
+      .filter(
+        (r) =>
+          r.office_type === level &&
+          activeCodes.includes(String(r.office_code)) &&
+          chartMonthSet.has(normPeriod(String(r.period_label)))
+      )
       .sort((a, b) => {
         const ps = String(a.period_sort || '').localeCompare(String(b.period_sort || ''));
         if (ps) return ps;
         return String(a.office_name).localeCompare(String(b.office_name));
       });
-  }, [mode, rows, asOf, sortedPeriods, level, activeCodes]);
+  }, [mode, rows, asOf, sortedPeriods, level, activeCodes, chartMonthSet]);
 
   const periodFyGroups = useMemo(() => groupPeriodsByFy(sortedPeriods), [sortedPeriods]);
+  const availablePeriods = useMemo(() => new Set(sortedPeriods), [sortedPeriods]);
 
   const focusPeriod = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
   const focusPrevPeriod = useMemo(() => {
@@ -1923,7 +2133,7 @@ export function AtcPage() {
   };
 
   const toggleCode = (code: string) => {
-    if (isMetricCompare) {
+    if (isSingleOfficePick) {
       setSelectedCodes([code]);
       return;
     }
@@ -1938,7 +2148,7 @@ export function AtcPage() {
   const fmtTip = (v: number) =>
     compareKind === 'pct' ? `${Number(v).toFixed(2)}%` : Number(v).toFixed(2);
 
-  const showLineLabels = mode === 'trend' && activeCodes.length > 0;
+  const showLineLabels = mode === 'trend' && !isMetricTrend && activeCodes.length > 0;
   const showBarLabels =
     mode === 'compare' &&
     !isIdcCompare &&
@@ -1955,41 +2165,14 @@ export function AtcPage() {
       ? 'AT&C vs T&D'
       : param.label;
 
-  const selectionLabel = useMemo(() => {
-    if (!activeCodes.length) return level === 'ccc' ? 'CCC' : level === 'division' ? 'Division' : 'Region';
-    if (activeCodes.length === 1) {
-      return nameByCode.get(activeCodes[0]) || activeCodes[0];
-    }
-    if (activeCodes.length <= 3) {
-      return activeCodes.map((c) => nameByCode.get(c) || c).join(', ');
-    }
-    const noun =
-      level === 'ccc' ? 'CCCs' : level === 'division' ? 'divisions' : level === 'region' ? 'region' : 'units';
-    return `${activeCodes.length} ${noun}`;
-  }, [activeCodes, nameByCode, level]);
-
-  const basisLabel = format === 'IA' ? 'Excl. Bulk' : 'Incl. Bulk';
-  const periodSpan =
-    sortedPeriods.length > 1
-      ? `${sortedPeriods[0]}–${sortedPeriods[sortedPeriods.length - 1]}`
-      : sortedPeriods[0] || '';
-
-  const chartHeadline = useMemo(() => {
-    if (mode === 'trend') {
-      return [param.label, selectionLabel, periodSpan, basisLabel].filter(Boolean).join(' · ');
-    }
-    const asOfLabel = asOf || sortedPeriods[sortedPeriods.length - 1] || '';
-    return [compareTitle, selectionLabel, asOfLabel, basisLabel].filter(Boolean).join(' · ');
-  }, [
-    mode,
-    param.label,
-    selectionLabel,
-    periodSpan,
-    basisLabel,
-    compareTitle,
-    asOf,
-    sortedPeriods,
-  ]);
+  const chartHeadline =
+    mode === 'trend'
+      ? isLossTrend
+        ? 'AT&C vs T&D'
+        : isIdcTrend
+          ? 'Input, Demand & Collection'
+          : param.label
+      : compareTitle;
 
   const wideCompareAxis =
     mode === 'compare' &&
@@ -2005,8 +2188,10 @@ export function AtcPage() {
 
   const showTargetControl =
     !isIdcCompare &&
-    ((!isMetricCompare && Boolean(param.targetField)) ||
-      (isMetricCompare && compareBy === 'losses'));
+    !isIdcTrend &&
+    (isLossTrend ||
+      isMetricCompare ||
+      (!isMetricCompare && Boolean(param.targetField)));
 
   const trendPeriods = useMemo(
     () => trendData.map((row) => String(row.period || '')),
@@ -2036,7 +2221,7 @@ export function AtcPage() {
   }, [activeCodes, trendData]);
 
   const latestStrip = useMemo(() => {
-    if (mode !== 'trend' || !activeCodes.length || activeCodes.length <= LABEL_SERIES_CAP) return [];
+    if (mode !== 'trend' || isMetricTrend || !activeCodes.length || activeCodes.length <= LABEL_SERIES_CAP) return [];
     const lastPeriod = sortedPeriods[sortedPeriods.length - 1];
     return activeCodes.map((code) => {
       let value: number | null = null;
@@ -2057,10 +2242,12 @@ export function AtcPage() {
         text: formatLabel(value, param.kind),
       };
     });
-  }, [mode, activeCodes, sortedPeriods, trendData, nameByCode, colorByCode, param.kind]);
+  }, [mode, isMetricTrend, activeCodes, sortedPeriods, trendData, nameByCode, colorByCode, param.kind]);
 
   const hasChart =
-    (mode === 'trend' && trendData.length > 0 && activeCodes.length > 0) ||
+    (mode === 'trend' &&
+      activeCodes.length > 0 &&
+      (isMetricTrend ? metricTrendData.length > 0 : trendData.length > 0)) ||
     (mode === 'compare' &&
       activeCodes.length > 0 &&
       (isIdcCompare ? muGroupedData.length > 0 : compareData.length > 0));
@@ -2373,9 +2560,9 @@ export function AtcPage() {
             )}
           </section>
 
-          {mode === 'compare' && (
+          {mode === 'compare' || mode === 'trend' ? (
             <section className="atc-block">
-              <div className="atc-label">Compare</div>
+              <div className="atc-label">{mode === 'trend' ? 'Series' : 'Compare'}</div>
               <Seg
                 value={compareBy}
                 onChange={setCompareBy}
@@ -2386,9 +2573,9 @@ export function AtcPage() {
                 ]}
               />
             </section>
-          )}
+          ) : null}
 
-          {(mode === 'trend' || compareBy === 'units') && (
+          {compareBy === 'units' && (
             <section className="atc-block">
               <div className="atc-label">Parameter</div>
               <div className="atc-param-grid">
@@ -2403,42 +2590,6 @@ export function AtcPage() {
                     {p.short}
                   </button>
                 ))}
-              </div>
-            </section>
-          )}
-
-          {mode === 'compare' && (
-            <section className="atc-block">
-              <div className="atc-label">
-                Month
-                {asOf ? <span className="atc-label-current">{asOf}</span> : null}
-              </div>
-              <div className="atc-month-panel">
-                {periodFyGroups.map(({ fy, months }) => (
-                  <div key={fy} className="atc-month-fy">
-                    <div className="atc-month-fy-label">{fy}</div>
-                    <div className="atc-month-grid">
-                      {months.map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          className={`atc-month ${asOf === p ? 'on' : ''} ${periodKind.get(p) === 'sparse' ? 'sparse' : ''}`}
-                          onClick={() => setAsOf(p)}
-                          title={
-                            periodKind.get(p) === 'sparse'
-                              ? `${p} · Comparison only — upload that month’s file for MU`
-                              : `${p} · Full snapshot`
-                          }
-                          aria-label={p}
-                          aria-pressed={asOf === p}
-                        >
-                          {shortPeriodLabel(p)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-                {!periodFyGroups.length && <p className="muted tight">No months</p>}
               </div>
             </section>
           )}
@@ -2460,9 +2611,9 @@ export function AtcPage() {
           <section className="atc-block atc-units">
             <div className="atc-units-head">
               <div className="atc-label" style={{ margin: 0 }}>
-                {isMetricCompare ? 'Office' : 'Units'}{' '}
+                {isSingleOfficePick ? 'Office' : 'Units'}{' '}
                 <span className="atc-count">
-                  {isMetricCompare
+                  {isSingleOfficePick
                     ? selectedCodes[0] || '—'
                     : `${selectedCodes.length}/${officeOptions.length}`}
                 </span>
@@ -2482,7 +2633,7 @@ export function AtcPage() {
                     onChange={(e) => setUnitQuery(e.target.value)}
                     aria-label="Search units"
                   />
-                  {!isMetricCompare && (
+                  {!isSingleOfficePick && (
                     <div className="atc-units-links">
                       <button type="button" className="linkish" onClick={selectAll}>
                         All
@@ -2496,11 +2647,11 @@ export function AtcPage() {
                 <div
                   className="atc-unit-list"
                   role="listbox"
-                  aria-multiselectable={!isMetricCompare}
+                  aria-multiselectable={!isSingleOfficePick}
                 >
                   {filteredOffices.map((o) => {
                     const on = selectedCodes.includes(o.code);
-                    const color = isMetricCompare
+                    const color = isSingleOfficePick
                       ? on
                         ? '#1a73e8'
                         : undefined
@@ -2508,8 +2659,8 @@ export function AtcPage() {
                     return (
                       <label key={o.code} className={`atc-unit ${on ? 'on' : ''}`}>
                         <input
-                          type={isMetricCompare ? 'radio' : 'checkbox'}
-                          name={isMetricCompare ? 'atc-focus-office' : undefined}
+                          type={isSingleOfficePick ? 'radio' : 'checkbox'}
+                          name={isSingleOfficePick ? 'atc-focus-office' : undefined}
                           checked={on}
                           onChange={() => toggleCode(o.code)}
                         />
@@ -2548,20 +2699,8 @@ export function AtcPage() {
                         : 'Target'
                       : chartHeadline}
                 </h2>
-                {onTarget && targetScenario ? (
-                  <p className="atc-coverage">
-                    {targetScenario.asOf} → {targetScenario.horizon}
-                  </p>
-                ) : panelTab !== 'analytic' && !onTarget && coverageCaption ? (
-                  <p className="atc-coverage">{coverageCaption}</p>
-                ) : null}
               </div>
               <div className="atc-result-tools">
-                {dumpVersion ? (
-                  <span className="muted atc-dump-ver" title="AT&C dump version — reused until a new upload">
-                    {dumpVersion.split('|')[0] || dumpVersion}
-                  </span>
-                ) : null}
                 <button
                   type="button"
                   className="btn secondary"
@@ -2632,6 +2771,36 @@ export function AtcPage() {
               </div>
             </div>
 
+            {!onTarget && panelTab !== 'analytic' && (
+              <AtcYearMonthGrid
+                fys={periodFyGroups.map((g) => g.fy)}
+                available={availablePeriods}
+                periodKind={periodKind}
+                selected={
+                  mode === 'trend'
+                    ? chartMonthSet
+                    : new Set(asOf ? [normPeriod(asOf)] : [])
+                }
+                asOf={asOf}
+                onToggle={(periods, checked) => {
+                  if (mode === 'trend') {
+                    toggleChartMonths(periods, checked);
+                    return;
+                  }
+                  if (!periods.length) return;
+                  if (checked) {
+                    setAsOf(periods[periods.length - 1]);
+                    return;
+                  }
+                  if (periods.length > 1) {
+                    const drop = new Set(periods.map(normPeriod));
+                    const remain = sortedPeriods.filter((p) => !drop.has(normPeriod(p)));
+                    if (remain.length) setAsOf(remain[remain.length - 1]);
+                  }
+                }}
+              />
+            )}
+
             {panelTab === 'chart' && (
               <div className="atc-tab-panel atc-tab-panel-chart" role="tabpanel">
                 {loading && <p className="muted">Loading…</p>}
@@ -2645,13 +2814,84 @@ export function AtcPage() {
 
                 {!loading && rows.length > 0 && !activeCodes.length && (
                   <p className="atc-empty">
-                    {isMetricCompare
+                    {isSingleOfficePick
                       ? 'Select one office on the left.'
                       : 'Select at least one unit on the left.'}
                   </p>
                 )}
 
-                {!loading && hasChart && mode === 'trend' && (
+                {!loading && hasChart && mode === 'trend' && isMetricTrend && metricTrendGroup && (
+                  <div className="atc-chart-wrap">
+                    <div className="atc-chart">
+                      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+                        <LineChart
+                          data={metricTrendData}
+                          margin={{ top: 28, right: 16, left: 4, bottom: 8 }}
+                        >
+                          <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                          <XAxis
+                            dataKey="period"
+                            type="category"
+                            allowDuplicatedCategory={false}
+                            padding={{ left: 0, right: 8 }}
+                            interval={0}
+                            tick={{ fill: 'var(--chart-tick)', fontSize: 12 }}
+                            minTickGap={0}
+                          />
+                          <YAxis
+                            tick={(props) => (
+                              <YAxisTick2 {...props} unit={isIdcTrend ? '' : '%'} />
+                            )}
+                            ticks={metricTrendYAxis?.ticks}
+                            tickFormatter={yTick2}
+                            width={56}
+                            domain={metricTrendYAxis?.domain || ['auto', 'auto']}
+                            allowDataOverflow={false}
+                            allowDecimals
+                          />
+                          <Tooltip
+                            {...CHART_TOOLTIP}
+                            formatter={(v: number, name: string) => [fmtTip(v), name]}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 11, color: 'var(--chart-label)', paddingTop: 4 }} />
+                          {metricTrendGroup.map((m) => (
+                            <Line
+                              key={m.id}
+                              type="monotone"
+                              dataKey={m.id}
+                              name={m.short}
+                              stroke={m.color}
+                              strokeWidth={2.4}
+                              dot={{ r: 3.5, fill: m.color, stroke: m.color, strokeWidth: 1 }}
+                              activeDot={{ r: 6, fill: m.color, strokeWidth: 2, stroke: 'var(--surface)' }}
+                              connectNulls={m.kind !== 'mu'}
+                            />
+                          ))}
+                          {showTarget &&
+                            isLossTrend &&
+                            metricTrendGroup.map((m) =>
+                              m.targetField ? (
+                                <Line
+                                  key={`t_${m.id}`}
+                                  type="monotone"
+                                  dataKey={`t_${m.id}`}
+                                  name={`${m.short} tgt`}
+                                  stroke={m.color}
+                                  strokeWidth={1.8}
+                                  strokeDasharray="7 4"
+                                  strokeOpacity={0.95}
+                                  dot={false}
+                                  connectNulls
+                                />
+                              ) : null
+                            )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {!loading && hasChart && mode === 'trend' && !isMetricTrend && (
                   <div className="atc-chart-wrap">
                     <div className="atc-chart">
                       <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
