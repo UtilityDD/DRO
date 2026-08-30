@@ -474,9 +474,6 @@ function ExecutiveView({
       </div>
 
       <p className="section-label">SS & capacity by owner</p>
-      <p className="muted" style={{ marginTop: 0 }}>
-        WBSEDCL · WBSETCL · POWERGRID · NTPC · others (33 kV → WBSEDCL; blank 132/220 → WBSETCL)
-      </p>
       <div className="report-table-wrap">
         <table className="report-table report-table-compact">
           <thead>
