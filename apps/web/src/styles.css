@@ -1411,6 +1411,53 @@ button {
   font-family: var(--dro-font);
 }
 
+/*
+ * Force map canvas colour from shell appearance.
+ * Scoped powermap.css hardcodes a light basemap-none background and loads later —
+ * without !important the map never follows Dark/Light.
+ */
+.app-shell[data-appearance='light'].mode-powermap .pm-root .map-stage,
+.app-shell[data-appearance='light'].mode-powermap .pm-root .map-root,
+.app-shell[data-appearance='light'].mode-powermap .pm-root .leaflet-container,
+.app-shell[data-appearance='light'].mode-powermap .pm-root .leaflet-container.basemap-none,
+.pm-root[data-appearance='light'] .map-stage,
+.pm-root[data-appearance='light'] .map-root,
+.pm-root[data-appearance='light'] .leaflet-container,
+.pm-root[data-appearance='light'] .leaflet-container.basemap-none {
+  background: #dce6f0 !important;
+}
+
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .map-stage,
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .map-root,
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .leaflet-container,
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .leaflet-container.basemap-none,
+.pm-root[data-appearance='dark'] .map-stage,
+.pm-root[data-appearance='dark'] .map-root,
+.pm-root[data-appearance='dark'] .leaflet-container,
+.pm-root[data-appearance='dark'] .leaflet-container.basemap-none {
+  background: #0b1220 !important;
+}
+
+.app-shell[data-appearance='light'].mode-powermap .pm-root .leaflet-container.basemap-none.pm-appearance-light,
+.mode-powermap .pm-root .leaflet-container.basemap-none.pm-appearance-light {
+  background: #dce6f0 !important;
+}
+
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .leaflet-container.basemap-none.pm-appearance-dark,
+.mode-powermap .pm-root .leaflet-container.basemap-none.pm-appearance-dark {
+  background: #0b1220 !important;
+}
+
+/*
+ * Darken Google Roads / OSM tiles in dark mode (tile pane only — network overlays stay true-colour).
+ * Hybrid/satellite and Esri dark-gray canvas are excluded.
+ */
+.mode-powermap .pm-root .leaflet-container.pm-basemap-invert .leaflet-tile-pane,
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .leaflet-container.pm-basemap-invert .leaflet-tile-pane,
+.pm-root[data-appearance='dark'] .leaflet-container.pm-basemap-invert .leaflet-tile-pane {
+  filter: invert(0.9) hue-rotate(180deg) brightness(0.95) contrast(0.92) saturate(0.75);
+}
+
 .mode-powermap .pm-root .leaflet-fade-anim .leaflet-tile,
 .mode-powermap .pm-root .leaflet-zoom-anim .leaflet-zoom-animated {
   will-change: transform, opacity;
@@ -4409,6 +4456,114 @@ html[data-appearance='dark'] .login-card {
   border-style: solid;
 }
 
+.atc-ym-wrap {
+  flex-shrink: 0;
+  margin: 0 0 0.35rem;
+  overflow-x: auto;
+}
+
+.atc-ym-empty {
+  flex-shrink: 0;
+  margin: 0 0 0.35rem;
+  padding: 0;
+  font-size: 0.7rem;
+}
+
+.atc-ym {
+  border-collapse: collapse;
+  font-size: 0.58rem;
+  line-height: 1;
+}
+
+.atc-ym th,
+.atc-ym td {
+  border: 1px solid var(--border);
+  text-align: center;
+  padding: 0;
+  height: 1.15rem;
+}
+
+.atc-ym thead th {
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0;
+  padding: 0.08rem 0.14rem;
+  background: var(--bg-soft);
+  white-space: nowrap;
+}
+
+.atc-ym th[scope='row'] {
+  text-align: left;
+  font-weight: 650;
+  padding: 0 0.2rem 0 0.12rem;
+  white-space: nowrap;
+  background: var(--bg-soft);
+}
+
+.atc-ym-fy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  cursor: pointer;
+  font-size: 0.58rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.atc-ym-fy input,
+.atc-ym-check input {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent, #1a73e8);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.atc-ym td {
+  width: 1.35rem;
+  min-width: 1.35rem;
+  background: var(--surface);
+}
+
+.atc-ym td.empty {
+  background: var(--bg-soft);
+}
+
+.atc-ym td.on {
+  background: var(--accent-soft, #e8f0fe);
+}
+
+.atc-ym td.asof {
+  box-shadow: inset 0 0 0 1px var(--accent, #1a73e8);
+}
+
+.atc-ym td.sparse {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--surface),
+    var(--surface) 3px,
+    var(--bg-soft) 3px,
+    var(--bg-soft) 6px
+  );
+}
+
+.atc-ym td.sparse.on {
+  background: var(--accent-soft, #e8f0fe);
+}
+
+.atc-ym-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 1.15rem;
+  cursor: pointer;
+}
+
 .atc-coverage {
   margin: 0.15rem 0 0;
   font-size: 0.72rem;
@@ -4685,7 +4840,8 @@ html[data-appearance='dark'] .login-card {
 
 .atc-tab-panel-chart,
 .atc-tab-panel-table {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .atc-chart-wrap {

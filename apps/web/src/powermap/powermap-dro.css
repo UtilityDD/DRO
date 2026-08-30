@@ -318,18 +318,42 @@
   color: var(--muted) !important;
 }
 
+/* Map canvas theme — must beat scoped powermap.css light hardcodes. */
+.pm-root[data-appearance='light'] .map-stage,
+.pm-root[data-appearance='light'] .map-root,
+.pm-root[data-appearance='light'] .leaflet-container,
+.pm-root[data-appearance='light'] .leaflet-container.basemap-none {
+  background: #dce6f0 !important;
+}
+
+.pm-root[data-appearance='dark'] .map-stage,
+.pm-root[data-appearance='dark'] .map-root,
+.pm-root[data-appearance='dark'] .leaflet-container,
+.pm-root[data-appearance='dark'] .leaflet-container.basemap-none {
+  background: #0b1220 !important;
+}
+
+.pm-root[data-appearance='dark'] .leaflet-container.pm-basemap-invert .leaflet-tile-pane {
+  filter: invert(0.9) hue-rotate(180deg) brightness(0.95) contrast(0.92) saturate(0.75);
+}
+
 /* No-basemap canvas follows shell appearance (mask/dim wash match). */
 .pm-root .leaflet-container.basemap-none.pm-appearance-light {
-  background: #f1f5f9;
+  background: #dce6f0 !important;
 }
 
 .pm-root .leaflet-container.basemap-none.pm-appearance-dark {
-  background: #0f172a;
+  background: #0b1220 !important;
 }
 
 .pm-root .leaflet-container.pm-appearance-light .pm-district-label.is-dimmed span {
   opacity: 0.42;
   filter: grayscale(0.25);
+}
+
+/* Dark-mode street tiles (Google / OSM) — invert tile pane only. */
+.pm-root .leaflet-container.pm-basemap-invert .leaflet-tile-pane {
+  filter: invert(0.9) hue-rotate(180deg) brightness(0.95) contrast(0.92) saturate(0.75);
 }
 
 .pm-root .editor-row strong {

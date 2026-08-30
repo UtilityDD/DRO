@@ -42,6 +42,13 @@ export function readMapAppearance(): MapAppearance {
     document.documentElement.getAttribute('data-appearance');
   if (from === 'dark') return 'dark';
   if (from === 'light') return 'light';
+  // Match AppShell before the attribute is written on first paint.
+  try {
+    if (window.localStorage.getItem('dro.appearance') === 'dark') return 'dark';
+    if (window.localStorage.getItem('dro.appearance') === 'light') return 'light';
+  } catch {
+    /* ignore */
+  }
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -271,6 +278,31 @@ const BLOCK_STYLE: L.PathOptions = {
   interactive: false,
 };
 
+/** Above network markers (600), below callouts/popups; keeps place names readable. */
+export const PLACE_LABELS_PANE = 'pmPlaceLabels';
+const PLACE_LABELS_Z = '640';
+
+/** Above place labels — suggestions, drafts, siting chips. */
+export const CALLOUTS_PANE = 'pmCallouts';
+const CALLOUTS_Z = '680';
+
+export function ensurePlaceLabelsPane(map: L.Map): string {
+  if (!map.getPane(PLACE_LABELS_PANE)) {
+    const pane = map.createPane(PLACE_LABELS_PANE);
+    pane.style.zIndex = PLACE_LABELS_Z;
+    pane.style.pointerEvents = 'none';
+  }
+  return PLACE_LABELS_PANE;
+}
+
+export function ensureCalloutsPane(map: L.Map): string {
+  if (!map.getPane(CALLOUTS_PANE)) {
+    const pane = map.createPane(CALLOUTS_PANE);
+    pane.style.zIndex = CALLOUTS_Z;
+  }
+  return CALLOUTS_PANE;
+}
+
 function styleForDistrict(
   name: string,
   focusedDistricts: string[],
@@ -311,9 +343,9 @@ function maskStyle(opacity: number, appearance: MapAppearance): L.PathOptions {
   if (appearance === 'light') {
     return {
       stroke: false,
-      // Slate, not near-black — reads as “outside” on Google/OSM/Esri.
-      fillColor: '#475569',
-      fillOpacity: Math.min(0.55, opacity * 0.5),
+      // Cool gray wash — clearly softer than the dark ink veil.
+      fillColor: '#64748b',
+      fillOpacity: Math.min(0.38, Math.max(0.18, opacity * 0.38)),
       fillRule: 'evenodd',
     };
   }
@@ -417,12 +449,15 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
           style: BLOCK_STYLE,
         });
         const labels = L.layerGroup();
+        const blockPane = ensurePlaceLabelsPane(map);
         for (const feature of data.features) {
           const c = featureCentroid(feature);
           if (!c) continue;
           labels.addLayer(
             L.marker(c, {
               interactive: false,
+              pane: blockPane,
+              zIndexOffset: 100,
               icon: L.divIcon({
                 className: 'pm-block-label',
                 html: `<span>${escapeHtml(blockName(feature.properties))}</span>`,
@@ -444,6 +479,7 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
   type LabelEntry = { name: string; marker: L.Marker };
   const labelEntries: LabelEntry[] = [];
   const labelGroup = L.layerGroup();
+  const placePane = ensurePlaceLabelsPane(map);
   if (districtData) {
     for (const feature of districtData.features) {
       const c = featureCentroid(feature);
@@ -451,6 +487,8 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
       const name = districtName(feature.properties);
       const marker = L.marker(c, {
         interactive: false,
+        pane: placePane,
+        zIndexOffset: 200,
         icon: L.divIcon({
           className: 'pm-district-label',
           html: `<span>${escapeHtml(name)}</span>`,
@@ -549,6 +587,7 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
     }
 
     // Keep blocks under the district strokes, and the mask under everything.
+    // Place-name labels use pmPlaceLabels pane (above network symbols).
     if (opts.showBlocks && blockLayer && group.hasLayer(blockLayer)) blockLayer.bringToBack();
     if (opts.showMask && group.hasLayer(maskLayer)) maskLayer.bringToBack();
   };
@@ -582,8 +621,9 @@ const ESRI_ATTRIBUTION =
  * Esri stops at zoom 16 and serves a "Map data not yet available" placeholder
  * above it, hence maxNativeZoom — Leaflet upscales instead of showing that.
  */
-function createEsriCanvas(): L.LayerGroup {
-  const base = L.tileLayer(`${ESRI_CANVAS}/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`, {
+function createEsriCanvas(dark: boolean): L.LayerGroup {
+  const style = dark ? 'World_Dark_Gray' : 'World_Light_Gray';
+  const base = L.tileLayer(`${ESRI_CANVAS}/${style}_Base/MapServer/tile/{z}/{y}/{x}`, {
     maxZoom: 20,
     maxNativeZoom: 16,
     attribution: ESRI_ATTRIBUTION,
@@ -592,13 +632,18 @@ function createEsriCanvas(): L.LayerGroup {
     keepBuffer: 4,
   });
   const labels = L.tileLayer(
-    `${ESRI_CANVAS}/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}`,
+    `${ESRI_CANVAS}/${style}_Reference/MapServer/tile/{z}/{y}/{x}`,
     { maxZoom: 20, maxNativeZoom: 16, updateWhenIdle: false, keepBuffer: 4 },
   );
   return L.layerGroup([base, labels]);
 }
 
-export function createBasemapLayer(id: BasemapId): L.Layer {
+/** Street/light basemaps follow shell appearance; hybrid/satellite stay photographic. */
+export function createBasemapLayer(
+  id: BasemapId,
+  appearance: MapAppearance = 'light',
+): L.Layer {
+  const dark = appearance === 'dark';
   switch (id) {
     case 'none':
       return L.tileLayer('', {
@@ -612,6 +657,7 @@ export function createBasemapLayer(id: BasemapId): L.Layer {
         attribution: 'Map data &copy; Google',
         updateWhenIdle: false,
         keepBuffer: 4,
+        className: dark ? 'pm-basemap-tiles-darkable' : undefined,
       });
     case 'google-hybrid':
       return L.tileLayer('https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
@@ -627,10 +673,11 @@ export function createBasemapLayer(id: BasemapId): L.Layer {
         attribution: '&copy; OpenStreetMap',
         updateWhenIdle: false,
         keepBuffer: 4,
+        className: dark ? 'pm-basemap-tiles-darkable' : undefined,
       });
     case 'esri':
     default:
-      return createEsriCanvas();
+      return createEsriCanvas(dark);
   }
 }
 

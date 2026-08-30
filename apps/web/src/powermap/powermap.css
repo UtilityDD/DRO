@@ -758,11 +758,15 @@
 }
 
 .pm-root .leaflet-container.basemap-none{
-  background: #f1f5f9;
+  background: #e8eef5;
 }
 
 .pm-root .leaflet-container.basemap-none.pm-appearance-dark{
-  background: #0f172a;
+  background: #0b1220;
+}
+
+.pm-root .leaflet-container.pm-basemap-invert .leaflet-tile-pane{
+  filter: invert(0.9) hue-rotate(180deg) brightness(0.95) contrast(0.92) saturate(0.75);
 }
 
 .pm-root .map-legend{
@@ -1694,6 +1698,10 @@
   line-height: 1.25;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.pm-root .pm-district-label, .pm-root .pm-block-label, .pm-root .pm-asset-label, .pm-root .pm-ckt-badge, .pm-root .pm-siting-dist-label{
+  z-index: 1;
 }
 
 .pm-root .pm-district-label span{

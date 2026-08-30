@@ -5,7 +5,7 @@ import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import { useNetworkStore } from '@/store/networkStore';
 import { parallelCircuitLatLngs, lineDisplayLabel, formatCapacity, haversineKm } from '@/domain/geo';
-import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_BOUNDS, fitDefaultZone, readMapAppearance, type BoundaryHandle, type MapAppearance } from './boundaryLayers';
+import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_BOUNDS, fitDefaultZone, readMapAppearance, ensurePlaceLabelsPane, ensureCalloutsPane, type BoundaryHandle, type MapAppearance } from './boundaryLayers';
 import { feederLabelOffsetPx, feederLabelPlacement } from './feederLabels';
 import { lineStyle, substationIcon, tapIcon } from './symbology';
 import { nearestPointOnLines, nearestSubstation } from './mapSnap';
@@ -74,10 +74,13 @@ export function MapView() {
   const hoverCoords = useNetworkStore((s) => s.hoverCoords);
   const [mapZoom, setMapZoom] = useState(10);
   const [appearance, setAppearance] = useState<MapAppearance>(() => readMapAppearance());
+  /** Bumps when the Leaflet map or boundary handle becomes ready so theme apply can run. */
+  const [mapReadyTick, setMapReadyTick] = useState(0);
 
   // Follow DRO light/dark so mask + dim wash stay consistent with the shell.
   useEffect(() => {
     const sync = () => setAppearance(readMapAppearance());
+    sync();
     const obs = new MutationObserver(sync);
     obs.observe(document.documentElement, {
       attributes: true,
@@ -89,9 +92,12 @@ export function MapView() {
     }
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener('change', sync);
+    // AppShell may mount the attribute slightly after first paint.
+    const t = window.setTimeout(sync, 0);
     return () => {
       obs.disconnect();
       mq.removeEventListener('change', sync);
+      window.clearTimeout(t);
     };
   }, []);
 
@@ -125,12 +131,21 @@ export function MapView() {
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     const initialId = useNetworkStore.getState().mapLayers.basemap;
+    const initialAppearance = readMapAppearance();
+    const container = map.getContainer();
+    container.classList.toggle('basemap-none', initialId === 'none');
+    container.classList.toggle('basemap-photo', initialId === 'google-hybrid');
+    container.classList.toggle('pm-appearance-dark', initialAppearance === 'dark');
+    container.classList.toggle('pm-appearance-light', initialAppearance === 'light');
+    container.classList.toggle(
+      'pm-basemap-invert',
+      initialAppearance === 'dark' && (initialId === 'google' || initialId === 'osm'),
+    );
+
     if (initialId !== 'none') {
-      const initialBasemap = createBasemapLayer(initialId);
+      const initialBasemap = createBasemapLayer(initialId, initialAppearance);
       initialBasemap.addTo(map);
       basemapRef.current = initialBasemap;
-    } else {
-      map.getContainer().classList.add('basemap-none');
     }
 
     const networkLayer = L.featureGroup().addTo(map);
@@ -141,6 +156,10 @@ export function MapView() {
     hintsLayerRef.current = hintsLayer;
     mapRef.current = map;
     setMapZoom(map.getZoom());
+    setMapReadyTick((n) => n + 1);
+    // Panes for label stacking: symbols < place names < callouts
+    ensurePlaceLabelsPane(map);
+    ensureCalloutsPane(map);
     const onZoom = () => setMapZoom(map.getZoom());
     map.on('zoomend', onZoom);
 
@@ -191,6 +210,7 @@ export function MapView() {
         });
         networkLayerRef.current?.bringToFront();
         measureLayerRef.current?.bringToFront();
+        setMapReadyTick((n) => n + 1);
       })
       .catch(() => {
         /* boundaries optional — basemap still works */
@@ -235,7 +255,7 @@ export function MapView() {
     }
 
     if (mapLayers.basemap !== 'none') {
-      const next = createBasemapLayer(mapLayers.basemap);
+      const next = createBasemapLayer(mapLayers.basemap, appearance);
       next.addTo(map);
       basemapToBack(next);
       basemapRef.current = next;
@@ -243,8 +263,15 @@ export function MapView() {
 
     const container = map.getContainer();
     container.classList.toggle('basemap-none', mapLayers.basemap === 'none');
+    container.classList.toggle('basemap-photo', mapLayers.basemap === 'google-hybrid');
     container.classList.toggle('pm-appearance-dark', appearance === 'dark');
     container.classList.toggle('pm-appearance-light', appearance === 'light');
+    // Street tiles (Google/OSM) need a CSS invert in dark mode; Esri swaps to dark gray.
+    container.classList.toggle(
+      'pm-basemap-invert',
+      appearance === 'dark' &&
+        (mapLayers.basemap === 'google' || mapLayers.basemap === 'osm'),
+    );
 
     boundaryRef.current?.apply({
       showMask: mapLayers.showMask,
@@ -266,6 +293,7 @@ export function MapView() {
   }, [
     tool,
     appearance,
+    mapReadyTick,
     mapLayers.basemap,
     mapLayers.showMask,
     mapLayers.maskOpacity,
@@ -781,6 +809,8 @@ export function MapView() {
     const visibleLines = state.visibleLines();
     const visibleSsIds = new Set(visibleSs.map((s) => s.id));
     const ssById = new Map(substations.map((s) => [s.id, s]));
+    const labelsPane = ensurePlaceLabelsPane(map);
+    const calloutsPane = ensureCalloutsPane(map);
 
     // Group parallel circuits for offset
     const pairKey = (a: string, b: string) => [a, b].sort().join('|');
@@ -874,7 +904,8 @@ export function MapView() {
               L.marker([place.lat, place.lng], {
                 icon,
                 interactive: false,
-                zIndexOffset: 350,
+                pane: labelsPane,
+                zIndexOffset: 100,
               }),
             );
           }
@@ -922,7 +953,14 @@ export function MapView() {
               iconSize: [40, 18],
               iconAnchor: [20, 9],
             });
-            layer.addLayer(L.marker(mid, { icon: badge, interactive: false, zIndexOffset: 600 }));
+            layer.addLayer(
+              L.marker(mid, {
+                icon: badge,
+                interactive: false,
+                pane: labelsPane,
+                zIndexOffset: 150,
+              }),
+            );
           }
         }
       });
@@ -1103,7 +1141,8 @@ export function MapView() {
             L.marker([ss.lat, ss.lng], {
               icon,
               interactive: false,
-              zIndexOffset: 550,
+              pane: labelsPane,
+              zIndexOffset: 200,
             }),
           );
         }
@@ -1129,7 +1168,8 @@ export function MapView() {
         const marker = L.marker([sug.lat, sug.lng], {
           icon,
           interactive: true,
-          zIndexOffset: focused ? 900 : 700,
+          pane: calloutsPane,
+          zIndexOffset: focused ? 200 : 100,
         });
         marker.bindTooltip(label, {
           permanent: focused,
@@ -1175,7 +1215,8 @@ export function MapView() {
         const marker = L.marker([draft.lat, draft.lng], {
           icon,
           interactive: true,
-          zIndexOffset: focused ? 910 : 710,
+          pane: calloutsPane,
+          zIndexOffset: focused ? 200 : 100,
         });
         marker.bindTooltip(label, {
           permanent: focused,
@@ -1225,7 +1266,8 @@ export function MapView() {
         const marker = L.marker([c.lat, c.lng], {
           icon,
           interactive: true,
-          zIndexOffset: focused ? 950 : 720,
+          pane: calloutsPane,
+          zIndexOffset: focused ? 220 : 120,
         });
         marker.bindTooltip(tipHtml, {
           permanent: focused,
@@ -1273,7 +1315,8 @@ export function MapView() {
               L.marker([midLat, midLng], {
                 icon: distIcon,
                 interactive: false,
-                zIndexOffset: 960,
+                pane: labelsPane,
+                zIndexOffset: 180,
               }),
             );
           });

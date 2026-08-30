@@ -32,9 +32,41 @@ export function PowerMapPage() {
   // the offline copy and never retry. Hold it back until they resolve.
   const [clientReady, setClientReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [shellAppearance, setShellAppearance] = useState<'light' | 'dark'>(() => {
+    try {
+      const from =
+        document.querySelector('.app-shell')?.getAttribute('data-appearance') ||
+        document.documentElement.getAttribute('data-appearance');
+      if (from === 'dark' || from === 'light') return from;
+      return window.localStorage.getItem('dro.appearance') === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
   const hotkey = useMemo(() => searchHotkeyLabel(), []);
 
   usePageHeading('Power Map');
+
+  // Keep map canvas theme in sync with the shell (scoped powermap.css hardcodes light bg).
+  useEffect(() => {
+    const sync = () => {
+      const from =
+        document.querySelector('.app-shell')?.getAttribute('data-appearance') ||
+        document.documentElement.getAttribute('data-appearance');
+      if (from === 'dark' || from === 'light') setShellAppearance(from);
+    };
+    sync();
+    const obs = new MutationObserver(sync);
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-appearance'],
+    });
+    const shell = document.querySelector('.app-shell');
+    if (shell) {
+      obs.observe(shell, { attributes: true, attributeFilter: ['data-appearance'] });
+    }
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +170,7 @@ export function PowerMapPage() {
           </span>
         )}
       </div>
-      <div className="pm-root">
+      <div className="pm-root" data-appearance={shellAppearance}>
         {showLoadOverlay && (
           <div className="pm-load-overlay" role="status" aria-live="polite">
             <div className="pm-load-card">
