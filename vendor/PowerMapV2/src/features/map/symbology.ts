@@ -41,7 +41,7 @@ export function lineWeightScaleForZoom(zoom: number): number {
   return 1;
 }
 
-/** SVG symbol by voltage: square / diamond / hexagon / circle */
+/** SVG symbol by voltage: square / diamond / hexagon / pentagon / circle */
 export function substationIcon(
   voltage: VoltageCode,
   status: AssetLifecycle,
@@ -87,6 +87,17 @@ function shapeSvg(
     const pts = [0, 1, 2, 3, 4, 5]
       .map((i) => {
         const a = (Math.PI / 3) * i - Math.PI / 2;
+        return `${c + r * Math.cos(a)},${c + r * Math.sin(a)}`;
+      })
+      .join(' ');
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><polygon points="${pts}" ${common}/></svg>`;
+  }
+  if (voltage === '66') {
+    const c = size / 2;
+    const r = size / 2 - pad;
+    const pts = [0, 1, 2, 3, 4]
+      .map((i) => {
+        const a = (Math.PI * 2) / 5 * i - Math.PI / 2;
         return `${c + r * Math.cos(a)},${c + r * Math.sin(a)}`;
       })
       .join(' ');

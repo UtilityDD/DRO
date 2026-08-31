@@ -25,6 +25,10 @@ import {
   type EditorAccount,
 } from '@/lib/editorsRepo';
 import {
+  ALL_VOLTAGES,
+  type VoltageFocus,
+} from '@/lib/voltageFocus';
+import {
   buildScopeBadgeLabel,
   printPatchFromScope,
   sceneById,
@@ -145,6 +149,8 @@ interface UiState {
   mapFocus: PlaceDraft | null;
   /** Bumped to ask MapView to fit the default zone (reset home). */
   mapHomeNonce: number;
+  /** User-dragged district name positions (persisted locally). */
+  districtLabelPositions: Record<string, { lat: number; lng: number }>;
 }
 
 interface NetworkStore extends UiState {
@@ -216,6 +222,8 @@ interface NetworkStore extends UiState {
   mapLayers: MapLayerSettings;
   /** Active scene preset; `custom` after manual filter/layer edits. */
   sceneId: SceneId;
+  /** Dim non-focused voltage classes while keeping them on the map. */
+  voltageFocus: VoltageFocus;
   availableDistricts: string[];
   /** Live dump stamp (NSC-style). Empty until first successful stamp/fetch. */
   networkVersion: string | null;
@@ -284,8 +292,11 @@ interface NetworkStore extends UiState {
   setPrintSettings: (patch: Partial<PrintSettings>) => void;
   setPrintPreviewOpen: (open: boolean) => void;
   applyScene: (id: Exclude<SceneId, 'custom'>) => void;
+  setVoltageFocus: (focus: VoltageFocus) => void;
   /** Exit inspection modes, clear overlays, restore Overview scene + default zone view. */
   resetMapView: () => void;
+  setDistrictLabelPosition: (name: string, lat: number, lng: number) => void;
+  resetDistrictLabelPositions: () => void;
   syncPrintFromScope: () => void;
   scopeBadgeLabel: () => string;
   approveSuggestion: (id: string) => Promise<void>;
@@ -341,7 +352,7 @@ interface NetworkStore extends UiState {
 
 const defaultFilters: NetworkFilters = {
   statuses: ['existing', 'proposed'],
-  voltages: ['400', '220', '132', '33'],
+  voltages: ['400', '220', '132', '66', '33'],
   orgUnitIds: [],
   overloadedOnly: false,
   oldOnly: false,
@@ -368,12 +379,48 @@ const defaultMapLayers: MapLayerSettings = {
 };
 
 const ADMIN_SESSION_KEY = 'powermap.adminSession';
+const DISTRICT_LABEL_POS_KEY = 'powermap.districtLabelPositions';
 const MUTATING_TOOLS: ToolMode[] = ['add-ss', 'connect', 'tap', 'move', 'delete'];
 
 interface AdminSession {
   role: 'super' | 'editor';
   name: string;
   editorId?: string;
+}
+
+type DistrictLabelPos = Record<string, { lat: number; lng: number }>;
+
+function readDistrictLabelPositions(): DistrictLabelPos {
+  try {
+    const raw = localStorage.getItem(DISTRICT_LABEL_POS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as DistrictLabelPos;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: DistrictLabelPos = {};
+    for (const [name, pos] of Object.entries(parsed)) {
+      if (
+        pos &&
+        typeof pos.lat === 'number' &&
+        typeof pos.lng === 'number' &&
+        Number.isFinite(pos.lat) &&
+        Number.isFinite(pos.lng)
+      ) {
+        out[name] = { lat: pos.lat, lng: pos.lng };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeDistrictLabelPositions(positions: DistrictLabelPos) {
+  try {
+    if (Object.keys(positions).length === 0) localStorage.removeItem(DISTRICT_LABEL_POS_KEY);
+    else localStorage.setItem(DISTRICT_LABEL_POS_KEY, JSON.stringify(positions));
+  } catch {
+    /* ignore */
+  }
 }
 
 function readAdminSession(): AdminSession | null {
@@ -445,6 +492,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   printSettings: { ...DEFAULT_PRINT_SETTINGS },
   printPreviewOpen: false,
   sceneId: 'overview',
+  voltageFocus: 'all',
   substations: [],
   lines: [],
   tapNodes: [],
@@ -469,6 +517,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   hoverCoords: null,
   mapFocus: null,
   mapHomeNonce: 0,
+  districtLabelPositions: readDistrictLabelPositions(),
 
   bootstrap: async () => {
     let data;
@@ -1248,6 +1297,11 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   setPrintPreviewOpen: (printPreviewOpen) => set({ printPreviewOpen }),
 
   applyScene: (id) => {
+    if (id === 'proposed') {
+      set({ voltageFocus: 'proposed', sceneId: 'custom' });
+      get().flashStatus('Proposed · existing network dimmed');
+      return;
+    }
     const scene = sceneById(id);
     if (!scene) return;
     const prev = get().mapLayers;
@@ -1260,10 +1314,18 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       nextLayers.focusedDistricts = prev.focusedDistricts;
       nextLayers.dimAllDistricts = prev.dimAllDistricts;
     }
+    let voltageFocus: VoltageFocus = get().voltageFocus;
+    let nextFilters = { ...get().filters, ...scene.filters };
+    if (id === 'overview') voltageFocus = 'all';
+    else if (id === 'ehv' || id === 'local-33') {
+      voltageFocus = id === 'ehv' ? 'ehv' : '33';
+      nextFilters = { ...nextFilters, voltages: [...ALL_VOLTAGES] };
+    }
     set({
       sceneId: id,
-      filters: { ...get().filters, ...scene.filters },
+      filters: nextFilters,
       mapLayers: nextLayers,
+      voltageFocus,
     });
     if (scene.syncPrint) get().syncPrintFromScope();
     if (id === 'district-focus' && !nextLayers.focusedDistricts.length && !nextLayers.dimAllDistricts) {
@@ -1271,6 +1333,30 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     } else {
       get().flashStatus(`Scene · ${scene.label}`);
     }
+  },
+
+  setVoltageFocus: (focus) => {
+    const prev = get();
+    const patch: {
+      voltageFocus: VoltageFocus;
+      sceneId: SceneId;
+      filters?: NetworkFilters;
+    } = { voltageFocus: focus, sceneId: 'custom' };
+    if (focus === 'ehv' || focus === '33') {
+      patch.filters = { ...prev.filters, voltages: [...ALL_VOLTAGES] };
+    } else if (
+      focus !== 'proposed' &&
+      prev.voltageFocus === 'proposed' &&
+      prev.filters.statuses.length === 1 &&
+      prev.filters.statuses[0] === 'proposed'
+    ) {
+      patch.filters = {
+        ...prev.filters,
+        statuses: ['existing', 'proposed'],
+        showProposed: true,
+      };
+    }
+    set(patch);
   },
 
   resetMapView: () => {
@@ -1304,11 +1390,29 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       focusedPersonalDraftId: null,
       printPreviewOpen: false,
       sceneId: 'overview',
+      voltageFocus: 'all',
       filters: { ...defaultFilters, ...scene.filters },
       mapLayers: { ...defaultMapLayers, ...scene.mapLayers },
       mapHomeNonce: get().mapHomeNonce + 1,
+      districtLabelPositions: {},
     });
+    writeDistrictLabelPositions({});
     get().flashStatus('Map reset to default look');
+  },
+
+  setDistrictLabelPosition: (name, lat, lng) => {
+    const next = {
+      ...get().districtLabelPositions,
+      [name]: { lat, lng },
+    };
+    writeDistrictLabelPositions(next);
+    set({ districtLabelPositions: next });
+  },
+
+  resetDistrictLabelPositions: () => {
+    writeDistrictLabelPositions({});
+    set({ districtLabelPositions: {} });
+    get().flashStatus('District labels reset');
   },
 
   syncPrintFromScope: () => {

@@ -47,6 +47,6 @@ Until then, the app runs offline via IndexedDB with a small demo network.
 
 ## Symbology
 
-- 400 kV square · 220 kV diamond · 132 kV hexagon · 33 kV circle
+- 400 kV square · 220 kV diamond · 132 kV hexagon · 66 kV pentagon · 33 kV circle
 - Filled = existing · Outline = proposed
 - Line color = voltage · Dashed = proposed

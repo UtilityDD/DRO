@@ -86,7 +86,7 @@ join powermap.voltage_levels v on v.id = s.voltage_level_id
 where a.id = s.asset_id
   and a.asset_kind = 'substation'
   and not coalesce(a.is_deleted, false)
-  and v.code in ('132', '220')
+  and v.code in ('132', '220', '66')
   and nullif(trim(coalesce(a.owner, '')), '') is null;
 
 -- ---------------------------------------------------------------------------
@@ -117,6 +117,7 @@ update powermap.assets a
 set
   owner = case v.code
     when '33' then 'WBSEDCL'
+    when '66' then 'WBSETCL'
     when '132' then 'WBSETCL'
     when '220' then 'WBSETCL'
     when '400' then 'POWERGRID'
@@ -137,6 +138,7 @@ update powermap.assets a
 set
   owner = case v.code
     when '33' then 'WBSEDCL'
+    when '66' then 'WBSETCL'
     when '132' then 'WBSETCL'
     when '220' then 'WBSETCL'
     when '400' then 'POWERGRID'

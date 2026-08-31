@@ -8,7 +8,7 @@ export type ToolMode =
   | 'delete'
   | 'measure';
 
-export type VoltageCode = '400' | '220' | '132' | '33';
+export type VoltageCode = '400' | '220' | '132' | '66' | '33';
 
 export type CircuitConfig = 'single' | 'double';
 
@@ -170,7 +170,8 @@ export const VOLTAGE_CATALOG: VoltageLevel[] = [
   { id: 'v-400', code: '400', label: '400 kV', kvPrimary: 400, color: '#dc2626', sortOrder: 1 },
   { id: 'v-220', code: '220', label: '220 kV', kvPrimary: 220, color: '#d97706', sortOrder: 2 },
   { id: 'v-132', code: '132', label: '132 kV', kvPrimary: 132, color: '#16a34a', sortOrder: 3 },
-  { id: 'v-33', code: '33', label: '33 kV', kvPrimary: 33, color: '#2563eb', sortOrder: 4 },
+  { id: 'v-66', code: '66', label: '66 kV', kvPrimary: 66, color: '#7c3aed', sortOrder: 4 },
+  { id: 'v-33', code: '33', label: '33 kV', kvPrimary: 33, color: '#2563eb', sortOrder: 5 },
 ];
 
 export const DEFAULT_ORG: OrgUnit[] = [

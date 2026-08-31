@@ -525,7 +525,7 @@ function SubstationPropertiesForm({ ssId }: { ssId: string }) {
                 // Suggest owner only when blank
                 if (!owner.trim()) {
                   if (next === '33') setOwner('WBSEDCL');
-                  else if (next === '132' || next === '220') setOwner('WBSETCL');
+                  else if (next === '132' || next === '220' || next === '66') setOwner('WBSETCL');
                 }
               }}
             >
@@ -1465,6 +1465,8 @@ function LayersForm() {
   const sceneId = useNetworkStore((s) => s.sceneId);
   const applyScene = useNetworkStore((s) => s.applyScene);
   const resetMapView = useNetworkStore((s) => s.resetMapView);
+  const districtLabelPositions = useNetworkStore((s) => s.districtLabelPositions);
+  const resetDistrictLabelPositions = useNetworkStore((s) => s.resetDistrictLabelPositions);
   const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
   const filters = useNetworkStore((s) => s.filters);
   const setMapLayers = useNetworkStore((s) => s.setMapLayers);
@@ -1508,7 +1510,8 @@ function LayersForm() {
         Reset to default look
       </button>
       <p className="muted" style={{ marginTop: 0 }}>
-        Clears siting / voltage-check focus, restores Overview scene, and fits the zone.
+        Clears siting / voltage-check focus, restores Overview scene, resets district label
+        positions, and fits the zone.
       </p>
       <p className="section-label">Scene</p>
       <p className="muted" style={{ marginTop: 0 }}>
@@ -1581,6 +1584,23 @@ function LayersForm() {
         />
         District name labels
       </label>
+      {mapLayers.showDistricts && mapLayers.showDistrictLabels && (
+        <p className="muted" style={{ marginTop: 0 }}>
+          Drag a name on the map to move it.
+          {Object.keys(districtLabelPositions).length > 0 && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="text-btn"
+                onClick={() => resetDistrictLabelPositions()}
+              >
+                Reset label positions
+              </button>
+            </>
+          )}
+        </p>
+      )}
 
       <label className="check-row">
         <input

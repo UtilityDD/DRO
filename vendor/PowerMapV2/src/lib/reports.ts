@@ -137,7 +137,7 @@ export function normalizeOwner(
   if (voltageCode === '33') return 'WBSEDCL';
   const original = (raw ?? '').trim();
   if (!original) {
-    if (voltageCode === '132' || voltageCode === '220') return 'WBSETCL';
+    if (voltageCode === '132' || voltageCode === '220' || voltageCode === '66') return 'WBSETCL';
     return 'Unassigned';
   }
   const t = original.toUpperCase().replace(/[\s._-]+/g, '');

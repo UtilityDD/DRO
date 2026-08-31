@@ -3,7 +3,16 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
-import { useNetworkStore } from '@/store/networkStore';
+import {
+  buildFocus33Context,
+  isSubstationDimmed,
+  isTapLateralDimmed,
+  isTapNodeDimmed,
+  isTrunkLineDimmed,
+  VOLTAGE_DIM_LINE_FACTOR,
+  VOLTAGE_DIM_SS_OPACITY,
+  VOLTAGE_DIM_TAP_OPACITY,
+} from '@/lib/voltageFocus';
 import { parallelCircuitLatLngs, lineDisplayLabel, formatCapacity, haversineKm } from '@/domain/geo';
 import { createBoundaryLayers, createBasemapLayer, basemapToBack, fitDefaultZone, readMapAppearance, ensurePlaceLabelsPane, ensureCalloutsPane, type BoundaryHandle, type MapAppearance } from './boundaryLayers';
 import { feederLabelOffsetPx, feederLabelPlacement } from './feederLabels';
@@ -13,6 +22,7 @@ import {
   buildVoltageCheckWashDataUrl,
   nearestVoltageCheckCell,
 } from '@/lib/voltageCheck';
+import { useNetworkStore } from '@/store/networkStore';
 
 function escapeHtml(text: string) {
   return text
@@ -78,10 +88,12 @@ export function MapView() {
   const voltageCheckActive = useNetworkStore((s) => s.voltageCheckActive);
   const sitingActive = useNetworkStore((s) => s.sitingActive);
   const focusedVoltageCheckId = useNetworkStore((s) => s.focusedVoltageCheckId);
+  const voltageFocus = useNetworkStore((s) => s.voltageFocus);
 
   const placeDraft = useNetworkStore((s) => s.placeDraft);
   const mapFocus = useNetworkStore((s) => s.mapFocus);
   const mapHomeNonce = useNetworkStore((s) => s.mapHomeNonce);
+  const districtLabelPositions = useNetworkStore((s) => s.districtLabelPositions);
   const hoverCoords = useNetworkStore((s) => s.hoverCoords);
   const [mapZoom, setMapZoom] = useState(10);
   const [appearance, setAppearance] = useState<MapAppearance>(() => readMapAppearance());
@@ -206,6 +218,7 @@ export function MapView() {
         useNetworkStore.getState().setAvailableDistricts(handle.districtNames);
         const layers = useNetworkStore.getState().mapLayers;
         const tool = useNetworkStore.getState().tool;
+        const labelPositions = useNetworkStore.getState().districtLabelPositions;
         handle.apply({
           showMask: layers.showMask,
           maskOpacity: layers.maskOpacity,
@@ -217,8 +230,12 @@ export function MapView() {
           dimAllDistricts: layers.dimAllDistricts,
           districtsInteractive: tool === 'cursor' && layers.showDistricts,
           appearance: readMapAppearance(),
+          districtLabelPositions: labelPositions,
           onDistrictClick: (name, additive) => {
             useNetworkStore.getState().toggleDistrictFocus(name, additive);
+          },
+          onDistrictLabelMove: (name, lat, lng) => {
+            useNetworkStore.getState().setDistrictLabelPosition(name, lat, lng);
           },
         });
         // Default home: North Bengal districts fill the pane
@@ -296,8 +313,12 @@ export function MapView() {
       dimAllDistricts: mapLayers.dimAllDistricts,
       districtsInteractive: tool === 'cursor' && mapLayers.showDistricts,
       appearance,
+      districtLabelPositions,
       onDistrictClick: (name, additive) => {
         useNetworkStore.getState().toggleDistrictFocus(name, additive);
+      },
+      onDistrictLabelMove: (name, lat, lng) => {
+        useNetworkStore.getState().setDistrictLabelPosition(name, lat, lng);
       },
     });
     networkLayerRef.current?.bringToFront();
@@ -315,6 +336,7 @@ export function MapView() {
     mapLayers.showBlockLabels,
     mapLayers.focusedDistricts,
     mapLayers.dimAllDistricts,
+    districtLabelPositions,
   ]);
 
   // Map click / cursor: place SS, drafts, snap-complete, deselect
@@ -832,6 +854,14 @@ export function MapView() {
     const labelsPane = ensurePlaceLabelsPane(map);
     const calloutsPane = ensureCalloutsPane(map);
     const quiet = state.voltageCheckActive || state.sitingActive;
+    const focus = state.voltageFocus;
+    const focus33 =
+      focus === '33' ? buildFocus33Context(substations, lines) : null;
+    const dimSs = (ss: (typeof visibleSs)[0]) =>
+      !quiet && isSubstationDimmed(focus, ss, focus33);
+    const dimTrunkLine = (line: (typeof visibleLines)[0]) =>
+      !quiet && isTrunkLineDimmed(focus, line, focus33);
+    const lineById = new Map(lines.map((l) => [l.id, l]));
     map.getContainer().classList.toggle('pm-voltage-check-active', state.voltageCheckActive);
     map.getContainer().classList.toggle('pm-siting-active', state.sitingActive);
 
@@ -873,6 +903,9 @@ export function MapView() {
         });
         if (siblingSelected) style.opacity = 0.5;
         if (quiet) style.opacity = (style.opacity ?? 0.88) * 0.08;
+        else if (dimTrunkLine(line)) {
+          style.opacity = (style.opacity ?? 0.88) * VOLTAGE_DIM_LINE_FACTOR;
+        }
         const poly = L.polyline(path, style);
         poly.on('click', (e) => {
           L.DomEvent.stopPropagation(e);
@@ -1012,6 +1045,9 @@ export function MapView() {
       const selected = selection?.kind === 'tap_lateral' && selection.id === lat.id;
       const latStyle = lineStyle(lat.voltageCode, lat.status, selected, true, { zoom: mapZoom });
       if (quiet) latStyle.opacity = (latStyle.opacity ?? 0.88) * 0.06;
+      else if (isTapLateralDimmed(focus, lat, focus33)) {
+        latStyle.opacity = (latStyle.opacity ?? 0.88) * VOLTAGE_DIM_LINE_FACTOR;
+      }
       const poly = L.polyline(
         [
           [fromTap.lat, fromTap.lng],
@@ -1035,11 +1071,16 @@ export function MapView() {
     // Tap nodes
     tapNodes.forEach((tap) => {
       if (!visibleLines.some((l) => l.id === tap.parentLineId)) return;
+      const parentLine = lineById.get(tap.parentLineId);
       const selected = selection?.kind === 'tap_node' && selection.id === tap.id;
       const marker = L.marker([tap.lat, tap.lng], {
         icon: tapIcon(selected, mapZoom),
         zIndexOffset: 400,
-        opacity: quiet ? 0.12 : 1,
+        opacity: quiet
+          ? 0.12
+          : parentLine && isTapNodeDimmed(focus, tap, parentLine, focus33)
+            ? VOLTAGE_DIM_TAP_OPACITY
+            : 1,
       });
       marker.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
@@ -1062,7 +1103,13 @@ export function MapView() {
         icon: substationIcon(ss.voltageCode, ss.status, selected || isConnectFrom, mapZoom),
         draggable: tool === 'move',
         zIndexOffset: 500,
-        opacity: quiet ? (ss.voltageCode === '33' ? 0.48 : 0.18) : 1,
+        opacity: quiet
+          ? ss.voltageCode === '33'
+            ? 0.48
+            : 0.18
+          : dimSs(ss)
+            ? VOLTAGE_DIM_SS_OPACITY
+            : 1,
       });
 
       marker.on('click', (e) => {
@@ -1387,6 +1434,7 @@ export function MapView() {
     focusedSitingId,
     voltageCheckActive,
     sitingActive,
+    voltageFocus,
   ]);
 
   // Far-from-33 kV wash + hit targets

@@ -25,9 +25,7 @@ export type ScenePreset = {
   syncPrint?: boolean;
 };
 
-const allVoltages: VoltageCode[] = ['400', '220', '132', '33'];
-const ehvVoltages: VoltageCode[] = ['400', '220', '132'];
-
+const allVoltages: VoltageCode[] = ['400', '220', '132', '66', '33'];
 export const SCENE_PRESETS: ScenePreset[] = [
   {
     id: 'overview',
@@ -88,9 +86,9 @@ export const SCENE_PRESETS: ScenePreset[] = [
   {
     id: 'ehv',
     label: 'EHV spine',
-    blurb: '400 / 220 / 132 kV only',
+    blurb: 'EHT in focus — 33 kV dimmed',
     filters: {
-      voltages: [...ehvVoltages],
+      voltages: [...allVoltages],
       statuses: ['existing', 'proposed'],
       showProposed: true,
       overloadedOnly: false,
@@ -115,9 +113,9 @@ export const SCENE_PRESETS: ScenePreset[] = [
   {
     id: 'local-33',
     label: '33 kV local',
-    blurb: 'Distribution + nearby context',
+    blurb: '33 kV in focus — other voltages dimmed',
     filters: {
-      voltages: ['33', '132'],
+      voltages: [...allVoltages],
       statuses: ['existing', 'proposed'],
       showProposed: true,
       overloadedOnly: false,
@@ -140,7 +138,7 @@ export const SCENE_PRESETS: ScenePreset[] = [
   {
     id: 'proposed',
     label: 'Proposed',
-    blurb: 'Proposed assets highlighted',
+    blurb: 'Proposed assets bright; existing network dimmed',
     filters: {
       voltages: [...allVoltages],
       statuses: ['proposed'],

@@ -293,8 +293,14 @@ Run these in the **Power Map** SQL editor (`unsmtschmcvftfqwabaq`), in order whe
 | `033_powermap_ehv_owner_wbsetcl.sql` | Blank 132/220 SS → WBSETCL |
 | `034_raiganj_132_kush_gang.sql` | Raiganj GSS → Kushmandi GSS + Gangarampur GSS (132 kV, proposed); Kushmandi GSS class → 132 |
 | `035_powermap_fill_owners.sql` | Canonicalize aliases; fill all blank SS/line/tap owners by voltage; force 33 kV SS → WBSEDCL |
+| `036_nb_ehv_orphan_connect.sql` | Connect orphan NB 132 yards (Kurseong, Darjeeling, Maynaguri, Chalsa, Samsi, Harishchandrapur, Islampur) |
+| `037_nb_ehv_east_districts.sql` | Cooch Behar 132 + Alipurduar 220 WBSETCL + Kamakhyaguri 132 and Falakata / Birpara ties |
+| `038_dinhata_mathabhanga_132.sql` | Dinhata 132 GIS + Mathabhanga 132 GIS; Mathabhanga–Dinhata and Cooch Behar–Dinhata ties |
+| `039_nb_ehv_mohitnagar_birpara132.sql` | Mohitnagar 132 GIS + Birpara 132 WBSETCL (Google/directory gaps) |
+| `040_nb_66kv_substations.sql` | Add 66 kV voltage class (violet) + NB 66 kV yards (Hamiltonganj, Hasimara, Banarhat, Nagrakata, Odlabari, Kalimpong) |
+| `041_nb_66kv_connect.sql` | 66 kV links: Alipurduar–Hamiltonganj–Hasimara; Chalsa→Kalimpong/Odlabari/Nagrakata/Banarhat; Banarhat→Birpara 132 |
 
-After network SQL, hard-refresh Power Map (or force toolbar reload) so the stamp / dump updates.
+After network SQL, hard-refresh Power Map (or force toolbar reload) so the stamp / dump updates. Verify new pins on satellite — some centroids are approximate.
 
 ## 9. Adding a desk or API
 

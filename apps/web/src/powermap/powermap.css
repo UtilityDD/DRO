@@ -354,7 +354,7 @@
   gap: 8px;
   padding: 8px;
   border-radius: 8px;
-  background: var(--surface-muted);
+  background: var(--surface-muted, #f8fafc);
   border: 1px solid var(--line);
   color: var(--ink);
 }
@@ -375,15 +375,46 @@
   padding: 8px;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, #38bdf8 50%, var(--line));
-  background: var(--surface-muted);
+  background: var(--surface-muted, #f0f9ff);
   color: var(--ink);
   cursor: pointer;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .pm-root .siting-row:hover, .pm-root .siting-row.is-focused{
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-color: var(--accent, #0369a1);
+  box-shadow: 0 0 0 2px var(--accent-soft, rgba(3, 105, 161, 0.22));
+}
+
+.pm-root .voltage-check-row{
+  border-color: color-mix(in srgb, #f87171 45%, var(--line));
+  background: var(--surface-muted, #fff7ed);
+  color: var(--ink);
+}
+
+.pm-root .voltage-check-row:hover, .pm-root .voltage-check-row.is-focused{
+  border-color: #f87171;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.25);
+}
+
+.pm-root .pm-tip-voltage-check{
+  background: #7f1d1d !important;
+  color: #fff7ed !important;
+  border: none !important;
+  font-size: 12px;
+  padding: 5px 8px !important;
+}
+
+.pm-root .pm-tip-voltage-check::before{
+  border-top-color: #7f1d1d !important;
+}
+
+.pm-root .leaflet-container.pm-voltage-check-active .pm-ss-wrap{
+  filter: none;
+}
+
+.pm-root .pm-voltage-check-wash{
+  pointer-events: none;
 }
 
 .pm-root .siting-near-list{
@@ -400,7 +431,7 @@
   grid-template-columns: 18px 1fr auto;
   gap: 4px;
   align-items: baseline;
-  color: var(--ink-secondary);
+  color: var(--ink-secondary, #334155);
 }
 
 .pm-root .siting-near-rank{
@@ -779,12 +810,11 @@
   z-index: 500;
   padding: 12px 14px;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-solid) 92%, transparent);
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
   font-size: 12px;
   min-width: 140px;
-  color: var(--ink);
 }
 
 .pm-root .scope-badge{
@@ -818,6 +848,70 @@
   font-weight: 600;
   color: var(--ink);
   line-height: 1.3;
+}
+
+.pm-root .view-toggles{
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 560;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: min(360px, calc(100% - 32px));
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.pm-root .view-toggles button{
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 6px 11px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.pm-root .view-toggles button:hover{
+  color: var(--ink);
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.pm-root .view-toggles button.on{
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 4px 12px rgba(11, 110, 79, 0.28);
+}
+
+.pm-root[data-appearance='dark'] .view-toggles, .pm-root [data-appearance='dark'] .view-toggles, .pm-root .pm-appearance-dark .view-toggles{
+  background: rgba(15, 23, 42, 0.94);
+  border-color: rgba(148, 163, 184, 0.38);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.pm-root[data-appearance='dark'] .view-toggles button, .pm-root [data-appearance='dark'] .view-toggles button, .pm-root .pm-appearance-dark .view-toggles button{
+  color: #e2e8f0;
+}
+
+.pm-root[data-appearance='dark'] .view-toggles button:hover, .pm-root [data-appearance='dark'] .view-toggles button:hover, .pm-root .pm-appearance-dark .view-toggles button:hover{
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+
+.pm-root[data-appearance='dark'] .view-toggles button.on, .pm-root [data-appearance='dark'] .view-toggles button.on, .pm-root .pm-appearance-dark .view-toggles button.on{
+  color: #fff;
+  background: #0d9668;
+  box-shadow: 0 4px 14px rgba(13, 150, 104, 0.45);
 }
 
 .pm-root .scene-chip-group{
@@ -961,6 +1055,11 @@
   background: #16a34a;
   border-color: #16a34a;
   clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+.pm-root .sym.pentagon{
+  background: #7c3aed;
+  border-color: #7c3aed;
+  clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
 }
 .pm-root .sym.circle{
   background: #2563eb;
@@ -1709,6 +1808,20 @@
   z-index: 1;
 }
 
+.pm-root .leaflet-div-icon.pm-district-label{
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  background: transparent;
+  border: none;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.pm-root .leaflet-div-icon.pm-district-label.leaflet-marker-dragging, .pm-root .leaflet-div-icon.pm-district-label:active{
+  cursor: grabbing;
+}
+
 .pm-root .pm-district-label span{
   display: inline-block;
   transform: translate(-50%, -50%);
@@ -1722,8 +1835,12 @@
   letter-spacing: 0.01em;
   white-space: nowrap;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity 0.15s ease, filter 0.15s ease;
+}
+
+.pm-root .pm-district-label.is-custom span{
+  border-style: dashed;
 }
 
 .pm-root .pm-district-label.is-dimmed span{
@@ -1876,43 +1993,6 @@
   border-top-color: rgba(3, 105, 161, 0.95) !important;
 }
 
-.pm-root .voltage-check-row{
-  border-color: color-mix(in srgb, #f87171 45%, var(--line));
-  background: var(--surface-muted);
-  color: var(--ink);
-}
-
-.pm-root .voltage-check-row:hover,
-.pm-root .voltage-check-row.is-focused{
-  border-color: #f87171;
-  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.25);
-}
-
-.pm-root .voltage-check-districts{
-  max-height: 160px;
-  overflow: auto;
-  display: grid;
-  gap: 2px;
-  margin-top: 4px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-muted);
-}
-
-.pm-root .pm-tip-voltage-check{
-  background: rgba(127, 29, 29, 0.95) !important;
-  color: #fff7ed !important;
-}
-
-.pm-root .pm-tip-voltage-check::before{
-  border-top-color: rgba(127, 29, 29, 0.95) !important;
-}
-
-.pm-root .pm-voltage-check-wash{
-  pointer-events: none;
-}
-
 .pm-root .leaflet-container.pm-tool-add-ss, .pm-root .leaflet-container.pm-tool-connect, .pm-root .leaflet-container.pm-tool-tap{
   cursor: crosshair;
 }
@@ -1984,7 +2064,7 @@
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--surface-muted);
+  background: var(--surface-muted, #f8fafc);
   color: var(--ink);
 }
 
@@ -1997,15 +2077,11 @@
   min-width: 0;
 }
 
-.pm-root .print-district-list label.is-dimmed{
-  opacity: 0.55;
-}
-
 .pm-root .print-overlay{
   position: fixed;
   inset: 0;
   z-index: 2000;
-  background: var(--bg);
+  background: var(--bg, #0f172a);
   color: var(--ink);
   display: flex;
   flex-direction: column;
@@ -2017,7 +2093,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--surface-solid);
+  background: var(--surface-solid, #1e293b);
   color: var(--ink);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
@@ -2052,9 +2128,9 @@
 }
 
 .pm-root .print-toolbar-size select, .pm-root .print-toolbar-size input{
-  background: var(--surface-muted);
-  color: var(--ink);
-  border: 1px solid var(--line);
+  background: var(--surface-muted, #0f172a);
+  color: var(--ink, #f8fafc);
+  border: 1px solid var(--line, #475569);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
@@ -2065,11 +2141,6 @@
   padding: 4px 6px;
 }
 
-.pm-root .print-toolbar .primary-btn,
-.pm-root .print-toolbar .primary-btn.ghost{
-  color: var(--ink);
-}
-
 .pm-root .print-stage{
   flex: 1;
   min-height: 0;
@@ -2078,12 +2149,11 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  background: var(--bg);
+  background: var(--bg, #0f172a);
 }
 
 .pm-root .print-sheet{
   max-width: calc(100vw - 48px);
-  /* Sheet stays print-white regardless of app theme */
   background: #fff;
   color: #0f172a;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);

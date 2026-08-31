@@ -807,6 +807,10 @@ export function PrintSheet({
                 132
               </span>
               <span>
+                <i className="sym pentagon" />
+                66
+              </span>
+              <span>
                 <i className="sym circle" />
                 33
               </span>

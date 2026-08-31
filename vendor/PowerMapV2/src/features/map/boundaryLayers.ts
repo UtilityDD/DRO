@@ -77,6 +77,9 @@ export interface BoundaryLayerOptions {
   /** Light vs dark map chrome; defaults to live DRO appearance. */
   appearance?: MapAppearance;
   onDistrictClick?: (name: string, additive: boolean) => void;
+  /** User-moved label positions (lat/lng). Missing names use the district centroid. */
+  districtLabelPositions?: Record<string, { lat: number; lng: number }>;
+  onDistrictLabelMove?: (name: string, lat: number, lng: number) => void;
 }
 
 export interface BoundaryHandle {
@@ -485,27 +488,38 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
       });
   };
 
-  type LabelEntry = { name: string; marker: L.Marker };
+  type LabelEntry = { name: string; marker: L.Marker; defaultLatLng: L.LatLng };
   const labelEntries: LabelEntry[] = [];
   const labelGroup = L.layerGroup();
   const placePane = ensurePlaceLabelsPane(map);
+  let onLabelMove: ((name: string, lat: number, lng: number) => void) | undefined;
   if (districtData) {
     for (const feature of districtData.features) {
       const c = featureCentroid(feature);
       if (!c) continue;
       const name = districtName(feature.properties);
-      const marker = L.marker(c, {
-        interactive: false,
+      const defaultLatLng = L.latLng(c[0], c[1]);
+      const marker = L.marker(defaultLatLng, {
+        interactive: true,
+        draggable: true,
+        autoPan: false,
         pane: placePane,
         zIndexOffset: 200,
+        title: 'Drag to move label',
         icon: L.divIcon({
           className: 'pm-district-label',
           html: `<span>${escapeHtml(name)}</span>`,
-          iconSize: [0, 0],
-          iconAnchor: [0, 0],
+          iconSize: undefined,
+          iconAnchor: undefined,
         }),
       });
-      labelEntries.push({ name, marker });
+      marker.on('dragend', () => {
+        const ll = marker.getLatLng();
+        onLabelMove?.(name, Number(ll.lat.toFixed(6)), Number(ll.lng.toFixed(6)));
+      });
+      // Keep map/district clicks from firing when finishing a label drag.
+      marker.on('click', (e) => L.DomEvent.stopPropagation(e));
+      labelEntries.push({ name, marker, defaultLatLng });
       labelGroup.addLayer(marker);
     }
   }
@@ -563,15 +577,27 @@ export async function createBoundaryLayers(map: L.Map): Promise<BoundaryHandle> 
 
     if (opts.showDistricts && opts.showDistrictLabels) {
       if (!group.hasLayer(labelGroup)) labelGroup.addTo(group);
+      onLabelMove = opts.onDistrictLabelMove;
+      const positions = opts.districtLabelPositions ?? {};
       const focusing = opts.focusedDistricts.length > 0;
       for (const entry of labelEntries) {
-        const bright =
-          !opts.dimAllDistricts &&
-          (!focusing || opts.focusedDistricts.includes(entry.name));
+        const custom = positions[entry.name];
+        const target = custom
+          ? L.latLng(custom.lat, custom.lng)
+          : entry.defaultLatLng;
+        const cur = entry.marker.getLatLng();
+        if (cur.lat !== target.lat || cur.lng !== target.lng) {
+          entry.marker.setLatLng(target);
+        }
+        if (!entry.marker.dragging?.enabled()) entry.marker.dragging?.enable();
         const el = entry.marker.getElement();
         if (el) {
+          const bright =
+            !opts.dimAllDistricts &&
+            (!focusing || opts.focusedDistricts.includes(entry.name));
           el.classList.toggle('is-dimmed', !bright);
           el.classList.toggle('is-focused', focusing && bright);
+          el.classList.toggle('is-custom', Boolean(custom));
         }
       }
     } else if (group.hasLayer(labelGroup)) {
