@@ -1217,9 +1217,14 @@ button {
   z-index: auto;
   max-width: none;
   flex: 0 0 auto;
+  margin-bottom: 0;
   box-shadow: var(--shadow);
   background: var(--surface);
   border: 1px solid var(--border);
+}
+
+.pm-desk-toolbar .view-toggles--panel {
+  width: auto;
 }
 
 .pm-desk-toolbar .view-toggles button {

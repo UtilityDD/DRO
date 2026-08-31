@@ -9,9 +9,9 @@ import { OWNER_OPTIONS, downloadCsv } from '@/lib/reports';
 import type { SitingCandidate } from '@/lib/sitingSuggestions';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 import type { VoltageCheckCell } from '@/lib/voltageCheck';
-import { SCENE_PRESETS } from '@/lib/mapScope';
 import { isDraftStale } from '@/lib/personalDrafts';
 import { useNetworkStore } from '@/store/networkStore';
+import { ViewToggles } from '@/features/map/ViewToggles';
 import { ReportsForm } from '@/features/shell/ReportsPanel';
 import { PrintForm } from '@/features/print/PrintForm';
 
@@ -1462,13 +1462,9 @@ function FiltersForm() {
 function LayersForm() {
   const mapLayers = useNetworkStore((s) => s.mapLayers);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
-  const sceneId = useNetworkStore((s) => s.sceneId);
-  const applyScene = useNetworkStore((s) => s.applyScene);
   const resetMapView = useNetworkStore((s) => s.resetMapView);
   const districtLabelPositions = useNetworkStore((s) => s.districtLabelPositions);
   const resetDistrictLabelPositions = useNetworkStore((s) => s.resetDistrictLabelPositions);
-  const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
-  const filters = useNetworkStore((s) => s.filters);
   const setMapLayers = useNetworkStore((s) => s.setMapLayers);
   const clearDistrictFocus = useNetworkStore((s) => s.clearDistrictFocus);
   const dimAllDistricts = useNetworkStore((s) => s.dimAllDistricts);
@@ -1477,8 +1473,6 @@ function LayersForm() {
   const focused = mapLayers.focusedDistricts;
   const focusing = focused.length > 0;
   const allDimmed = mapLayers.dimAllDistricts;
-  void filters;
-  const badge = scopeBadgeLabel();
 
   const setUndimmed = (name: string, undimmed: boolean) => {
     const all = availableDistricts;
@@ -1513,29 +1507,8 @@ function LayersForm() {
         Clears siting / voltage-check focus, restores Overview scene, resets district label
         positions, and fits the zone.
       </p>
-      <p className="section-label">Scene</p>
-      <p className="muted" style={{ marginTop: 0 }}>
-        One-click job presets. Reporting on: <strong>{badge}</strong>
-      </p>
-      <div className="chip-group scene-chip-group" role="group" aria-label="Map scenes">
-        {SCENE_PRESETS.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            className={`chip${sceneId === s.id ? ' on' : ''}`}
-            title={s.blurb}
-            aria-pressed={sceneId === s.id}
-            onClick={() => applyScene(s.id)}
-          >
-            {s.label}
-          </button>
-        ))}
-        {sceneId === 'custom' && (
-          <button type="button" className="chip on" disabled aria-pressed>
-            Custom
-          </button>
-        )}
-      </div>
+      <p className="section-label">View</p>
+      <ViewToggles variant="panel" />
 
       <p className="muted">
         With the <strong>Select</strong> tool, click a district on the map to undim it (others dim).

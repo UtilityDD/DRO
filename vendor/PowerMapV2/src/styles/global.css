@@ -907,6 +907,22 @@ textarea {
   box-shadow: 0 4px 12px rgba(11, 110, 79, 0.28);
 }
 
+.view-toggles--panel {
+  position: static;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  max-width: none;
+  width: fit-content;
+  margin-bottom: 4px;
+  background: var(--surface-muted);
+  box-shadow: none;
+}
+
+.side-panel .view-toggles--panel {
+  width: 100%;
+}
+
 .pm-root[data-appearance='dark'] .view-toggles,
 [data-appearance='dark'] .view-toggles,
 .pm-appearance-dark .view-toggles {

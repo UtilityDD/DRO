@@ -900,6 +900,22 @@
   box-shadow: 0 4px 12px rgba(11, 110, 79, 0.28);
 }
 
+.pm-root .view-toggles--panel{
+  position: static;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  max-width: none;
+  width: fit-content;
+  margin-bottom: 4px;
+  background: var(--surface-muted);
+  box-shadow: none;
+}
+
+.pm-root .side-panel .view-toggles--panel{
+  width: 100%;
+}
+
 .pm-root[data-appearance='dark'] .view-toggles, .pm-root [data-appearance='dark'] .view-toggles, .pm-root .pm-appearance-dark .view-toggles{
   background: rgba(15, 23, 42, 0.94);
   border-color: rgba(148, 163, 184, 0.38);

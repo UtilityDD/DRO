@@ -148,7 +148,7 @@ export function PowerMapPage() {
     <div className="pm-page">
       <div className="pm-desk-toolbar">
         <div className="pm-desk-toolbar-start">
-          {clientReady ? <ViewToggles /> : null}
+          {clientReady ? <ViewToggles variant="panel" /> : null}
           <button
             type="button"
             className="pm-desk-search"

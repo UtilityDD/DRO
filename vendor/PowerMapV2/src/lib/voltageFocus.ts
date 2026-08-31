@@ -2,6 +2,17 @@ import type { AssetLifecycle, Substation, TapLateral, TrunkLine, VoltageCode } f
 
 export type VoltageFocus = 'all' | 'ehv' | '33' | 'proposed';
 
+export const MAP_VIEW_TOGGLES: {
+  id: VoltageFocus;
+  label: string;
+  title: string;
+}[] = [
+  { id: 'all', label: 'All', title: 'Overview — full network' },
+  { id: 'ehv', label: 'EHT', title: 'EHT — dim 33 kV' },
+  { id: '33', label: '33', title: '33 kV — dim distant EHT; feeders to 33 stay bright' },
+  { id: 'proposed', label: 'Proposed', title: 'Proposed only — dim existing network' },
+];
+
 export const ALL_VOLTAGES: VoltageCode[] = ['400', '220', '132', '66', '33'];
 
 /** 33 kV view: substations/lines one hop from any 33 kV yard stay bright. */
