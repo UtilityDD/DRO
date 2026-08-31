@@ -1572,6 +1572,7 @@ button {
 .mode-powermap .pm-root .icon-btn,
 .mode-powermap .pm-root .coord-readout,
 .mode-powermap .pm-root .district-focus-block,
+.mode-powermap .pm-root .print-district-list,
 .mode-powermap .pm-root .related-corridor,
 .mode-powermap .pm-root .related-line-card,
 .mode-powermap .pm-root .endpoint-coords,
@@ -1580,6 +1581,50 @@ button {
 .mode-powermap .pm-root .siting-row,
 .mode-powermap .pm-root .voltage-check-row,
 .mode-powermap .pm-root kbd {
+  background: var(--surface-muted) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+.mode-powermap .pm-root .print-district-list label,
+.mode-powermap .pm-root .district-check,
+.mode-powermap .pm-root .district-check .district-name-btn,
+.mode-powermap .pm-root .district-focus-header {
+  color: var(--ink) !important;
+}
+
+.mode-powermap .pm-root .print-overlay {
+  background: var(--dro-bg) !important;
+  color: var(--dro-text) !important;
+}
+
+.mode-powermap .pm-root .print-toolbar {
+  background: var(--dro-surface) !important;
+  color: var(--dro-text) !important;
+  border-bottom: 1px solid var(--dro-border) !important;
+}
+
+.mode-powermap .pm-root .print-toolbar-meta,
+.mode-powermap .pm-root .print-toolbar-size label {
+  color: var(--dro-muted) !important;
+}
+
+.mode-powermap .pm-root .print-toolbar-meta strong {
+  color: var(--dro-text) !important;
+}
+
+.mode-powermap .pm-root .print-toolbar-size select,
+.mode-powermap .pm-root .print-toolbar-size input {
+  background: var(--surface-muted) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+.mode-powermap .pm-root .print-stage {
+  background: var(--dro-bg) !important;
+}
+
+.mode-powermap .pm-root .print-toolbar .primary-btn.ghost {
   background: var(--surface-muted) !important;
   color: var(--ink) !important;
   border-color: var(--line) !important;

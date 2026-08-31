@@ -1464,6 +1464,7 @@ function LayersForm() {
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
   const sceneId = useNetworkStore((s) => s.sceneId);
   const applyScene = useNetworkStore((s) => s.applyScene);
+  const resetMapView = useNetworkStore((s) => s.resetMapView);
   const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
   const filters = useNetworkStore((s) => s.filters);
   const setMapLayers = useNetworkStore((s) => s.setMapLayers);
@@ -1503,6 +1504,12 @@ function LayersForm() {
 
   return (
     <div className="form-stack">
+      <button type="button" className="primary-btn ghost" onClick={() => resetMapView()}>
+        Reset to default look
+      </button>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Clears siting / voltage-check focus, restores Overview scene, and fits the zone.
+      </p>
       <p className="section-label">Scene</p>
       <p className="muted" style={{ marginTop: 0 }}>
         One-click job presets. Reporting on: <strong>{badge}</strong>
@@ -1703,11 +1710,17 @@ function SitingForm() {
   const busy = useNetworkStore((s) => s.sitingBusy);
   const showOnMap = useNetworkStore((s) => s.showSitingOnMap);
   const focusedId = useNetworkStore((s) => s.focusedSitingId);
+  const sitingBasemap = useNetworkStore((s) => s.sitingBasemap);
+  const excludeProposed33 = useNetworkStore((s) => s.assessExcludeProposed33);
+  const excludeProposed132 = useNetworkStore((s) => s.assessExcludeProposed132);
   const runSitingAnalysis = useNetworkStore((s) => s.runSitingAnalysis);
   const clearSitingAnalysis = useNetworkStore((s) => s.clearSitingAnalysis);
   const setShowSitingOnMap = useNetworkStore((s) => s.setShowSitingOnMap);
   const focusSitingCandidate = useNetworkStore((s) => s.focusSitingCandidate);
   const adoptSitingCandidate = useNetworkStore((s) => s.adoptSitingCandidate);
+  const setSitingBasemap = useNetworkStore((s) => s.setSitingBasemap);
+  const setAssessExcludeProposed33 = useNetworkStore((s) => s.setAssessExcludeProposed33);
+  const setAssessExcludeProposed132 = useNetworkStore((s) => s.setAssessExcludeProposed132);
   const focusOnlyDistrict = useNetworkStore((s) => s.focusOnlyDistrict);
   const toggleDistrictFocus = useNetworkStore((s) => s.toggleDistrictFocus);
 
@@ -1723,9 +1736,54 @@ function SitingForm() {
       <p className="muted">
         Suggests new <strong>33 kV</strong> sites in interior coverage holes — using typical
         neighbour spacing of existing 33 kV substations in {SITING_DISTRICTS.join(', ')}.
-        Sites near the outer state/district border are ignored; candidates are spaced ~ that
-        typical distance apart.
+        Opening this view dims the network so candidates stay in focus. Sites near the outer
+        state/district border are ignored; candidates are spaced ~ that typical distance apart.
       </p>
+
+      <div className="field">
+        <span className="section-label">Basemap</span>
+        <div className="chip-group" role="group" aria-label="Siting basemap">
+          {(
+            [
+              { id: 'google' as const, label: 'Google map' },
+              { id: 'none' as const, label: 'No basemap' },
+            ] as const
+          ).map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              className={`chip${sitingBasemap === b.id ? ' on' : ''}`}
+              onClick={() => setSitingBasemap(b.id)}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="field">
+        <span className="section-label">Assessment scope</span>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={excludeProposed33}
+            onChange={(e) => setAssessExcludeProposed33(e.target.checked)}
+          />
+          Exclude proposed 33 kV SS
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={excludeProposed132}
+            onChange={(e) => setAssessExcludeProposed132(e.target.checked)}
+          />
+          Exclude proposed 132 kV SS
+        </label>
+        <p className="muted" style={{ marginTop: 4 }}>
+          When checked, only existing stations count for coverage (re-run after changing). Shared
+          with Check voltage for 33 / 132 kV rules.
+        </p>
+      </div>
 
       <div className="btn-row">
         <button
@@ -1855,6 +1913,8 @@ function VoltageCheckForm() {
   const selectedDistricts = useNetworkStore((s) => s.voltageCheckDistricts);
   const cutOffKm = useNetworkStore((s) => s.voltageCheckCutOffKm);
   const voltageCheckBasemap = useNetworkStore((s) => s.voltageCheckBasemap);
+  const excludeProposed33 = useNetworkStore((s) => s.assessExcludeProposed33);
+  const excludeProposed132 = useNetworkStore((s) => s.assessExcludeProposed132);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
   const runVoltageCheckAnalysis = useNetworkStore((s) => s.runVoltageCheckAnalysis);
   const clearVoltageCheckAnalysis = useNetworkStore((s) => s.clearVoltageCheckAnalysis);
@@ -1864,6 +1924,8 @@ function VoltageCheckForm() {
   const toggleVoltageCheckDistrict = useNetworkStore((s) => s.toggleVoltageCheckDistrict);
   const setVoltageCheckCutOffKm = useNetworkStore((s) => s.setVoltageCheckCutOffKm);
   const setVoltageCheckBasemap = useNetworkStore((s) => s.setVoltageCheckBasemap);
+  const setAssessExcludeProposed33 = useNetworkStore((s) => s.setAssessExcludeProposed33);
+  const setAssessExcludeProposed132 = useNetworkStore((s) => s.setAssessExcludeProposed132);
   const focusOnlyDistrict = useNetworkStore((s) => s.focusOnlyDistrict);
   const toggleDistrictFocus = useNetworkStore((s) => s.toggleDistrictFocus);
 
@@ -1964,6 +2026,30 @@ function VoltageCheckForm() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="field">
+        <span className="section-label">Assessment scope</span>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={excludeProposed33}
+            onChange={(e) => setAssessExcludeProposed33(e.target.checked)}
+          />
+          Exclude proposed 33 kV SS
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={excludeProposed132}
+            onChange={(e) => setAssessExcludeProposed132(e.target.checked)}
+          />
+          Exclude proposed 132 kV SS
+        </label>
+        <p className="muted" style={{ marginTop: 4 }}>
+          When checked, only existing stations count (re-run after changing). Shared with 33 kV
+          Siting.
+        </p>
       </div>
 
       <label className="field">

@@ -5,7 +5,7 @@ import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import { useNetworkStore } from '@/store/networkStore';
 import { parallelCircuitLatLngs, lineDisplayLabel, formatCapacity, haversineKm } from '@/domain/geo';
-import { createBoundaryLayers, createBasemapLayer, basemapToBack, DEFAULT_ZONE_BOUNDS, fitDefaultZone, readMapAppearance, ensurePlaceLabelsPane, ensureCalloutsPane, type BoundaryHandle, type MapAppearance } from './boundaryLayers';
+import { createBoundaryLayers, createBasemapLayer, basemapToBack, fitDefaultZone, readMapAppearance, ensurePlaceLabelsPane, ensureCalloutsPane, type BoundaryHandle, type MapAppearance } from './boundaryLayers';
 import { feederLabelOffsetPx, feederLabelPlacement } from './feederLabels';
 import { lineStyle, substationIcon, tapIcon } from './symbology';
 import { nearestPointOnLines, nearestSubstation } from './mapSnap';
@@ -50,7 +50,7 @@ export function MapView() {
     lat: number;
     lng: number;
   } | null>(null);
-  const fittedRef = useRef<'none' | 'zone' | 'ss'>('none');
+  const fittedRef = useRef<'none' | 'home'>('none');
 
   const loaded = useNetworkStore((s) => s.loaded);
   const tool = useNetworkStore((s) => s.tool);
@@ -76,10 +76,12 @@ export function MapView() {
   const voltageCheckAnalysis = useNetworkStore((s) => s.voltageCheckAnalysis);
   const showVoltageCheckOnMap = useNetworkStore((s) => s.showVoltageCheckOnMap);
   const voltageCheckActive = useNetworkStore((s) => s.voltageCheckActive);
+  const sitingActive = useNetworkStore((s) => s.sitingActive);
   const focusedVoltageCheckId = useNetworkStore((s) => s.focusedVoltageCheckId);
 
   const placeDraft = useNetworkStore((s) => s.placeDraft);
   const mapFocus = useNetworkStore((s) => s.mapFocus);
+  const mapHomeNonce = useNetworkStore((s) => s.mapHomeNonce);
   const hoverCoords = useNetworkStore((s) => s.hoverCoords);
   const [mapZoom, setMapZoom] = useState(10);
   const [appearance, setAppearance] = useState<MapAppearance>(() => readMapAppearance());
@@ -135,7 +137,7 @@ export function MapView() {
       bounceAtZoomLimits: false,
       preferCanvas: false,
     });
-    fitDefaultZone(map, L.latLngBounds(DEFAULT_ZONE_BOUNDS));
+    fitDefaultZone(map, null);
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
@@ -219,12 +221,19 @@ export function MapView() {
             useNetworkStore.getState().toggleDistrictFocus(name, additive);
           },
         });
+        // Default home: North Bengal districts fill the pane
+        fitDefaultZone(map, handle.bounds);
+        fittedRef.current = 'home';
         networkLayerRef.current?.bringToFront();
         measureLayerRef.current?.bringToFront();
         setMapReadyTick((n) => n + 1);
       })
       .catch(() => {
         /* boundaries optional — basemap still works */
+        if (fittedRef.current === 'none') {
+          fitDefaultZone(map, null);
+          fittedRef.current = 'home';
+        }
       });
 
     return () => {
@@ -238,22 +247,14 @@ export function MapView() {
     };
   }, []);
 
+  // Fallback if boundaries are slow: still home to North Bengal frame (not statewide SS hull)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
-    if (substations.length) {
-      if (fittedRef.current === 'ss') return;
-      const b = L.latLngBounds(substations.map((s) => [s.lat, s.lng] as L.LatLngTuple));
-      if (b.isValid()) {
-        fitDefaultZone(map, b.pad(0.18));
-        fittedRef.current = 'ss';
-      }
-      return;
-    }
-    if (fittedRef.current !== 'none') return;
-    fitDefaultZone(map, L.latLngBounds(DEFAULT_ZONE_BOUNDS));
-    fittedRef.current = 'zone';
-  }, [loaded, substations]);
+    if (fittedRef.current === 'home') return;
+    fitDefaultZone(map, boundaryRef.current?.bounds ?? null);
+    fittedRef.current = 'home';
+  }, [loaded, mapReadyTick]);
 
   // Swap basemap when selection changes
   useEffect(() => {
@@ -767,6 +768,14 @@ export function MapView() {
     useNetworkStore.getState().setMapFocus(null);
   }, [mapFocus]);
 
+  useEffect(() => {
+    if (!mapHomeNonce) return;
+    const map = mapRef.current;
+    if (!map) return;
+    fittedRef.current = 'home';
+    fitDefaultZone(map, boundaryRef.current?.bounds ?? null);
+  }, [mapHomeNonce]);
+
   // Cursor + measure mode via Geoman
   useEffect(() => {
     const map = mapRef.current;
@@ -822,8 +831,9 @@ export function MapView() {
     const ssById = new Map(substations.map((s) => [s.id, s]));
     const labelsPane = ensurePlaceLabelsPane(map);
     const calloutsPane = ensureCalloutsPane(map);
-    const quiet = state.voltageCheckActive;
-    map.getContainer().classList.toggle('pm-voltage-check-active', quiet);
+    const quiet = state.voltageCheckActive || state.sitingActive;
+    map.getContainer().classList.toggle('pm-voltage-check-active', state.voltageCheckActive);
+    map.getContainer().classList.toggle('pm-siting-active', state.sitingActive);
 
     // Group parallel circuits for offset
     const pairKey = (a: string, b: string) => [a, b].sort().join('|');
@@ -859,6 +869,7 @@ export function MapView() {
         const style = lineStyle(line.voltageCode, line.status, selected, false, {
           circuitIndex: index,
           parallelTotal: sorted.length,
+          zoom: mapZoom,
         });
         if (siblingSelected) style.opacity = 0.5;
         if (quiet) style.opacity = (style.opacity ?? 0.88) * 0.08;
@@ -999,7 +1010,7 @@ export function MapView() {
         toLng = t.lng;
       }
       const selected = selection?.kind === 'tap_lateral' && selection.id === lat.id;
-      const latStyle = lineStyle(lat.voltageCode, lat.status, selected, true);
+      const latStyle = lineStyle(lat.voltageCode, lat.status, selected, true, { zoom: mapZoom });
       if (quiet) latStyle.opacity = (latStyle.opacity ?? 0.88) * 0.06;
       const poly = L.polyline(
         [
@@ -1026,7 +1037,7 @@ export function MapView() {
       if (!visibleLines.some((l) => l.id === tap.parentLineId)) return;
       const selected = selection?.kind === 'tap_node' && selection.id === tap.id;
       const marker = L.marker([tap.lat, tap.lng], {
-        icon: tapIcon(selected),
+        icon: tapIcon(selected, mapZoom),
         zIndexOffset: 400,
         opacity: quiet ? 0.12 : 1,
       });
@@ -1048,7 +1059,7 @@ export function MapView() {
       const selected = selection?.kind === 'substation' && selection.id === ss.id;
       const isConnectFrom = connectDraft.fromId === ss.id;
       const marker = L.marker([ss.lat, ss.lng], {
-        icon: substationIcon(ss.voltageCode, ss.status, selected || isConnectFrom),
+        icon: substationIcon(ss.voltageCode, ss.status, selected || isConnectFrom, mapZoom),
         draggable: tool === 'move',
         zIndexOffset: 500,
         opacity: quiet ? (ss.voltageCode === '33' ? 0.48 : 0.18) : 1,
@@ -1375,6 +1386,7 @@ export function MapView() {
     showSitingOnMap,
     focusedSitingId,
     voltageCheckActive,
+    sitingActive,
   ]);
 
   // Far-from-33 kV wash + hit targets

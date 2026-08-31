@@ -143,6 +143,8 @@ interface UiState {
   hoverCoords: PlaceDraft | null;
   /** Request map to fly to these coords (lat/lng entry) */
   mapFocus: PlaceDraft | null;
+  /** Bumped to ask MapView to fit the default zone (reset home). */
+  mapHomeNonce: number;
 }
 
 interface NetworkStore extends UiState {
@@ -179,6 +181,14 @@ interface NetworkStore extends UiState {
   sitingBusy: boolean;
   showSitingOnMap: boolean;
   focusedSitingId: string | null;
+  /** Quiet / focused map while the siting panel is open */
+  sitingActive: boolean;
+  sitingLayerStash: MapLayerSettings | null;
+  sitingBasemap: 'google' | 'none';
+  /** When true, proposed 33 kV SS are left out of siting / voltage-check distance. */
+  assessExcludeProposed33: boolean;
+  /** When true, proposed 132 kV SS are left out of far-from-132 assessment. */
+  assessExcludeProposed132: boolean;
   /** Inspection: far-from-33 kV distance wash */
   voltageCheckAnalysis: VoltageCheckAnalysis | null;
   voltageCheckBusy: boolean;
@@ -255,6 +265,11 @@ interface NetworkStore extends UiState {
   setShowSitingOnMap: (on: boolean) => void;
   focusSitingCandidate: (id: string | null) => void;
   adoptSitingCandidate: (id: string) => void;
+  enterSiting: () => void;
+  exitSiting: () => void;
+  setSitingBasemap: (basemap: 'google' | 'none') => void;
+  setAssessExcludeProposed33: (on: boolean) => void;
+  setAssessExcludeProposed132: (on: boolean) => void;
   enterVoltageCheck: () => void;
   exitVoltageCheck: () => void;
   runVoltageCheckAnalysis: () => Promise<void>;
@@ -269,6 +284,8 @@ interface NetworkStore extends UiState {
   setPrintSettings: (patch: Partial<PrintSettings>) => void;
   setPrintPreviewOpen: (open: boolean) => void;
   applyScene: (id: Exclude<SceneId, 'custom'>) => void;
+  /** Exit inspection modes, clear overlays, restore Overview scene + default zone view. */
+  resetMapView: () => void;
   syncPrintFromScope: () => void;
   scopeBadgeLabel: () => string;
   approveSuggestion: (id: string) => Promise<void>;
@@ -410,6 +427,11 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   sitingBusy: false,
   showSitingOnMap: true,
   focusedSitingId: null,
+  sitingActive: false,
+  sitingLayerStash: null,
+  sitingBasemap: 'google',
+  assessExcludeProposed33: true,
+  assessExcludeProposed132: true,
   voltageCheckAnalysis: null,
   voltageCheckBusy: false,
   showVoltageCheckOnMap: true,
@@ -446,6 +468,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   placeDraft: null,
   hoverCoords: null,
   mapFocus: null,
+  mapHomeNonce: 0,
 
   bootstrap: async () => {
     let data;
@@ -934,13 +957,17 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   setEditCursorHint: (editCursorHint) => set({ editCursorHint }),
 
   runSitingAnalysis: async () => {
-    set({ sitingBusy: true });
+    get().enterSiting();
+    set({ sitingBusy: true, panel: 'siting' });
     try {
-      const analysis = await analyze33KvSiting(get().substations);
+      const analysis = await analyze33KvSiting(get().substations, {
+        excludeProposed33: get().assessExcludeProposed33,
+      });
       set({
         sitingAnalysis: analysis,
         focusedSitingId: null,
         showSitingOnMap: true,
+        sitingActive: true,
         panel: 'siting',
       });
       if (analysis.message) {
@@ -972,6 +999,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       set({ focusedSitingId: null });
       return;
     }
+    get().enterSiting();
     set({
       focusedSitingId: c.id,
       showSitingOnMap: true,
@@ -987,6 +1015,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     const c = get().sitingAnalysis?.candidates.find((x) => x.id === id);
     if (!c) return;
     if (!get().requireAdmin()) return;
+    get().exitSiting();
     set({
       focusedSitingId: c.id,
       placeDraft: { lat: c.lat, lng: c.lng },
@@ -997,7 +1026,63 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     get().flashStatus(`Place draft at candidate · confirm in panel`);
   },
 
+  enterSiting: () => {
+    if (get().voltageCheckActive) get().exitVoltageCheck();
+    if (get().sitingActive) {
+      set({
+        showSitingOnMap: true,
+        mapLayers: {
+          ...get().mapLayers,
+          basemap: get().sitingBasemap,
+        },
+      });
+      return;
+    }
+    const layers = get().mapLayers;
+    const basemap = get().sitingBasemap;
+    set({
+      sitingActive: true,
+      sitingLayerStash: { ...layers },
+      showSitingOnMap: true,
+      mapLayers: {
+        ...layers,
+        basemap,
+        showSsNames: false,
+        showSsCapacity: false,
+        showFeederNames: false,
+        showFeederLength: false,
+      },
+      sceneId: 'custom',
+    });
+  },
+
+  exitSiting: () => {
+    const stash = get().sitingLayerStash;
+    set({
+      sitingActive: false,
+      sitingLayerStash: null,
+      focusedSitingId: null,
+      mapLayers: stash ? { ...stash } : get().mapLayers,
+      sceneId: stash ? 'custom' : get().sceneId,
+    });
+  },
+
+  setSitingBasemap: (basemap) => {
+    set({ sitingBasemap: basemap });
+    if (get().sitingActive || get().panel === 'siting') {
+      set({
+        mapLayers: { ...get().mapLayers, basemap },
+        sceneId: 'custom',
+      });
+    }
+  },
+
+  setAssessExcludeProposed33: (assessExcludeProposed33) => set({ assessExcludeProposed33 }),
+
+  setAssessExcludeProposed132: (assessExcludeProposed132) => set({ assessExcludeProposed132 }),
+
   enterVoltageCheck: () => {
+    if (get().sitingActive) get().exitSiting();
     if (get().voltageCheckActive) {
       set({
         showVoltageCheckOnMap: true,
@@ -1044,6 +1129,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       const analysis = await analyzeVoltageCheck(get().substations, {
         districtNames: get().voltageCheckDistricts,
         cutOffKm: get().voltageCheckCutOffKm,
+        excludeProposed33: get().assessExcludeProposed33,
+        excludeProposed132: get().assessExcludeProposed132,
       });
       set({
         voltageCheckAnalysis: analysis,
@@ -1186,6 +1273,44 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
     }
   },
 
+  resetMapView: () => {
+    if (get().sitingActive) get().exitSiting();
+    if (get().voltageCheckActive) get().exitVoltageCheck();
+    const scene = sceneById('overview');
+    if (!scene) return;
+    set({
+      panel: null,
+      tool: 'cursor',
+      selection: null,
+      placeDraft: null,
+      hoverCoords: null,
+      mapFocus: null,
+      connectDraft: { fromId: null },
+      tapDraft: { sourceLineId: null, sourceTapId: null, sourceLat: null, sourceLng: null },
+      pendingDelete: null,
+      editCursorHint: null,
+      sitingAnalysis: null,
+      focusedSitingId: null,
+      showSitingOnMap: true,
+      sitingActive: false,
+      sitingLayerStash: null,
+      voltageCheckAnalysis: null,
+      voltageCheckList: [],
+      focusedVoltageCheckId: null,
+      showVoltageCheckOnMap: true,
+      voltageCheckActive: false,
+      voltageCheckLayerStash: null,
+      focusedSuggestionId: null,
+      focusedPersonalDraftId: null,
+      printPreviewOpen: false,
+      sceneId: 'overview',
+      filters: { ...defaultFilters, ...scene.filters },
+      mapLayers: { ...defaultMapLayers, ...scene.mapLayers },
+      mapHomeNonce: get().mapHomeNonce + 1,
+    });
+    get().flashStatus('Map reset to default look');
+  },
+
   syncPrintFromScope: () => {
     const patch = printPatchFromScope({
       filters: get().filters,
@@ -1309,10 +1434,17 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
 
   setPanel: (panel) => {
     const prev = get().panel;
+    if (prev === 'voltage-check' && panel !== 'voltage-check') {
+      get().exitVoltageCheck();
+    }
+    if (prev === 'siting' && panel !== 'siting') {
+      get().exitSiting();
+    }
     if (panel === 'voltage-check' && prev !== 'voltage-check') {
       get().enterVoltageCheck();
-    } else if (prev === 'voltage-check' && panel !== 'voltage-check') {
-      get().exitVoltageCheck();
+    }
+    if (panel === 'siting' && prev !== 'siting') {
+      get().enterSiting();
     }
     set({ panel });
   },

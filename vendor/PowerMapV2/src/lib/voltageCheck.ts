@@ -150,9 +150,15 @@ export async function analyzeVoltageCheck(
     districtNames?: string[];
     /** Manual cut-off in km; omit / null / ≤0 for auto from 33 kV spacing. */
     cutOffKm?: number | null;
+    /** When true, proposed 33 kV SS are ignored for distance. */
+    excludeProposed33?: boolean;
+    /** When true, proposed 132 kV SS are ignored for the far-from-132 flag. */
+    excludeProposed132?: boolean;
   },
 ): Promise<VoltageCheckAnalysis> {
   const maxHotspots = opts?.maxHotspots ?? 40;
+  const excludeProposed33 = opts?.excludeProposed33 ?? true;
+  const excludeProposed132 = opts?.excludeProposed132 ?? true;
   const requested =
     opts?.districtNames?.filter((n) => n.trim().length > 0) ?? [...SITING_DISTRICTS];
   const scopeNames = requested.length > 0 ? requested : [...SITING_DISTRICTS];
@@ -185,12 +191,24 @@ export async function analyzeVoltageCheck(
     }
   }
 
-  const all33 = substations.filter((ss) => ss.voltageCode === '33' && ss.status !== 'retired');
-  const all132 = substations.filter((ss) => ss.voltageCode === '132' && ss.status !== 'retired');
+  const all33 = substations.filter(
+    (ss) =>
+      ss.voltageCode === '33' &&
+      ss.status !== 'retired' &&
+      (!excludeProposed33 || ss.status !== 'proposed'),
+  );
+  const all132 = substations.filter(
+    (ss) =>
+      ss.voltageCode === '132' &&
+      ss.status !== 'retired' &&
+      (!excludeProposed132 || ss.status !== 'proposed'),
+  );
   const inScope = all33.filter((ss) => districts.some((d) => pointInDistrict(ss.lng, ss.lat, d)));
 
   if (inScope.length < 1) {
-    return empty(`No in-service 33 kV substations in ${resolvedNames.join(', ')}.`);
+    return empty(
+      `No ${excludeProposed33 ? 'existing ' : ''}33 kV substations in ${resolvedNames.join(', ')}.`,
+    );
   }
 
   const nnKm: number[] = [];

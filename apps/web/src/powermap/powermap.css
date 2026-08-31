@@ -1984,14 +1984,29 @@
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.pm-root .print-district-list label{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.pm-root .print-district-list label.is-dimmed{
+  opacity: 0.55;
 }
 
 .pm-root .print-overlay{
   position: fixed;
   inset: 0;
   z-index: 2000;
-  background: #0f172a;
+  background: var(--bg);
+  color: var(--ink);
   display: flex;
   flex-direction: column;
 }
@@ -2002,8 +2017,9 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--surface-solid);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   flex-wrap: wrap;
 }
@@ -2013,11 +2029,12 @@
   flex-direction: column;
   gap: 2px;
   font-size: 12px;
+  color: var(--muted);
 }
 
 .pm-root .print-toolbar-meta strong{
   font-size: 14px;
-  color: #fff;
+  color: var(--ink);
 }
 
 .pm-root .print-toolbar-size{
@@ -2031,13 +2048,13 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--muted);
 }
 
 .pm-root .print-toolbar-size select, .pm-root .print-toolbar-size input{
-  background: #0f172a;
-  color: #f8fafc;
-  border: 1px solid #475569;
+  background: var(--surface-muted);
+  color: var(--ink);
+  border: 1px solid var(--line);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
@@ -2048,6 +2065,11 @@
   padding: 4px 6px;
 }
 
+.pm-root .print-toolbar .primary-btn,
+.pm-root .print-toolbar .primary-btn.ghost{
+  color: var(--ink);
+}
+
 .pm-root .print-stage{
   flex: 1;
   min-height: 0;
@@ -2056,10 +2078,12 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
+  background: var(--bg);
 }
 
 .pm-root .print-sheet{
   max-width: calc(100vw - 48px);
+  /* Sheet stays print-white regardless of app theme */
   background: #fff;
   color: #0f172a;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);

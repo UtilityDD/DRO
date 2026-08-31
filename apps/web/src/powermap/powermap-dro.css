@@ -205,11 +205,50 @@
 .pm-root .related-corridor,
 .pm-root .related-line-card,
 .pm-root .district-focus-block,
+.pm-root .print-district-list,
 .pm-root .sync-pill,
 .pm-root kbd {
   background: var(--surface-muted) !important;
   color: var(--ink) !important;
   border-color: var(--line) !important;
+}
+
+.pm-root .print-district-list label,
+.pm-root .print-district-list .check-row,
+.pm-root .side-panel .district-check,
+.pm-root .side-panel .check-row {
+  color: var(--ink) !important;
+}
+
+.pm-root .print-overlay {
+  background: var(--bg) !important;
+  color: var(--ink) !important;
+}
+
+.pm-root .print-toolbar {
+  background: var(--surface-solid) !important;
+  color: var(--ink) !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+
+.pm-root .print-toolbar-meta,
+.pm-root .print-toolbar-size label {
+  color: var(--muted) !important;
+}
+
+.pm-root .print-toolbar-meta strong {
+  color: var(--ink) !important;
+}
+
+.pm-root .print-toolbar-size select,
+.pm-root .print-toolbar-size input {
+  background: var(--surface-muted) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+.pm-root .print-stage {
+  background: var(--bg) !important;
 }
 
 .pm-root .related-corridor.is-double {

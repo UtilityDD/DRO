@@ -18,15 +18,24 @@ export const DEFAULT_ZONE_BOUNDS: [L.LatLngTuple, L.LatLngTuple] = [
   [27.15, 89.75],
 ];
 
-/** Tighter zoom on large desktop map panes; slightly looser on small screens. */
-export function fitDefaultZone(map: L.Map, bounds: L.LatLngBounds) {
+/**
+ * Fit the North Bengal / Malda Zone frame to the map pane.
+ * Uses live district bounds when available; otherwise the hardcoded fallback.
+ */
+export function fitDefaultZone(map: L.Map, bounds?: L.LatLngBounds | null) {
   map.invalidateSize(false);
+  const target =
+    bounds && bounds.isValid() ? bounds : L.latLngBounds(DEFAULT_ZONE_BOUNDS);
   const { x, y } = map.getSize();
   const desktop = x >= 1000 || y >= 640;
-  const pad = desktop ? -0.1 : -0.02;
-  map.fitBounds(bounds.pad(pad), {
+  // Pixel padding clears tool rail / legend / side panel so districts fill the view
+  const padX = desktop ? 56 : 28;
+  const padY = desktop ? 48 : 32;
+  map.fitBounds(target, {
     animate: false,
-    maxZoom: desktop ? 10 : 9,
+    maxZoom: desktop ? 11 : 10,
+    paddingTopLeft: L.point(padX, padY),
+    paddingBottomRight: L.point(desktop ? 36 : 24, padY),
   });
 }
 

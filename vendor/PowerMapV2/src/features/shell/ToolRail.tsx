@@ -13,6 +13,7 @@ import {
   MapPinned,
   Activity,
   Printer,
+  RotateCcw,
 } from 'lucide-react';
 import type { ToolMode } from '@/domain/types';
 import { useNetworkStore } from '@/store/networkStore';
@@ -20,7 +21,7 @@ import { useNetworkStore } from '@/store/networkStore';
 type PanelId = 'layers' | 'filters' | 'reports' | 'settings' | 'siting' | 'voltage-check' | 'print';
 
 const tools: {
-  id: ToolMode | PanelId;
+  id: ToolMode | PanelId | 'reset-map';
   label: string;
   icon: typeof Crosshair;
 }[] = [
@@ -37,6 +38,7 @@ const tools: {
   { id: 'layers', label: 'Layers', icon: Layers },
   { id: 'filters', label: 'Filters', icon: Filter },
   { id: 'reports', label: 'Reports', icon: FileBarChart2 },
+  { id: 'reset-map', label: 'Reset map', icon: RotateCcw },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -55,13 +57,19 @@ export function ToolRail() {
   const panel = useNetworkStore((s) => s.panel);
   const setTool = useNetworkStore((s) => s.setTool);
   const setPanel = useNetworkStore((s) => s.setPanel);
+  const resetMapView = useNetworkStore((s) => s.resetMapView);
 
   return (
     <aside className="tool-rail" aria-label="Tools">
       {tools.map((t) => {
         const Icon = t.icon;
-        const isPanel = PANEL_IDS.includes(t.id as PanelId);
-        const active = isPanel ? panel === t.id : tool === t.id && !isPanel;
+        const isReset = t.id === 'reset-map';
+        const isPanel = !isReset && PANEL_IDS.includes(t.id as PanelId);
+        const active = isReset
+          ? false
+          : isPanel
+            ? panel === t.id
+            : tool === t.id && !isPanel;
         return (
           <button
             key={t.id}
@@ -70,6 +78,10 @@ export function ToolRail() {
             title={t.label}
             aria-label={t.label}
             onClick={() => {
+              if (isReset) {
+                resetMapView();
+                return;
+              }
               if (isPanel) {
                 const panelId = t.id as PanelId;
                 setPanel(panel === panelId ? null : panelId);

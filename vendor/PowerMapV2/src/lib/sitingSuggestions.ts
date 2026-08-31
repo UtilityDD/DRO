@@ -191,9 +191,14 @@ function isInteriorPoint(
  */
 export async function analyze33KvSiting(
   substations: Substation[],
-  opts?: { maxCandidates?: number },
+  opts?: {
+    maxCandidates?: number;
+    /** When true, proposed 33 kV SS are ignored for spacing and coverage. */
+    excludeProposed33?: boolean;
+  },
 ): Promise<SitingAnalysis> {
   const maxCandidates = opts?.maxCandidates ?? 15;
+  const excludeProposed33 = opts?.excludeProposed33 ?? true;
   const want = new Set(SITING_DISTRICTS.map((n) => n.toLowerCase()));
   const allDistricts = await loadDistrictPolygons();
   const districts = allDistricts.filter((d) => want.has(d.name.toLowerCase())) as DistrictPoly[];
@@ -215,13 +220,18 @@ export async function analyze33KvSiting(
     return empty('Could not load all three district boundaries. Check network and retry.');
   }
 
-  const all33 = substations.filter((ss) => ss.voltageCode === '33' && ss.status !== 'retired');
+  const all33 = substations.filter(
+    (ss) =>
+      ss.voltageCode === '33' &&
+      ss.status !== 'retired' &&
+      (!excludeProposed33 || ss.status !== 'proposed'),
+  );
 
   const inScope = all33.filter((ss) => districts.some((d) => pointInDistrict(ss.lng, ss.lat, d)));
 
   if (inScope.length < 2) {
     return empty(
-      `Need at least two 33 kV substations in the three districts (found ${inScope.length}).`,
+      `Need at least two ${excludeProposed33 ? 'existing ' : ''}33 kV substations in the three districts (found ${inScope.length}).`,
     );
   }
 
