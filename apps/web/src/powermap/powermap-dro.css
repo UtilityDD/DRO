@@ -336,6 +336,17 @@
 /* Keep remaining overlays inside the map pane, not the full DRO viewport. */
 .pm-root .map-stage {
   position: relative;
+  isolation: isolate;
+}
+
+.pm-root .map-stage > .map-root {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.pm-root .view-toggles {
+  z-index: 1200;
 }
 
 .pm-root .search-overlay,

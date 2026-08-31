@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { App as PowerMapApp } from '../../../../vendor/PowerMapV2/src/App';
+import { ViewToggles } from '../../../../vendor/PowerMapV2/src/features/map/ViewToggles';
 import { useNetworkStore } from '@/store/networkStore';
+import { adoptFreshBuildOnce, droBuildLabel } from '../lib/appBuild';
+import { activateWaitingWorkerAndReload, checkForAppUpdate } from '../lib/pwaRegister';
 import { api } from '../api';
 import { ensurePowerMapClient } from '../powermap/supabase';
 import { usePageHeading } from '../lib/pageHeading';
@@ -46,6 +49,18 @@ export function PowerMapPage() {
   const hotkey = useMemo(() => searchHotkeyLabel(), []);
 
   usePageHeading('Power Map');
+
+  // Pick up new deploys: SW update + one reload if shell build id changed.
+  useEffect(() => {
+    if (adoptFreshBuildOnce()) return;
+    checkForAppUpdate();
+    void activateWaitingWorkerAndReload();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') checkForAppUpdate();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   // Keep map canvas theme in sync with the shell (scoped powermap.css hardcodes light bg).
   useEffect(() => {
@@ -132,16 +147,19 @@ export function PowerMapPage() {
   return (
     <div className="pm-page">
       <div className="pm-desk-toolbar">
-        <button
-          type="button"
-          className="pm-desk-search"
-          onClick={() => setSearchOpen(!searchOpen)}
-          disabled={!loaded}
-        >
-          <Search size={15} />
-          Search network
-          <kbd>{hotkey}</kbd>
-        </button>
+        <div className="pm-desk-toolbar-start">
+          {clientReady ? <ViewToggles /> : null}
+          <button
+            type="button"
+            className="pm-desk-search"
+            onClick={() => setSearchOpen(!searchOpen)}
+            disabled={!loaded}
+          >
+            <Search size={15} />
+            Search network
+            <kbd>{hotkey}</kbd>
+          </button>
+        </div>
         {loaded && backend !== 'supabase' ? (
           <span
             className="pm-offline-badge"
@@ -157,11 +175,11 @@ export function PowerMapPage() {
             disabled={refreshing}
             title={
               networkCacheHit
-                ? `Dump stamp unchanged (${networkVersion || '—'}) — reused device copy. Click to force a fresh download.`
-                : `Fresh pull from Supabase (${networkVersion || 'stamp missing'}). Click to refresh again.`
+                ? `Dump stamp unchanged (${networkVersion || '—'}) — reused device copy. App ${droBuildLabel()}. Click to force a fresh download.`
+                : `Fresh pull from Supabase (${networkVersion || 'stamp missing'}). App ${droBuildLabel()}. Click to refresh again.`
             }
           >
-            {`${networkCacheHit ? 'Cached' : 'Live'} · ${versionLabel} · ${substations.length} SS · ${lines.length} lines`}
+            {`${networkCacheHit ? 'Cached' : 'Live'} · ${versionLabel} · app ${droBuildLabel()} · ${substations.length} SS · ${lines.length} lines`}
             {refreshing ? ' · refreshing…' : ''}
           </button>
         ) : (

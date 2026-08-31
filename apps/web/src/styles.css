@@ -1202,6 +1202,49 @@ button {
   background: color-mix(in srgb, var(--surface) 88%, transparent);
 }
 
+.pm-desk-toolbar-start {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pm-desk-toolbar .view-toggles {
+  position: static;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  max-width: none;
+  flex: 0 0 auto;
+  box-shadow: var(--shadow);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.pm-desk-toolbar .view-toggles button {
+  color: var(--muted);
+}
+
+.pm-desk-toolbar .view-toggles button:hover {
+  color: var(--text);
+  background: var(--bg-soft);
+}
+
+.pm-desk-toolbar .view-toggles button.on {
+  color: var(--on-accent, #fff);
+  background: var(--accent, #2563eb);
+}
+
+.app-shell[data-appearance='dark'] .pm-desk-toolbar .view-toggles button {
+  color: #e2e8f0;
+}
+
+.app-shell[data-appearance='dark'] .pm-desk-toolbar .view-toggles button.on {
+  color: #fff;
+  background: #0d9668;
+}
+
 .pm-desk-search {
   display: inline-flex;
   align-items: center;
@@ -1350,6 +1393,71 @@ button {
   position: relative;
   min-width: 0;
   min-height: 0;
+  isolation: isolate;
+}
+
+.mode-powermap .pm-root .map-stage > .map-root {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.mode-powermap .pm-root .view-toggles {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 1200;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: min(360px, calc(100% - 32px));
+  padding: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dro-surface) 94%, transparent);
+  border: 1px solid var(--dro-border);
+  box-shadow: var(--dro-shadow);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.mode-powermap .pm-root .view-toggles button {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 6px 11px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--dro-muted);
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.mode-powermap .pm-root .view-toggles button:hover {
+  color: var(--dro-text);
+  background: var(--accent-soft);
+}
+
+.mode-powermap .pm-root .view-toggles button.on {
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .view-toggles button {
+  color: #e2e8f0;
+}
+
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .view-toggles button:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.app-shell[data-appearance='dark'].mode-powermap .pm-root .view-toggles button.on {
+  color: #fff;
+  background: #0d9668;
 }
 
 .mode-powermap .pm-root .side-panel {

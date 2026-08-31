@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { MapView } from '@/features/map/MapView';
-import { ViewToggles } from '@/features/map/ViewToggles';
 import { PrintSheet } from '@/features/print/PrintSheet';
 import { ConfirmDialog } from '@/features/shell/ConfirmDialog';
 import { SearchPalette } from '@/features/shell/SearchPalette';
@@ -34,7 +33,6 @@ export function App() {
             </div>
           )}
           <MapView />
-          <ViewToggles />
           <div className="map-legend">
             <div className="legend-title">Symbology</div>
             <div className="legend-row"><span className="sym square" /> 400 kV</div>

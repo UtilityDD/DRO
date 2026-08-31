@@ -783,6 +783,13 @@
   position: relative;
   min-width: 0;
   min-height: 0;
+  isolation: isolate;
+}
+
+.pm-root .map-stage > .map-root{
+  position: absolute;
+  inset: 0;
+  z-index: 0;
 }
 
 .pm-root .map-root{
@@ -854,7 +861,7 @@
   position: absolute;
   top: 14px;
   left: 16px;
-  z-index: 560;
+  z-index: 1200;
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
