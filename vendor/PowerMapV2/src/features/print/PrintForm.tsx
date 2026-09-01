@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
-import { PRINT_PAPERS, PRINT_BASEMAPS, paperSizeMm, printSheetTitle, type PrintPaperId } from '@/lib/printLayout';
+import { PRINT_PAPERS, PRINT_BASEMAPS, PRINT_PREVIEW_DPI_OPTIONS, paperSizeMm, printSheetTitle, previewSheetPx, type PrintPaperId } from '@/lib/printLayout';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 
 const QUICK_DISTRICTS = [...SITING_DISTRICTS];
@@ -36,6 +36,7 @@ export function PrintForm() {
       : QUICK_DISTRICTS;
 
   const size = paperSizeMm(settings);
+  const preview = previewSheetPx(settings);
 
   const toggleDistrict = (name: string) => {
     const has = settings.districts.includes(name);
@@ -117,6 +118,30 @@ export function PrintForm() {
       <p className="muted">
         Sheet: <strong>{size.widthMm} × {size.heightMm} mm</strong>
         {settings.paperId === 'custom' ? ' (exact custom size)' : ` (${settings.orientation})`}
+        {' · '}
+        preview ~{preview.widthPx} × {preview.heightPx} px
+        {preview.scale < 1 ? ` (${Math.round(preview.scale * 100)}% fit)` : ''}
+      </p>
+
+      <Field label="Preview DPI">
+        <select
+          value={settings.previewDpi ?? 96}
+          onChange={(e) =>
+            setPrintSettings({
+              previewDpi: Number(e.target.value) as typeof settings.previewDpi,
+            })
+          }
+        >
+          {PRINT_PREVIEW_DPI_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <p className="muted">
+        Higher DPI loads sharper map tiles in preview. The sheet still fits your screen; use Print
+        for full resolution PDF.
       </p>
 
       {settings.paperId !== 'custom' && (

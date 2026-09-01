@@ -10,8 +10,10 @@ import {
   buildPrintAssets,
   buildPrintStyleSheet,
   paperSizeMm,
+  previewSheetPx,
   printSheetTitle,
   PRINT_BASEMAPS,
+  PRINT_PREVIEW_DPI_OPTIONS,
   type PrintSettings,
 } from '@/lib/printLayout';
 import { printSaveFilename, printSaveFilenameStem } from '@/lib/outputNames';
@@ -25,39 +27,29 @@ function escapeHtml(text: string) {
     .replace(/"/g, '&quot;');
 }
 
-/** Soft max zoom — high enough that A4 can still fill the pane. */
+/** Soft max zoom — higher DPI loads sharper tiles when the pane is large enough. */
 function maxZoomForPaper(settings: PrintSettings): number {
+  let z: number;
   switch (settings.paperId) {
     case 'a4':
-      return 14;
+      z = 14;
+      break;
     case 'a3':
-      return 15;
+      z = 15;
+      break;
     case 'a2':
-      return 16;
+      z = 16;
+      break;
     case 'a1':
-      return 17;
+      z = 17;
+      break;
     default:
-      return 15;
+      z = 15;
   }
-}
-
-/**
- * Screen preview width scales with paper so A4 / A3 / A1 look different,
- * while staying within the viewport.
- */
-function previewWidthPx(settings: PrintSettings): number {
-  const { widthMm, heightMm } = paperSizeMm(settings);
-  // Standard ISO sizes — previous stable preview scale
-  if (settings.paperId !== 'custom') {
-    return Math.min(1180, Math.max(520, Math.round(widthMm * 2.15)));
-  }
-  // Custom only: fit within viewport so odd aspect ratios don't break layout
-  const maxW = typeof window !== 'undefined' ? Math.min(1180, Math.max(360, window.innerWidth - 48)) : 900;
-  const maxH = typeof window !== 'undefined' ? Math.max(280, window.innerHeight - 120) : 640;
-  const byWidth = Math.min(maxW, Math.round(widthMm * 2.0));
-  const byHeight = Math.round((byWidth * heightMm) / widthMm);
-  if (byHeight <= maxH) return Math.max(360, byWidth);
-  return Math.max(320, Math.round((maxH * widthMm) / heightMm));
+  const dpi = settings.previewDpi ?? 96;
+  if (dpi >= 200) z += 2;
+  else if (dpi >= 150) z += 1;
+  return z;
 }
 
 function listColumnCount(n: number): number {
@@ -531,7 +523,19 @@ export function PrintSheet({
   );
   const [busy, setBusy] = useState(true);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [viewport, setViewport] = useState(() =>
+    typeof window !== 'undefined'
+      ? { width: window.innerWidth, height: window.innerHeight }
+      : { width: 1200, height: 800 },
+  );
   const savedDocumentTitle = useRef<string | null>(null);
+
+  useEffect(() => {
+    const onResize = () =>
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const districtNames =
     settings.districts.length > 0
@@ -571,8 +575,11 @@ export function PrintSheet({
   }, [allSs, allLines, settings.districts, settings.showProposed]);
 
   const size = paperSizeMm(settings);
-  const previewW = previewWidthPx(settings);
-  const layoutKey = `${settings.paperId}-${settings.orientation}-${size.widthMm}x${size.heightMm}-${settings.listSide}`;
+  const preview = useMemo(
+    () => previewSheetPx(settings, viewport),
+    [settings, viewport],
+  );
+  const layoutKey = `${settings.paperId}-${settings.orientation}-${preview.widthPx}x${preview.heightPx}-${settings.previewDpi}-${size.widthMm}x${size.heightMm}-${settings.listSide}`;
 
   const listRows = useMemo(() => {
     const inDistrict = new Set(bundle?.inDistrictIds ?? []);
@@ -693,7 +700,8 @@ export function PrintSheet({
         <div className="print-toolbar-meta">
           <strong>Print preview</strong>
           <span>
-            {size.widthMm} × {size.heightMm} mm · {listRows.length} SS
+            {size.widthMm} × {size.heightMm} mm · {listRows.length} SS · preview{' '}
+            {Math.round(preview.scale * 100)}%
           </span>
           <span className="muted" title="Default name when you Save as PDF">
             Save as: {saveFilename}
@@ -774,6 +782,23 @@ export function PrintSheet({
             </label>
           )}
           <label>
+            DPI
+            <select
+              value={settings.previewDpi ?? 96}
+              onChange={(e) =>
+                setPrintSettings({
+                  previewDpi: Number(e.target.value) as PrintSettings['previewDpi'],
+                })
+              }
+            >
+              {PRINT_PREVIEW_DPI_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Basemap
             <select
               value={settings.basemap || 'esri'}
@@ -810,12 +835,15 @@ export function PrintSheet({
                   width: `${size.widthMm}mm`,
                   height: `${size.heightMm}mm`,
                   maxWidth: 'none',
+                  maxHeight: 'none',
                   aspectRatio: 'auto',
                   ['--print-list-cols' as string]: String(listCols),
                 }
               : {
-                  width: previewW,
-                  aspectRatio: `${size.widthMm} / ${size.heightMm}`,
+                  width: preview.widthPx,
+                  height: preview.heightPx,
+                  maxWidth: '100%',
+                  flexShrink: 0,
                   ['--print-list-cols' as string]: String(listCols),
                 }
           }

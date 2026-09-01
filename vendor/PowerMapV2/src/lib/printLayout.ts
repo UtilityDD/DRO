@@ -15,6 +15,8 @@ export const PRINT_PAPERS: Record<
   a1: { label: 'A1 (large wall)', widthMm: 594, heightMm: 841 },
 };
 
+export type PrintPreviewDpi = 72 | 96 | 120 | 150 | 200;
+
 export type PrintSettings = {
   paperId: PrintPaperId;
   orientation: PrintOrientation;
@@ -28,6 +30,8 @@ export type PrintSettings = {
   showProposed: boolean;
   showDistrictBoundaries: boolean;
   listSide: 'left' | 'right';
+  /** Screen preview / tile sharpness (px per inch before viewport fit). */
+  previewDpi: PrintPreviewDpi;
   /** Print preview / PDF basemap (same set as the live map). */
   basemap: 'google' | 'google-hybrid' | 'osm' | 'esri' | 'none';
 };
@@ -45,8 +49,17 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   showProposed: true,
   showDistrictBoundaries: true,
   listSide: 'right',
+  previewDpi: 96,
   basemap: 'esri',
 };
+
+export const PRINT_PREVIEW_DPI_OPTIONS: { value: PrintPreviewDpi; label: string }[] = [
+  { value: 72, label: '72 — fast' },
+  { value: 96, label: '96 — default' },
+  { value: 120, label: '120' },
+  { value: 150, label: '150 — sharp' },
+  { value: 200, label: '200 — max' },
+];
 
 export const PRINT_BASEMAPS: {
   id: PrintSettings['basemap'];
@@ -79,6 +92,30 @@ export function paperSizeMm(settings: PrintSettings): { widthMm: number; heightM
 export function cssPageSize(settings: PrintSettings): string {
   const { widthMm, heightMm } = paperSizeMm(settings);
   return `${widthMm}mm ${heightMm}mm`;
+}
+
+/** Screen preview size in px — fits full sheet in viewport at chosen DPI. */
+export function previewSheetPx(
+  settings: PrintSettings,
+  viewport?: { width: number; height: number },
+): { widthPx: number; heightPx: number; scale: number } {
+  const { widthMm, heightMm } = paperSizeMm(settings);
+  const dpi = settings.previewDpi ?? 96;
+  const pxPerMm = dpi / 25.4;
+  const rawW = widthMm * pxPerMm;
+  const rawH = heightMm * pxPerMm;
+
+  const vw = viewport?.width ?? (typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const vh = viewport?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 800);
+  const maxW = Math.max(280, vw - 48);
+  const maxH = Math.max(200, vh - 168);
+
+  const scale = Math.min(1, maxW / rawW, maxH / rawH);
+  return {
+    widthPx: Math.max(240, Math.round(rawW * scale)),
+    heightPx: Math.max(180, Math.round(rawH * scale)),
+    scale,
+  };
 }
 
 /** Clear sheet title — e.g. "Power Map of Malda District". */
@@ -173,15 +210,24 @@ body.is-printing .print-ss-idx {
   font-weight: 600 !important;
 }
 body.is-printing .print-sheet-body {
-  flex: 1 1 auto !important;
+  flex: 1 1 0 !important;
   min-height: 0 !important;
-  height: auto !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-rows: minmax(0, 1fr) auto !important;
 }
 body.is-printing .print-map-pane,
 body.is-printing .print-map-canvas,
 body.is-printing .print-map-canvas.leaflet-container {
   height: 100% !important;
   min-height: 0 !important;
+  overflow: hidden !important;
+}
+body.is-printing .print-side-list {
+  max-height: 22% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  flex-shrink: 0 !important;
 }
 @media print {
   html, body {
