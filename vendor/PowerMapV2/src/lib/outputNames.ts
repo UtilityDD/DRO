@@ -1,5 +1,4 @@
 import type { PrintSettings } from '@/lib/printLayout';
-import { printSheetTitle } from '@/lib/printLayout';
 import type { VoltageFocus } from '@/lib/voltageFocus';
 
 export type OutputScope = {
@@ -74,17 +73,44 @@ function joinBasename(parts: Array<string | undefined | null>): string {
     .join('_');
 }
 
-/** Browser PDF save dialog uses `document.title` as the default filename stem. */
-export function printSaveDocumentTitle(
-  settings: Pick<PrintSettings, 'title' | 'districts' | 'paperId' | 'orientation' | 'customWidthMm' | 'customHeightMm'>,
+function printPaperSlug(
+  settings: Pick<
+    PrintSettings,
+    'paperId' | 'orientation' | 'customWidthMm' | 'customHeightMm'
+  >,
+): string {
+  if (settings.paperId === 'custom') {
+    return `${settings.customWidthMm}x${settings.customHeightMm}mm`;
+  }
+  return `${settings.paperId}-${settings.orientation}`;
+}
+
+/** Slug stem for Save-as-PDF (no extension — browsers append .pdf). */
+export function printSaveFilenameStem(
+  settings: Pick<
+    PrintSettings,
+    'districts' | 'paperId' | 'orientation' | 'customWidthMm' | 'customHeightMm'
+  >,
   districtNames: string[] = [],
 ): string {
-  const title = printSheetTitle(settings, districtNames);
-  const paper =
-    settings.paperId === 'custom'
-      ? `${settings.customWidthMm}x${settings.customHeightMm}mm`
-      : `${settings.paperId.toUpperCase()} ${settings.orientation}`;
-  return `${title} (${paper})`;
+  const districts = settings.districts.length ? settings.districts : districtNames;
+  return joinBasename([
+    'powermap',
+    districtFilenamePart(districts),
+    sanitizeFilenamePart(printPaperSlug(settings)),
+    datedSuffix(),
+  ]);
+}
+
+/** Full suggested PDF filename including extension (preview hint). */
+export function printSaveFilename(
+  settings: Pick<
+    PrintSettings,
+    'districts' | 'paperId' | 'orientation' | 'customWidthMm' | 'customHeightMm'
+  >,
+  districtNames: string[] = [],
+): string {
+  return `${printSaveFilenameStem(settings, districtNames)}.pdf`;
 }
 
 export function reportCsvFilename(kind: ReportExportKind, scope: OutputScope = {}): string {

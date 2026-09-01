@@ -2136,6 +2136,17 @@
   color: var(--ink);
 }
 
+.pm-root .print-toolbar-tip{
+  font-size: 11px;
+  max-width: 28rem;
+  line-height: 1.35;
+}
+
+.pm-root .print-toolbar-tip strong{
+  font-size: inherit;
+  color: var(--ink);
+}
+
 .pm-root .print-toolbar-size{
   display: flex;
   gap: 10px;
@@ -2190,34 +2201,43 @@
 
 .pm-root .print-sheet-header{
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
   align-items: center;
-  padding: 5px 10px 4px;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 10px 5px;
   border-bottom: 1px solid #cbd5e1;
   flex: 0 0 auto;
+  text-align: center;
+}
+
+.pm-root .print-sheet-title{
+  width: 100%;
 }
 
 .pm-root .print-sheet-title h1{
   margin: 0;
-  font-size: 14px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-align: center;
 }
 
 .pm-root .print-sheet-title p{
-  margin: 1px 0 0;
-  font-size: 9px;
+  margin: 3px 0 0;
+  font-size: 10px;
   color: #64748b;
   line-height: 1.2;
+  text-align: center;
 }
 
 .pm-root .print-sheet-legend{
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 8px;
   font-weight: 600;
   color: #334155;
@@ -2334,7 +2354,7 @@
 .pm-root .print-ss-list{
   list-style: none;
   margin: 0;
-  padding: 2px 6px 4px;
+  padding: 4px 6px 4px;
   overflow: hidden;
   flex: 1;
   column-count: var(--print-list-cols, 2);
@@ -2545,11 +2565,15 @@
    Keep only non-size print polish here so CSS variables cannot stretch the sheet. */
 @media print {
   .pm-root .print-sheet-header{
-    padding: 2mm 3mm 1.5mm !important;
+    padding: 3mm 4mm 2mm !important;
   }
 
   .pm-root .print-sheet-title h1, .pm-root .print-sheet-header h1{
-    font-size: 11pt !important;
+    font-size: 16pt !important;
+  }
+
+  .pm-root .print-sheet-title p{
+    font-size: 9pt !important;
   }
 
   .pm-root .print-ss-list{

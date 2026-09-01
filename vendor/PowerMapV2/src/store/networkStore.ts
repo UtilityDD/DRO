@@ -1421,7 +1421,6 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       filters: get().filters,
       mapLayers: get().mapLayers,
     });
-    const badge = get().scopeBadgeLabel();
     const prev = get().printSettings;
     const autoTitle = printSheetTitle(
       { title: '', districts: patch.districts },
@@ -1432,7 +1431,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
         ...prev,
         ...patch,
         title: prev.title.trim() ? prev.title : autoTitle,
-        subtitle: badge,
+        subtitle: '',
       },
     });
     get().flashStatus(

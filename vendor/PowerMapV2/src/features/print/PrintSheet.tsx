@@ -14,7 +14,7 @@ import {
   PRINT_BASEMAPS,
   type PrintSettings,
 } from '@/lib/printLayout';
-import { printSaveDocumentTitle } from '@/lib/outputNames';
+import { printSaveFilename, printSaveFilenameStem } from '@/lib/outputNames';
 import { useNetworkStore } from '@/store/networkStore';
 
 function escapeHtml(text: string) {
@@ -537,13 +537,14 @@ export function PrintSheet({
     settings.districts.length > 0
       ? settings.districts
       : (bundle?.districtNames ?? []);
-  const saveDocumentTitle = printSaveDocumentTitle(settings, districtNames);
+  const saveFilename = printSaveFilename(settings, districtNames);
+  const saveFilenameStem = printSaveFilenameStem(settings, districtNames);
 
   const applyPrintDocumentTitle = () => {
     if (savedDocumentTitle.current === null) {
       savedDocumentTitle.current = document.title;
     }
-    document.title = saveDocumentTitle;
+    document.title = saveFilenameStem;
   };
 
   const restoreDocumentTitle = () => {
@@ -590,11 +591,10 @@ export function PrintSheet({
   const totalMva = listRows.reduce((sum, s) => sum + installedMva(s.transformers), 0);
   const listCols = listColumnCount(listRows.length);
   const sheetTitle = printSheetTitle(settings, bundle?.districtNames ?? []);
-  const sheetSub =
-    settings.subtitle.trim() ||
-    (listRows.length
-      ? `${listRows.length} substations · ${totalMva.toFixed(0)} MVA`
-      : '');
+  const statsSub = listRows.length
+    ? `${listRows.length} substations · ${totalMva.toFixed(0)} MVA`
+    : '';
+  const sheetSub = settings.subtitle.trim() || statsSub;
 
   useEffect(() => {
     document.body.classList.add('print-preview-open');
@@ -660,7 +660,7 @@ export function PrintSheet({
       window.removeEventListener('beforeprint', onBeforePrint);
       window.removeEventListener('afterprint', onAfterPrint);
     };
-  }, [settings, saveDocumentTitle]);
+  }, [settings, saveFilenameStem]);
 
   const doPrint = () => {
     setIsPrinting(true);
@@ -696,7 +696,10 @@ export function PrintSheet({
             {size.widthMm} × {size.heightMm} mm · {listRows.length} SS
           </span>
           <span className="muted" title="Default name when you Save as PDF">
-            Save as: {saveDocumentTitle}
+            Save as: {saveFilename}
+          </span>
+          <span className="muted print-toolbar-tip">
+            In the print dialog, turn off <strong>Headers and footers</strong> for a clean PDF.
           </span>
         </div>
         <div className="print-toolbar-size no-print">
@@ -843,7 +846,6 @@ export function PrintSheet({
                 <i className="sym circle" />
                 33
               </span>
-              <span className="print-legend-note">outline = proposed</span>
             </div>
           </header>
 
@@ -865,12 +867,6 @@ export function PrintSheet({
             </div>
 
             <aside className="print-side-list">
-              <div className="print-side-head">
-                <h2>Capacities</h2>
-                <p>
-                  {listRows.length} SS · {totalMva.toFixed(1)} MVA
-                </p>
-              </div>
               <ol className="print-ss-list">
                 {listRows.map((ss, i) => (
                   <li key={ss.id}>
@@ -893,7 +889,6 @@ export function PrintSheet({
                   <li className="print-ss-empty">No substations in selection.</li>
                 )}
               </ol>
-              <p className="print-side-foot">* Proposed</p>
             </aside>
           </div>
         </div>

@@ -82,7 +82,7 @@ export function PrintForm() {
         <input
           value={settings.subtitle}
           onChange={(e) => setPrintSettings({ subtitle: e.target.value })}
-          placeholder="Auto: SS count · MVA"
+          placeholder="Optional — leave blank for substation count · MVA"
         />
       </Field>
 
