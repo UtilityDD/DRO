@@ -35,6 +35,11 @@ import {
   type SceneId,
 } from '@/lib/mapScope';
 import {
+  DEFAULT_PRINT_SETTINGS,
+  printSheetTitle,
+  type PrintSettings,
+} from '@/lib/printLayout';
+import {
   deletePersonalDraft,
   draftId,
   isDraftStale,
@@ -57,10 +62,6 @@ import {
   type VoltageCheckAnalysis,
   type VoltageCheckCell,
 } from '@/lib/voltageCheck';
-import {
-  DEFAULT_PRINT_SETTINGS,
-  type PrintSettings,
-} from '@/lib/printLayout';
 import {
   computeAnalytics,
   createLine,
@@ -1421,10 +1422,16 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       mapLayers: get().mapLayers,
     });
     const badge = get().scopeBadgeLabel();
+    const prev = get().printSettings;
+    const autoTitle = printSheetTitle(
+      { title: '', districts: patch.districts },
+      patch.districts,
+    );
     set({
       printSettings: {
-        ...get().printSettings,
+        ...prev,
         ...patch,
+        title: prev.title.trim() ? prev.title : autoTitle,
         subtitle: badge,
       },
     });

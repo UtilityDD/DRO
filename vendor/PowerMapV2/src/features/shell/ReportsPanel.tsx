@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
 import { buildPrintAssets } from '@/lib/printLayout';
+import type { OutputScope } from '@/lib/outputNames';
+import { geoJsonFilename } from '@/lib/outputNames';
 import {
   REPORT_TABS,
   buildDistrictDossier,
@@ -42,6 +44,7 @@ export function ReportsForm() {
   const setPanel = useNetworkStore((s) => s.setPanel);
   const syncPrintFromScope = useNetworkStore((s) => s.syncPrintFromScope);
   const setPrintPreviewOpen = useNetworkStore((s) => s.setPrintPreviewOpen);
+  const voltageFocus = useNetworkStore((s) => s.voltageFocus);
 
   const filteredSs = useMemo(
     () => useNetworkStore.getState().visibleSubstations(),
@@ -93,6 +96,15 @@ export function ReportsForm() {
   const substations = scoped?.substations ?? filteredSs;
   const lines = scoped?.lines ?? filteredLines;
   const badge = scopeBadgeLabel();
+
+  const outputScope = useMemo((): OutputScope => {
+    const districts = focusedDistricts.length
+      ? focusedDistricts
+      : scoped?.districtNames.length
+        ? scoped.districtNames
+        : undefined;
+    return { districts, voltageFocus };
+  }, [focusedDistricts, scoped?.districtNames, voltageFocus]);
 
   const executive = useMemo(
     () => buildExecutiveReport(substations, lines),
@@ -153,12 +165,12 @@ export function ReportsForm() {
   };
 
   const exportCurrent = () => {
-    if (tab === 'executive') exportExecutiveCsv(executive);
-    else if (tab === 'dossier' && dossier) exportDistrictDossierCsv(dossier);
-    else if (tab === 'existing-ss') exportSsCsv(existingSs, 'existing');
-    else if (tab === 'proposed-ss') exportSsCsv(proposedSs, 'proposed');
-    else if (tab === 'existing-feeders') exportFeedersCsv(existingFeeders, 'existing');
-    else exportFeedersCsv(proposedFeeders, 'proposed');
+    if (tab === 'executive') exportExecutiveCsv(executive, outputScope);
+    else if (tab === 'dossier' && dossier) exportDistrictDossierCsv(dossier, outputScope);
+    else if (tab === 'existing-ss') exportSsCsv(existingSs, 'existing', outputScope);
+    else if (tab === 'proposed-ss') exportSsCsv(proposedSs, 'proposed', outputScope);
+    else if (tab === 'existing-feeders') exportFeedersCsv(existingFeeders, 'existing', outputScope);
+    else exportFeedersCsv(proposedFeeders, 'proposed', outputScope);
     flashStatus('CSV exported');
   };
 
@@ -197,7 +209,7 @@ export function ReportsForm() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'powermap-network.geojson';
+    a.download = geoJsonFilename(outputScope);
     a.click();
     URL.revokeObjectURL(url);
     flashStatus('GeoJSON exported');

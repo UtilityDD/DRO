@@ -14,6 +14,7 @@ import {
   PRINT_BASEMAPS,
   type PrintSettings,
 } from '@/lib/printLayout';
+import { printSaveDocumentTitle } from '@/lib/outputNames';
 import { useNetworkStore } from '@/store/networkStore';
 
 function escapeHtml(text: string) {
@@ -530,6 +531,27 @@ export function PrintSheet({
   );
   const [busy, setBusy] = useState(true);
   const [isPrinting, setIsPrinting] = useState(false);
+  const savedDocumentTitle = useRef<string | null>(null);
+
+  const districtNames =
+    settings.districts.length > 0
+      ? settings.districts
+      : (bundle?.districtNames ?? []);
+  const saveDocumentTitle = printSaveDocumentTitle(settings, districtNames);
+
+  const applyPrintDocumentTitle = () => {
+    if (savedDocumentTitle.current === null) {
+      savedDocumentTitle.current = document.title;
+    }
+    document.title = saveDocumentTitle;
+  };
+
+  const restoreDocumentTitle = () => {
+    if (savedDocumentTitle.current !== null) {
+      document.title = savedDocumentTitle.current;
+      savedDocumentTitle.current = null;
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -617,10 +639,12 @@ export function PrintSheet({
     const onBeforePrint = () => {
       document.body.classList.add('is-printing');
       hideShellChrome();
+      applyPrintDocumentTitle();
       window.dispatchEvent(new Event('powermap:print-prepare'));
     };
     const onAfterPrint = () => {
       document.body.classList.remove('is-printing');
+      restoreDocumentTitle();
       // Keep chrome hidden while preview stays open; restore on unmount.
       setIsPrinting(false);
     };
@@ -630,12 +654,13 @@ export function PrintSheet({
     return () => {
       document.body.classList.remove('print-preview-open');
       document.body.classList.remove('is-printing');
+      restoreDocumentTitle();
       restoreShellChrome();
       pageStyle?.remove();
       window.removeEventListener('beforeprint', onBeforePrint);
       window.removeEventListener('afterprint', onAfterPrint);
     };
-  }, [settings]);
+  }, [settings, saveDocumentTitle]);
 
   const doPrint = () => {
     setIsPrinting(true);
@@ -652,6 +677,7 @@ export function PrintSheet({
         el.style.setProperty('visibility', 'hidden', 'important');
         el.style.setProperty('height', '0', 'important');
       });
+    applyPrintDocumentTitle();
     window.requestAnimationFrame(() => {
       window.dispatchEvent(new Event('powermap:print-prepare'));
       window.setTimeout(() => {
@@ -668,6 +694,9 @@ export function PrintSheet({
           <strong>Print preview</strong>
           <span>
             {size.widthMm} × {size.heightMm} mm · {listRows.length} SS
+          </span>
+          <span className="muted" title="Default name when you Save as PDF">
+            Save as: {saveDocumentTitle}
           </span>
         </div>
         <div className="print-toolbar-size no-print">

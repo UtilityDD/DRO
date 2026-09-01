@@ -1,6 +1,8 @@
 import { formatCapacity, installedMva, isOverloaded } from '@/domain/geo';
 import type { OrgUnit, Substation, TrunkLine, VoltageCode } from '@/domain/types';
 import { VOLTAGE_CATALOG } from '@/domain/types';
+import type { OutputScope, ReportExportKind } from '@/lib/outputNames';
+import { reportCsvFilename } from '@/lib/outputNames';
 
 export type ReportTabId =
   | 'executive'
@@ -404,9 +406,14 @@ export function downloadCsv(filename: string, headers: string[], rows: (string |
   URL.revokeObjectURL(url);
 }
 
-export function exportSsCsv(rows: SsReportRow[], kind: 'existing' | 'proposed') {
+export function exportSsCsv(
+  rows: SsReportRow[],
+  kind: 'existing' | 'proposed',
+  scope: OutputScope = {},
+) {
+  const exportKind: ReportExportKind = kind === 'existing' ? 'existing-ss' : 'proposed-ss';
   downloadCsv(
-    `powermap-${kind}-substations.csv`,
+    reportCsvFilename(exportKind, scope),
     [
       'Name',
       'Voltage kV',
@@ -440,9 +447,15 @@ export function exportSsCsv(rows: SsReportRow[], kind: 'existing' | 'proposed') 
   );
 }
 
-export function exportFeedersCsv(rows: FeederReportRow[], kind: 'existing' | 'proposed' = 'existing') {
+export function exportFeedersCsv(
+  rows: FeederReportRow[],
+  kind: 'existing' | 'proposed' = 'existing',
+  scope: OutputScope = {},
+) {
+  const exportKind: ReportExportKind =
+    kind === 'existing' ? 'existing-feeders' : 'proposed-feeders';
   downloadCsv(
-    `powermap-${kind}-feeders.csv`,
+    reportCsvFilename(exportKind, scope),
     [
       'Name',
       'Voltage kV',
@@ -472,9 +485,9 @@ export function exportFeedersCsv(rows: FeederReportRow[], kind: 'existing' | 'pr
   );
 }
 
-export function exportExecutiveCsv(report: ExecutiveReport) {
+export function exportExecutiveCsv(report: ExecutiveReport, scope: OutputScope = {}) {
   downloadCsv(
-    'powermap-executive-summary.csv',
+    reportCsvFilename('executive', scope),
     ['Section', 'Owner / Voltage', 'Existing SS', 'Existing MVA', 'Proposed SS', 'Proposed MVA', 'Extra'],
     [
       [
@@ -591,9 +604,12 @@ export function buildDistrictDossier(
   };
 }
 
-export function exportDistrictDossierCsv(dossier: DistrictDossier) {
+export function exportDistrictDossierCsv(dossier: DistrictDossier, scope: OutputScope = {}) {
   downloadCsv(
-    'powermap-district-dossier.csv',
+    reportCsvFilename('dossier', {
+      ...scope,
+      districts: scope.districts?.length ? scope.districts : dossier.districtNames,
+    }),
     ['Section', 'Name', 'Detail', 'Value'],
     [
       ['Summary', 'Districts', dossier.districtNames.join(' · '), ''],

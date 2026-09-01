@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
-import { PRINT_PAPERS, PRINT_BASEMAPS, paperSizeMm, type PrintPaperId } from '@/lib/printLayout';
+import { PRINT_PAPERS, PRINT_BASEMAPS, paperSizeMm, printSheetTitle, type PrintPaperId } from '@/lib/printLayout';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 
 const QUICK_DISTRICTS = [...SITING_DISTRICTS];
@@ -46,6 +46,14 @@ export function PrintForm() {
     });
   };
 
+  const districtKey = settings.districts.join('|');
+  useEffect(() => {
+    if (settings.title.trim()) return;
+    setPrintSettings({
+      title: printSheetTitle({ title: '', districts: settings.districts }, settings.districts),
+    });
+  }, [districtKey, settings.title, settings.districts, setPrintSettings]);
+
   return (
     <div className="form-stack">
       <p className="muted">
@@ -67,7 +75,7 @@ export function PrintForm() {
         <input
           value={settings.title}
           onChange={(e) => setPrintSettings({ title: e.target.value })}
-          placeholder="Auto: Power Map of {District}"
+          placeholder="Auto from districts — e.g. Power Map of Malda District"
         />
       </Field>
       <Field label="Subtitle (optional)">

@@ -6,6 +6,7 @@ import type { AssetLifecycle, TrunkLine, VoltageCode } from '@/domain/types';
 import { VOLTAGE_CATALOG } from '@/domain/types';
 import { linesConnectedTo } from '@/lib/networkRepo';
 import { OWNER_OPTIONS, downloadCsv } from '@/lib/reports';
+import { voltageCheckCsvFilename } from '@/lib/outputNames';
 import type { SitingCandidate } from '@/lib/sitingSuggestions';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 import type { VoltageCheckCell } from '@/lib/voltageCheck';
@@ -1967,8 +1968,11 @@ function VoltageCheckForm() {
   };
 
   const exportList = () => {
+    const exportDistricts = selectedDistricts.length
+      ? selectedDistricts
+      : [...new Set(list.map((c) => c.district).filter(Boolean))];
     downloadCsv(
-      'powermap-far-from-33kv.csv',
+      voltageCheckCsvFilename(exportDistricts),
       [
         'Area / district',
         'Nearest 33 kV SS',
