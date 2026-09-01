@@ -1,8 +1,12 @@
 import type { Substation, TrunkLine } from '@/domain/types';
 import { loadDistrictPolygons } from '@/lib/districts';
+import type { PrintDisplayPurpose } from '@/lib/printSuggest';
 
 export type PrintPaperId = 'a4' | 'a3' | 'a2' | 'a1' | 'custom';
 export type PrintOrientation = 'landscape' | 'portrait';
+
+export const PRINT_SHEET_MIN_MM = 100;
+export const PRINT_SHEET_MAX_MM = 2500;
 
 /** ISO sizes in millimetres (portrait width × height). */
 export const PRINT_PAPERS: Record<
@@ -30,6 +34,10 @@ export type PrintSettings = {
   showProposed: boolean;
   showDistrictBoundaries: boolean;
   listSide: 'left' | 'right';
+  /** Bottom capacity list of substations. Off = map uses full sheet below header. */
+  showSsList: boolean;
+  displayPurpose: PrintDisplayPurpose;
+  layoutLocked: boolean;
   /** Screen preview / tile sharpness (px per inch before viewport fit). */
   previewDpi: PrintPreviewDpi;
   /** Print preview / PDF basemap (same set as the live map). */
@@ -37,7 +45,7 @@ export type PrintSettings = {
 };
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
-  paperId: 'a3',
+  paperId: 'custom',
   orientation: 'landscape',
   customWidthMm: 420,
   customHeightMm: 297,
@@ -49,6 +57,9 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   showProposed: true,
   showDistrictBoundaries: true,
   listSide: 'right',
+  showSsList: true,
+  displayPurpose: 'auto',
+  layoutLocked: false,
   previewDpi: 96,
   basemap: 'esri',
 };
@@ -74,10 +85,9 @@ export const PRINT_BASEMAPS: {
 
 export function paperSizeMm(settings: PrintSettings): { widthMm: number; heightMm: number } {
   if (settings.paperId === 'custom') {
-    // Custom uses exact entered mm — do not swap by orientation
     return {
-      widthMm: Math.min(1200, Math.max(100, Number(settings.customWidthMm) || 100)),
-      heightMm: Math.min(1200, Math.max(100, Number(settings.customHeightMm) || 100)),
+      widthMm: Math.min(PRINT_SHEET_MAX_MM, Math.max(PRINT_SHEET_MIN_MM, Number(settings.customWidthMm) || PRINT_SHEET_MIN_MM)),
+      heightMm: Math.min(PRINT_SHEET_MAX_MM, Math.max(PRINT_SHEET_MIN_MM, Number(settings.customHeightMm) || PRINT_SHEET_MIN_MM)),
     };
   }
   const p = PRINT_PAPERS[settings.paperId];
@@ -224,10 +234,16 @@ body.is-printing .print-map-canvas.leaflet-container {
   overflow: hidden !important;
 }
 body.is-printing .print-side-list {
-  max-height: 22% !important;
+  max-height: calc(var(--print-list-frac, 0.18) * 100%) !important;
   min-height: 0 !important;
   overflow: hidden !important;
   flex-shrink: 0 !important;
+}
+body.is-printing .print-sheet.map-only .print-sheet-body {
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+body.is-printing .print-sheet.map-only .print-side-list {
+  display: none !important;
 }
 @media print {
   html, body {
@@ -323,6 +339,12 @@ body.is-printing .print-side-list {
     height: auto !important;
     overflow: hidden !important;
     grid-template-rows: minmax(0, 1fr) auto !important;
+  }
+  .print-sheet.map-only .print-sheet-body {
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+  .print-sheet.map-only .print-side-list {
+    display: none !important;
   }
   .print-map-pane {
     position: relative !important;

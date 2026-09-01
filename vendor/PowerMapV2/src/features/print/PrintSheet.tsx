@@ -17,6 +17,7 @@ import {
   type PrintSettings,
 } from '@/lib/printLayout';
 import { printSaveFilename, printSaveFilenameStem } from '@/lib/outputNames';
+import { listStripFraction, sheetSizeLabel } from '@/lib/printSuggest';
 import { useNetworkStore } from '@/store/networkStore';
 
 function escapeHtml(text: string) {
@@ -579,7 +580,7 @@ export function PrintSheet({
     () => previewSheetPx(settings, viewport),
     [settings, viewport],
   );
-  const layoutKey = `${settings.paperId}-${settings.orientation}-${preview.widthPx}x${preview.heightPx}-${settings.previewDpi}-${size.widthMm}x${size.heightMm}-${settings.listSide}`;
+  const layoutKey = `${settings.paperId}-${settings.orientation}-${preview.widthPx}x${preview.heightPx}-${settings.previewDpi}-${size.widthMm}x${size.heightMm}-${settings.showSsList}-${settings.listSide}`;
 
   const listRows = useMemo(() => {
     const inDistrict = new Set(bundle?.inDistrictIds ?? []);
@@ -597,6 +598,8 @@ export function PrintSheet({
 
   const totalMva = listRows.reduce((sum, s) => sum + installedMva(s.transformers), 0);
   const listCols = listColumnCount(listRows.length);
+  const showSsList = settings.showSsList ?? true;
+  const listFrac = listStripFraction(listRows.length, showSsList);
   const sheetTitle = printSheetTitle(settings, bundle?.districtNames ?? []);
   const statsSub = listRows.length
     ? `${listRows.length} substations · ${totalMva.toFixed(0)} MVA`
@@ -700,8 +703,9 @@ export function PrintSheet({
         <div className="print-toolbar-meta">
           <strong>Print preview</strong>
           <span>
-            {size.widthMm} × {size.heightMm} mm · {listRows.length} SS · preview{' '}
-            {Math.round(preview.scale * 100)}%
+            {sheetSizeLabel(settings)} · {listRows.length} SS
+            {showSsList ? '' : ' · map only'}
+            {preview.scale < 1 ? ` · preview ${Math.round(preview.scale * 100)}%` : ''}
           </span>
           <span className="muted" title="Default name when you Save as PDF">
             Save as: {saveFilename}
@@ -828,7 +832,7 @@ export function PrintSheet({
 
       <div className="print-stage">
         <div
-          className={`print-sheet list-${settings.listSide} cols-${listCols}`}
+          className={`print-sheet list-${settings.listSide}${showSsList ? '' : ' map-only'}`}
           style={
             isPrinting
               ? {
@@ -837,6 +841,7 @@ export function PrintSheet({
                   maxWidth: 'none',
                   maxHeight: 'none',
                   aspectRatio: 'auto',
+                  ['--print-list-frac' as string]: String(listFrac),
                   ['--print-list-cols' as string]: String(listCols),
                 }
               : {
@@ -844,6 +849,7 @@ export function PrintSheet({
                   height: preview.heightPx,
                   maxWidth: '100%',
                   flexShrink: 0,
+                  ['--print-list-frac' as string]: String(listFrac),
                   ['--print-list-cols' as string]: String(listCols),
                 }
           }
@@ -894,30 +900,32 @@ export function PrintSheet({
               )}
             </div>
 
-            <aside className="print-side-list">
-              <ol className="print-ss-list">
-                {listRows.map((ss, i) => (
-                  <li key={ss.id}>
-                    <span className="print-ss-idx">{i + 1}</span>
-                    <span
-                      className={`print-volt-dot v-${ss.voltageCode}`}
-                      aria-hidden
-                    />
-                    <span className="print-ss-name">
-                      {ss.name}
-                      {ss.status === 'proposed' ? '*' : ''}
-                    </span>
-                    <span className="print-ss-cap">
-                      {formatCapacity(ss.transformers)}
-                    </span>
-                    <span className="print-ss-kv">{ss.voltageCode}</span>
-                  </li>
-                ))}
-                {!listRows.length && !busy && (
-                  <li className="print-ss-empty">No substations in selection.</li>
-                )}
-              </ol>
-            </aside>
+            {showSsList ? (
+              <aside className="print-side-list">
+                <ol className="print-ss-list">
+                  {listRows.map((ss, i) => (
+                    <li key={ss.id}>
+                      <span className="print-ss-idx">{i + 1}</span>
+                      <span
+                        className={`print-volt-dot v-${ss.voltageCode}`}
+                        aria-hidden
+                      />
+                      <span className="print-ss-name">
+                        {ss.name}
+                        {ss.status === 'proposed' ? '*' : ''}
+                      </span>
+                      <span className="print-ss-cap">
+                        {formatCapacity(ss.transformers)}
+                      </span>
+                      <span className="print-ss-kv">{ss.voltageCode}</span>
+                    </li>
+                  ))}
+                  {!listRows.length && !busy && (
+                    <li className="print-ss-empty">No substations in selection.</li>
+                  )}
+                </ol>
+              </aside>
+            ) : null}
           </div>
         </div>
       </div>

@@ -35,7 +35,12 @@ import {
   type SceneId,
 } from '@/lib/mapScope';
 import {
+  boundsGeoAspect,
+  suggestPrintLayout,
+} from '@/lib/printSuggest';
+import {
   DEFAULT_PRINT_SETTINGS,
+  buildPrintAssets,
   printSheetTitle,
   type PrintSettings,
 } from '@/lib/printLayout';
@@ -214,6 +219,7 @@ interface NetworkStore extends UiState {
   voltageCheckBasemap: 'google' | 'none';
   printSettings: PrintSettings;
   printPreviewOpen: boolean;
+  printLayoutHint: string;
   substations: Substation[];
   lines: TrunkLine[];
   tapNodes: TapNode[];
@@ -299,6 +305,7 @@ interface NetworkStore extends UiState {
   setDistrictLabelPosition: (name: string, lat: number, lng: number) => void;
   resetDistrictLabelPositions: () => void;
   syncPrintFromScope: () => void;
+  applySuggestedPrintLayout: (force?: boolean) => Promise<void>;
   scopeBadgeLabel: () => string;
   approveSuggestion: (id: string) => Promise<void>;
   rejectSuggestion: (id: string) => Promise<void>;
@@ -492,6 +499,7 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   voltageCheckBasemap: 'google',
   printSettings: { ...DEFAULT_PRINT_SETTINGS },
   printPreviewOpen: false,
+  printLayoutHint: '',
   sceneId: 'overview',
   voltageFocus: 'all',
   substations: [],
@@ -1295,6 +1303,38 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
   setPrintSettings: (patch) =>
     set({ printSettings: { ...get().printSettings, ...patch } }),
 
+  applySuggestedPrintLayout: async (force = false) => {
+    const settings = get().printSettings;
+    if (settings.layoutLocked && !force) return;
+    const bundle = await buildPrintAssets(
+      get().substations,
+      get().lines,
+      settings.districts,
+      { includeProposed: settings.showProposed },
+    );
+    const metrics = {
+      bounds: bundle.bounds,
+      geoAspect: boundsGeoAspect(bundle.bounds),
+      districtCount: settings.districts.length || bundle.districtNames.length,
+      ssCount: bundle.inDistrictIds.length,
+    };
+    const suggestion = suggestPrintLayout(metrics, settings.displayPurpose, {
+      showSsList: settings.showSsList,
+    });
+    set({
+      printSettings: {
+        ...settings,
+        paperId: suggestion.paperId,
+        orientation: suggestion.orientation,
+        customWidthMm: suggestion.customWidthMm,
+        customHeightMm: suggestion.customHeightMm,
+        previewDpi: suggestion.previewDpi,
+        layoutLocked: false,
+      },
+      printLayoutHint: suggestion.hint,
+    });
+  },
+
   setPrintPreviewOpen: (printPreviewOpen) => set({ printPreviewOpen }),
 
   applyScene: (id) => {
@@ -1432,8 +1472,10 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
         ...patch,
         title: prev.title.trim() ? prev.title : autoTitle,
         subtitle: '',
+        layoutLocked: false,
       },
     });
+    void get().applySuggestedPrintLayout(true);
     get().flashStatus(
       patch.districts.length
         ? `Print scope · ${patch.districts.length} district(s)`

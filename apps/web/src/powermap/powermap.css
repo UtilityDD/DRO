@@ -2280,9 +2280,16 @@
   min-height: 0;
   overflow: hidden;
   display: grid;
-  /* Map fills remaining space; capacity list is a compact bottom strip */
   grid-template-rows: minmax(0, 1fr) auto;
   grid-template-columns: 1fr;
+}
+
+.pm-root .print-sheet.map-only .print-sheet-body{
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.pm-root .print-sheet.map-only .print-side-list{
+  display: none;
 }
 
 .pm-root .print-sheet.list-left .print-sheet-body, .pm-root .print-sheet.list-right .print-sheet-body{
@@ -2333,8 +2340,24 @@
   border-top: 1px solid #cbd5e1;
   background: #f8fafc;
   flex-shrink: 0;
-  max-height: 22%;
+  max-height: calc(var(--print-list-frac, 0.18) * 100%);
   overflow: hidden;
+}
+
+.pm-root .print-suggest-card{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.pm-root .print-suggest-card strong{
+  display: block;
+  font-size: 15px;
+  margin-top: 2px;
 }
 
 .pm-root .print-side-head{

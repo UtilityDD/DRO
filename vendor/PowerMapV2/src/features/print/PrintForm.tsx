@@ -1,16 +1,32 @@
 import { useEffect, type ReactNode } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
-import { PRINT_PAPERS, PRINT_BASEMAPS, PRINT_PREVIEW_DPI_OPTIONS, paperSizeMm, printSheetTitle, previewSheetPx, type PrintPaperId } from '@/lib/printLayout';
+import {
+  PRINT_BASEMAPS,
+  PRINT_PREVIEW_DPI_OPTIONS,
+  PRINT_SHEET_MAX_MM,
+  PRINT_SHEET_MIN_MM,
+  paperSizeMm,
+  previewSheetPx,
+  printSheetTitle,
+  type PrintPaperId,
+} from '@/lib/printLayout';
+import {
+  PRINT_DISPLAY_PURPOSES,
+  formatSheetFeet,
+  formatSheetFeetDecimal,
+  isoShortcutSettings,
+  sheetSizeLabel,
+  type PrintDisplayPurpose,
+} from '@/lib/printSuggest';
 import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 
 const QUICK_DISTRICTS = [...SITING_DISTRICTS];
 
-const PAPER_OPTIONS: { id: PrintPaperId; label: string }[] = [
-  { id: 'a4', label: PRINT_PAPERS.a4.label },
-  { id: 'a3', label: PRINT_PAPERS.a3.label },
-  { id: 'a2', label: PRINT_PAPERS.a2.label },
-  { id: 'a1', label: PRINT_PAPERS.a1.label },
-  { id: 'custom', label: 'Custom (mm)' },
+const ISO_SHORTCUTS: { id: Exclude<PrintPaperId, 'custom'>; label: string }[] = [
+  { id: 'a4', label: 'A4' },
+  { id: 'a3', label: 'A3' },
+  { id: 'a2', label: 'A2' },
+  { id: 'a1', label: 'A1' },
 ];
 
 export function PrintForm() {
@@ -19,15 +35,9 @@ export function PrintForm() {
   const setPrintPreviewOpen = useNetworkStore((s) => s.setPrintPreviewOpen);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
   const syncPrintFromScope = useNetworkStore((s) => s.syncPrintFromScope);
+  const applySuggestedPrintLayout = useNetworkStore((s) => s.applySuggestedPrintLayout);
+  const printLayoutHint = useNetworkStore((s) => s.printLayoutHint);
   const scopeBadgeLabel = useNetworkStore((s) => s.scopeBadgeLabel);
-  const sceneId = useNetworkStore((s) => s.sceneId);
-  const filters = useNetworkStore((s) => s.filters);
-  const focusedDistricts = useNetworkStore((s) => s.mapLayers.focusedDistricts);
-  const dimAll = useNetworkStore((s) => s.mapLayers.dimAllDistricts);
-  void sceneId;
-  void filters;
-  void focusedDistricts;
-  void dimAll;
   const badge = scopeBadgeLabel();
 
   const districts =
@@ -40,11 +50,10 @@ export function PrintForm() {
 
   const toggleDistrict = (name: string) => {
     const has = settings.districts.includes(name);
-    setPrintSettings({
-      districts: has
-        ? settings.districts.filter((d) => d !== name)
-        : [...settings.districts, name],
-    });
+    const next = has
+      ? settings.districts.filter((d) => d !== name)
+      : [...settings.districts, name];
+    setPrintSettings({ districts: next, layoutLocked: false });
   };
 
   const districtKey = settings.districts.join('|');
@@ -55,11 +64,23 @@ export function PrintForm() {
     });
   }, [districtKey, settings.title, settings.districts, setPrintSettings]);
 
+  useEffect(() => {
+    if (settings.layoutLocked) return;
+    void applySuggestedPrintLayout();
+  }, [districtKey, settings.displayPurpose, settings.showSsList, settings.layoutLocked, applySuggestedPrintLayout]);
+
+  const setPurpose = (id: PrintDisplayPurpose) => {
+    const patch: Partial<typeof settings> = { displayPurpose: id, layoutLocked: false };
+    if (id === 'noticeboard') patch.showSsList = false;
+    else if (id === 'desk') patch.showSsList = true;
+    setPrintSettings(patch);
+  };
+
   return (
     <div className="form-stack">
       <p className="muted">
-        Office wall / desk maps — clean basemap, SS names, feeder lengths, and a capacity
-        list beside the map. Choose paper size and districts, then open print preview.
+        Custom-fit maps for desk, wall, or noticeboard — page size follows district shape. Toggle
+        the SS capacity list to give the map the full sheet.
       </p>
 
       <div className="print-scope-card">
@@ -71,6 +92,54 @@ export function PrintForm() {
           Use current scope
         </button>
       </div>
+
+      <p className="section-label">Display purpose</p>
+      <div className="chip-group" role="group" aria-label="Display purpose">
+        {PRINT_DISPLAY_PURPOSES.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            className={`chip${settings.displayPurpose === p.id ? ' on' : ''}`}
+            title={p.blurb}
+            aria-pressed={settings.displayPurpose === p.id}
+            onClick={() => setPurpose(p.id)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="print-suggest-card">
+        <div>
+          <span className="muted">Suggested sheet</span>
+          <strong>{sheetSizeLabel(settings)}</strong>
+          <span className="muted">{formatSheetFeetDecimal(size.widthMm, size.heightMm)}</span>
+        </div>
+        {printLayoutHint ? <p className="muted">{printLayoutHint}</p> : null}
+        <div className="btn-row">
+          <button
+            type="button"
+            className="primary-btn ghost"
+            onClick={() => void applySuggestedPrintLayout(true)}
+          >
+            Recalculate fit
+          </button>
+          {settings.layoutLocked ? (
+            <span className="muted">Manual size — recalculate to return to auto fit</span>
+          ) : null}
+        </div>
+      </div>
+
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={settings.showSsList ?? true}
+          onChange={(e) =>
+            setPrintSettings({ showSsList: e.target.checked, layoutLocked: false })
+          }
+        />
+        Show substation capacity list (off = map uses full page below header)
+      </label>
 
       <Field label="Title">
         <input
@@ -87,41 +156,70 @@ export function PrintForm() {
         />
       </Field>
 
-      <Field label="Paper size">
-        <select
-          value={settings.paperId}
-          onChange={(e) =>
-            setPrintSettings({ paperId: e.target.value as PrintPaperId })
-          }
-        >
-          {PAPER_OPTIONS.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </Field>
+      <p className="section-label">Sheet size</p>
+      <p className="muted">
+        Auto mode uses <strong>custom</strong> mm from map shape — not forced to ISO.
+      </p>
+      <div className="field-row">
+        <Field label="Width">
+          <input
+            type="number"
+            min={PRINT_SHEET_MIN_MM}
+            max={PRINT_SHEET_MAX_MM}
+            value={settings.customWidthMm}
+            onChange={(e) =>
+              setPrintSettings({
+                paperId: 'custom',
+                customWidthMm: Math.min(
+                  PRINT_SHEET_MAX_MM,
+                  Math.max(PRINT_SHEET_MIN_MM, Number(e.target.value) || PRINT_SHEET_MIN_MM),
+                ),
+                layoutLocked: true,
+              })
+            }
+          />
+        </Field>
+        <Field label="Height">
+          <input
+            type="number"
+            min={PRINT_SHEET_MIN_MM}
+            max={PRINT_SHEET_MAX_MM}
+            value={settings.customHeightMm}
+            onChange={(e) =>
+              setPrintSettings({
+                paperId: 'custom',
+                customHeightMm: Math.min(
+                  PRINT_SHEET_MAX_MM,
+                  Math.max(PRINT_SHEET_MIN_MM, Number(e.target.value) || PRINT_SHEET_MIN_MM),
+                ),
+                layoutLocked: true,
+              })
+            }
+          />
+        </Field>
+      </div>
+      <p className="muted">
+        <strong>{formatSheetFeet(size.widthMm, size.heightMm)}</strong>
+        {' · '}
+        {size.widthMm} × {size.heightMm} mm
+        {' · '}
+        {settings.orientation}
+        {preview.scale < 1 ? ` · preview ${Math.round(preview.scale * 100)}% fit` : ''}
+      </p>
 
-      <div className="chip-group" role="group" aria-label="Quick paper size">
-        {PAPER_OPTIONS.map((o) => (
+      <p className="section-label">ISO shortcut (optional)</p>
+      <div className="chip-group" role="group" aria-label="ISO paper shortcut">
+        {ISO_SHORTCUTS.map((o) => (
           <button
             key={o.id}
             type="button"
             className={`chip${settings.paperId === o.id ? ' on' : ''}`}
-            aria-pressed={settings.paperId === o.id}
-            onClick={() => setPrintSettings({ paperId: o.id })}
+            onClick={() => setPrintSettings(isoShortcutSettings(o.id, settings.orientation))}
           >
-            {o.id === 'custom' ? 'Custom' : o.id.toUpperCase()}
+            {o.label}
           </button>
         ))}
       </div>
-      <p className="muted">
-        Sheet: <strong>{size.widthMm} × {size.heightMm} mm</strong>
-        {settings.paperId === 'custom' ? ' (exact custom size)' : ` (${settings.orientation})`}
-        {' · '}
-        preview ~{preview.widthPx} × {preview.heightPx} px
-        {preview.scale < 1 ? ` (${Math.round(preview.scale * 100)}% fit)` : ''}
-      </p>
 
       <Field label="Preview DPI">
         <select
@@ -139,74 +237,26 @@ export function PrintForm() {
           ))}
         </select>
       </Field>
-      <p className="muted">
-        Higher DPI loads sharper map tiles in preview. The sheet still fits your screen; use Print
-        for full resolution PDF.
-      </p>
-
-      {settings.paperId !== 'custom' && (
-        <Field label="Orientation">
-          <select
-            value={settings.orientation}
-            onChange={(e) =>
-              setPrintSettings({
-                orientation: e.target.value as 'landscape' | 'portrait',
-              })
-            }
-          >
-            <option value="landscape">Landscape</option>
-            <option value="portrait">Portrait</option>
-          </select>
-        </Field>
-      )}
-
-      {settings.paperId === 'custom' && (
-        <div className="field-row">
-          <Field label="Width (mm)">
-            <input
-              type="number"
-              min={100}
-              max={1200}
-              value={settings.customWidthMm}
-              onChange={(e) =>
-                setPrintSettings({
-                  customWidthMm: Math.min(1200, Math.max(100, Number(e.target.value) || 100)),
-                })
-              }
-            />
-          </Field>
-          <Field label="Height (mm)">
-            <input
-              type="number"
-              min={100}
-              max={1200}
-              value={settings.customHeightMm}
-              onChange={(e) =>
-                setPrintSettings({
-                  customHeightMm: Math.min(1200, Math.max(100, Number(e.target.value) || 100)),
-                })
-              }
-            />
-          </Field>
-        </div>
-      )}
-      {settings.paperId === 'custom' && (
-        <p className="muted">Enter final page width × height (100–1200 mm). Orientation is not applied.</p>
-      )}
 
       <p className="section-label">Districts</p>
       <div className="btn-row">
         <button
           type="button"
           className="text-btn"
-          onClick={() => setPrintSettings({ districts: [...QUICK_DISTRICTS] })}
+          onClick={() => {
+            setPrintSettings({ districts: [...QUICK_DISTRICTS], layoutLocked: false });
+            void applySuggestedPrintLayout();
+          }}
         >
           Malda + Dinajpurs
         </button>
         <button
           type="button"
           className="text-btn"
-          onClick={() => setPrintSettings({ districts: [] })}
+          onClick={() => {
+            setPrintSettings({ districts: [], layoutLocked: false });
+            void applySuggestedPrintLayout();
+          }}
         >
           Clear (all)
         </button>
@@ -226,7 +276,7 @@ export function PrintForm() {
       <p className="muted">
         {settings.districts.length === 0
           ? 'No district filter — full network (still respects proposed toggle).'
-          : `${settings.districts.length} district(s) — map zooms to the area. Linked outside SS show a symbol + name when they fall in the page view.`}
+          : `${settings.districts.length} district(s) — map zooms to the area.`}
       </p>
 
       <p className="section-label">Map content</p>
