@@ -1,9 +1,10 @@
 /**
- * Fail fast if this repo is linked to the wrong Vercel project.
+ * Fail fast if this repo is linked to the wrong Vercel project or account.
  * Run before any production deploy: npm run deploy:verify
  */
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
 const targetPath = path.join(root, 'deploy', 'target.json');
@@ -18,15 +19,36 @@ function loadTarget() {
   return JSON.parse(fs.readFileSync(targetPath, 'utf8'));
 }
 
+function vercelWhoami() {
+  const result = spawnSync('npx', ['--yes', 'vercel@59.5.0', 'whoami'], {
+    cwd: root,
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+  });
+  if (result.status !== 0) return '';
+  return String(result.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop() || '';
+}
+
 function main() {
   const target = loadTarget();
   const expected = target.vercel.project == null ? '' : String(target.vercel.project).trim();
   const productionUrl = String(target.vercel.productionUrl || 'https://dro-insight.vercel.app/');
   const forbidden = (target.vercel.forbiddenProjects || []).map((n) => String(n).toLowerCase());
+  const forbiddenLogins = (target.vercel.forbiddenVercelLogins || []).map((n) =>
+    String(n).toLowerCase(),
+  );
+  const expectedLogin = String(target.vercel.expectedVercelLogin || '').trim().toLowerCase();
 
   console.log(`[deploy:verify] Product: ${target.product}`);
   console.log(`[deploy:verify] Canonical URL: ${productionUrl}`);
   console.log(`[deploy:verify] Expected Vercel project: ${expected || '(not set — ask user / set deploy/target.json)'}`);
+  if (expectedLogin) {
+    console.log(`[deploy:verify] Expected Vercel login: ${expectedLogin}`);
+  }
   console.log(`[deploy:verify] Forbidden Vercel projects: ${forbidden.join(', ')}`);
   console.log(`[deploy:verify] Never deploy to: ${(target.vercel.forbiddenProductionHosts || []).join(', ')}`);
   console.log('');
@@ -40,8 +62,41 @@ function main() {
     process.exit(1);
   }
 
+  const whoami = vercelWhoami();
+  if (whoami) {
+    console.log(`[deploy:verify] Vercel CLI login: ${whoami}`);
+    const lower = whoami.toLowerCase();
+    if (forbiddenLogins.includes(lower)) {
+      console.error('');
+      console.error(`[deploy:verify] BLOCKED: Vercel CLI is logged in as "${whoami}".`);
+      console.error(
+        `[deploy:verify] DRO production lives on the ${expectedLogin || 'smartlinemanapp'} account that owns ${productionUrl}.`,
+      );
+      console.error('[deploy:verify] Do not run vercel link or vercel deploy --prod from this account.');
+      console.error('[deploy:verify] Ship with: git push slm main');
+      console.error('');
+      console.error('See docs/DEPLOYMENT.md');
+      process.exit(1);
+    }
+    if (expectedLogin && lower !== expectedLogin) {
+      console.error('');
+      console.error(`[deploy:verify] BLOCKED: expected Vercel login "${expectedLogin}", got "${whoami}".`);
+      console.error('[deploy:verify] Log out and sign in to the account that owns dro-insight.vercel.app.');
+      console.error('');
+      process.exit(1);
+    }
+  } else if (strict) {
+    console.error('[deploy:verify] BLOCKED: could not determine Vercel CLI login.');
+    console.error('[deploy:verify] Run: npx vercel login');
+    process.exit(1);
+  }
+
   if (!fs.existsSync(linkPath)) {
-    const msg = `[deploy:verify] No .vercel/project.json — link this repo first:\n  npx vercel link --project ${expected} --yes`;
+    const msg =
+      `[deploy:verify] No .vercel/project.json — production deploy is git-push only:\n` +
+      '  git push slm main\n' +
+      `  (auto-deploy on the account that owns ${productionUrl})\n` +
+      '  Do not vercel link from utilitydd. See docs/DEPLOYMENT.md';
     if (strict) {
       console.error(msg);
       process.exit(1);
@@ -66,7 +121,7 @@ function main() {
       console.error(`[deploy:verify] BLOCKED: this folder is linked to forbidden project "${linkedName}".`);
       console.error('[deploy:verify] That is not the DRO production project (dro-insight.vercel.app).');
       console.error('');
-      console.error(`Relink safely:\n  Remove-Item -Recurse -Force .vercel\n  npx vercel link --project ${expected} --yes`);
+      console.error('Remove-Item -Recurse -Force .vercel');
       console.error('');
       console.error('See docs/DEPLOYMENT.md');
       process.exit(1);
@@ -75,7 +130,7 @@ function main() {
     if (lower !== expected.toLowerCase()) {
       console.error('');
       console.error(`[deploy:verify] BLOCKED: linked project "${linkedName}" does not match "${expected}".`);
-      console.error(`Relink: npx vercel link --project ${expected} --yes`);
+      console.error('Remove-Item -Recurse -Force .vercel');
       console.error('See docs/DEPLOYMENT.md');
       process.exit(1);
     }

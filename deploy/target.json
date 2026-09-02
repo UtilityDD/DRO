@@ -5,6 +5,13 @@
     "productionUrl": "https://dro-insight.vercel.app/",
     "project": "dro-insight",
     "deployMethod": "Git push to slm remote (smartlinemanapp/dro-insight) triggers Vercel auto-deploy on the account that owns dro-insight.vercel.app. Do not CLI deploy from utilitydd team.",
+    "expectedVercelLogin": "smartlinemanapp",
+    "forbiddenVercelLogins": [
+      "utilitydd"
+    ],
+    "forbiddenTeamSlugPatterns": [
+      "dipankar-das-projects"
+    ],
     "forbiddenProjects": [
       "slm",
       "slm_web",
@@ -22,13 +29,14 @@
       "smartlineman.in",
       "www.smartlineman.in",
       "slmweb-ivory.vercel.app",
-      "dro-ops.vercel.app"
+      "dro-ops.vercel.app",
+      "dro-insight-opal.vercel.app"
     ]
   },
   "git": {
     "primaryRemote": "origin",
-    "primaryRemoteUrl": "https://github.com/UtilityDD/DRO.git",
     "mirrorRemote": "slm",
+    "primaryRemoteUrl": "https://github.com/UtilityDD/DRO.git",
     "mirrorRemoteUrl": "https://github.com/smartlinemanapp/dro-insight.git",
     "mirrorNote": "The slm git remote is a DRO code mirror only. It is NOT the SLM app repository and must never be used to pick a Vercel project."
   }

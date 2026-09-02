@@ -377,19 +377,18 @@ Safe ship path (Power Map CSS changes):
 ```bash
 node scripts/scope-powermap-css.mjs   # after vendor/PowerMapV2 CSS edits
 npm run build                         # must pass
-npm run deploy:verify                 # must not say BLOCKED (CLI deploy only)
 ```
+
+**Production deploy — git push only** (do **not** CLI-deploy from **utilitydd**):
 
 ```bash
 git push origin main          # github.com/UtilityDD/DRO
 git push slm main             # github.com/smartlinemanapp/dro-insight → Vercel auto-deploy
 ```
 
-The `slm` **git** push (from the **utility.dipankar@gmail.com** GitHub identity) is what Vercel on **smartlinemanapp@gmail.com** uses for **dro-insight.vercel.app**. GitHub ≠ Vercel ≠ Power Map Supabase. Do not CLI-deploy DRO while logged into a Vercel account that is not **smartlinemanapp@gmail.com**.
+The `slm` **git** push triggers Vercel on **smartlinemanapp@gmail.com** for **dro-insight.vercel.app**. GitHub (`utility.dipankar@gmail.com`) ≠ Vercel (smartlinemanapp) ≠ Power Map Supabase.
 
-There is usually **no** local `.vercel/project.json`. Prefer **git push `slm`** for production; only run `npm run deploy:prod` when verify passes and you need a CLI deploy.
-
-Forbidden Vercel projects: `slm`, `slm_web`, `dro-ops`, and the list in `deploy/target.json`.
+`npm run deploy:verify` **blocks** `utilitydd` CLI login. There is usually **no** local `.vercel/project.json`. If `vercel link` created a project under `dipankar-das-projects` / `dro-insight-opal.vercel.app`, delete that mistaken project and remove `.vercel` — see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 After deploy, smoke-test **https://dro-insight.vercel.app/** — DRO login, not an SLM landing page.
 

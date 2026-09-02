@@ -133,6 +133,23 @@ npm run deploy:prod       # Vercel deploy to the project that owns dro-insight o
 
 ## Roll back a mistaken production deploy
 
+If DRO was deployed to the **wrong Vercel account** (e.g. `utilitydd` / `dipankar-das-projects` → `dro-insight-opal.vercel.app` instead of **https://dro-insight.vercel.app/**):
+
+1. **Stop** — do not run `vercel deploy --prod` again from the wrong login.
+2. **Remove the local link** (safe, always do this):
+   ```powershell
+   Remove-Item -Recurse -Force .vercel
+   Remove-Item -Force .env.local   # if vercel link created it
+   ```
+3. **Delete the mistaken project** on the wrong account (Vercel dashboard → that team → **dro-insight** → Settings → Delete), **or** from CLI while still logged in as that wrong account:
+   ```bash
+   npx vercel project rm dro-insight --yes
+   ```
+4. **Ship to the real production project** — log into **smartlinemanapp@gmail.com** (the account that owns `dro-insight.vercel.app`) and either:
+   - Confirm the `smartlinemanapp/dro-insight` Git integration auto-deployed `main`, or
+   - Redeploy the latest `main` commit from the Vercel dashboard for **dro-insight**.
+5. **Never** `vercel link` from **utilitydd** — same project name, different team. `npm run deploy:verify` now blocks that login.
+
 If DRO was deployed to **`slm`** by accident:
 
 1. **Do not** run `vercel deploy --prod` again from this repo.
