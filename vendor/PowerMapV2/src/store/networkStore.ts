@@ -1310,7 +1310,11 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
       get().substations,
       get().lines,
       settings.districts,
-      { includeProposed: settings.showProposed },
+      {
+        includeProposed: settings.showProposed,
+        tapNodes: get().tapNodes,
+        tapLaterals: get().tapLaterals,
+      },
     );
     const metrics = {
       bounds: bundle.bounds,

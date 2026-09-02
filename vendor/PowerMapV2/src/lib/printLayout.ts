@@ -1,4 +1,4 @@
-import type { Substation, TrunkLine } from '@/domain/types';
+import type { Substation, TapLateral, TapNode, TrunkLine } from '@/domain/types';
 import { loadDistrictPolygons } from '@/lib/districts';
 import type { PrintDisplayPurpose } from '@/lib/printSuggest';
 
@@ -21,6 +21,18 @@ export const PRINT_PAPERS: Record<
 
 export type PrintPreviewDpi = 72 | 96 | 120 | 150 | 200;
 
+export type PrintLabelSize = 'small' | 'normal' | 'large';
+
+export const PRINT_LABEL_SIZE_OPTIONS: {
+  value: PrintLabelSize;
+  label: string;
+  multiplier: number;
+}[] = [
+  { value: 'small', label: 'Small', multiplier: 0.85 },
+  { value: 'normal', label: 'Normal', multiplier: 1 },
+  { value: 'large', label: 'Large', multiplier: 1.28 },
+];
+
 export type PrintSettings = {
   paperId: PrintPaperId;
   orientation: PrintOrientation;
@@ -42,6 +54,8 @@ export type PrintSettings = {
   previewDpi: PrintPreviewDpi;
   /** Print preview / PDF basemap (same set as the live map). */
   basemap: 'google' | 'google-hybrid' | 'osm' | 'esri' | 'none';
+  /** Map label typography — SS names and feeder lengths. */
+  labelSize: PrintLabelSize;
 };
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
@@ -62,6 +76,7 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   layoutLocked: false,
   previewDpi: 96,
   basemap: 'esri',
+  labelSize: 'normal',
 };
 
 export const PRINT_PREVIEW_DPI_OPTIONS: { value: PrintPreviewDpi; label: string }[] = [
@@ -399,11 +414,15 @@ export type PrintDistrictBoundary = {
 export type PrintAssetBundle = {
   substations: Substation[];
   lines: TrunkLine[];
+  tapNodes: TapNode[];
+  tapLaterals: TapLateral[];
   /** SS that sit inside the selected district polygon(s). */
   inDistrictIds: string[];
   districtNames: string[];
   districtBoundaries: PrintDistrictBoundary[];
   bounds: [[number, number], [number, number]] | null;
+  /** Tight hull around printed network — used for map fit (esp. multi-district). */
+  contentBounds: [[number, number], [number, number]] | null;
 };
 
 function expandBoundsWithPoints(
@@ -434,7 +453,11 @@ export async function buildPrintAssets(
   substations: Substation[],
   lines: TrunkLine[],
   districtNames: string[],
-  opts?: { includeProposed?: boolean },
+  opts?: {
+    includeProposed?: boolean;
+    tapNodes?: TapNode[];
+    tapLaterals?: TapLateral[];
+  },
 ): Promise<PrintAssetBundle> {
   const includeProposed = opts?.includeProposed ?? true;
   const allDistricts = (await loadDistrictPolygons()) as DistrictPoly[];
@@ -535,12 +558,71 @@ export async function buildPrintAssets(
   // so the map stays zoomed to the selected area.
   bounds = expandBoundsWithPoints(bounds, core);
 
+  const contentPoints: Array<{ lat: number; lng: number }> = [...core];
+  for (const l of filteredLines) {
+    if (coreIds.has(l.fromId)) {
+      const s = ss.find((x) => x.id === l.fromId);
+      if (s) contentPoints.push(s);
+    }
+    if (coreIds.has(l.toId)) {
+      const s = ss.find((x) => x.id === l.toId);
+      if (s) contentPoints.push(s);
+    }
+    const from = ss.find((x) => x.id === l.fromId);
+    const to = ss.find((x) => x.id === l.toId);
+    if (from && to && (coreIds.has(l.fromId) || coreIds.has(l.toId))) {
+      contentPoints.push({
+        lat: (from.lat + to.lat) / 2,
+        lng: (from.lng + to.lng) / 2,
+      });
+    }
+  }
+  const lineIds = new Set(filteredLines.map((l) => l.id));
+  const allTapNodes = opts?.tapNodes ?? [];
+  const tapById = new Map<string, TapNode>();
+  for (const t of allTapNodes) {
+    if (statusOk(t.status) && lineIds.has(t.parentLineId)) tapById.set(t.id, t);
+  }
+
+  const tapLateralsPrint: TapLateral[] = [];
+  for (const lat of opts?.tapLaterals ?? []) {
+    if (!statusOk(lat.status)) continue;
+    if (!tapById.has(lat.fromTapId)) continue;
+    if (lat.toKind === 'substation') {
+      if (!ssIds.has(lat.toAssetId)) continue;
+    } else {
+      const toTap = allTapNodes.find((t) => t.id === lat.toAssetId);
+      if (!toTap || !statusOk(toTap.status) || !lineIds.has(toTap.parentLineId)) continue;
+      tapById.set(toTap.id, toTap);
+    }
+    tapLateralsPrint.push(lat);
+  }
+
+  const tapNodesPrint = [...tapById.values()];
+  for (const t of tapNodesPrint) contentPoints.push(t);
+  for (const lat of tapLateralsPrint) {
+    const fromTap = tapById.get(lat.fromTapId);
+    if (!fromTap) continue;
+    contentPoints.push(fromTap);
+    if (lat.toKind === 'substation') {
+      const targetSs = ss.find((x) => x.id === lat.toAssetId);
+      if (targetSs) contentPoints.push(targetSs);
+    } else {
+      const toTap = tapById.get(lat.toAssetId);
+      if (toTap) contentPoints.push(toTap);
+    }
+  }
+  const contentBoundsWithTaps = expandBoundsWithPoints(null, contentPoints);
+
   return {
     substations: ss,
     lines: filteredLines,
+    tapNodes: tapNodesPrint,
+    tapLaterals: tapLateralsPrint,
     inDistrictIds: [...coreIds],
     districtNames: boundaryDistricts.map((d) => d.name),
     districtBoundaries,
     bounds,
+    contentBounds: contentBoundsWithTaps,
   };
 }

@@ -47,12 +47,16 @@ export function substationIcon(
   status: AssetLifecycle,
   selected = false,
   zoom = 12,
+  sizeScale = 1,
 ): L.DivIcon {
   const color = voltageColor(voltage);
   const filled = status === 'existing';
-  const size = ssSymbolSizeForZoom(zoom, selected);
+  const size = Math.round(
+    Math.min(52, Math.max(9, ssSymbolSizeForZoom(zoom, selected) * sizeScale)),
+  );
   const stroke = size <= 12 ? (selected ? 2 : 1.25) : selected ? 3 : 2;
-  const shape = shapeSvg(voltage, size, color, filled, stroke);
+  const strokeW = Math.max(1, stroke * Math.sqrt(sizeScale));
+  const shape = shapeSvg(voltage, size, color, filled, strokeW);
 
   return L.divIcon({
     className: 'pm-ss-icon',
@@ -124,11 +128,11 @@ export function lineStyle(
   status: AssetLifecycle,
   selected = false,
   isTap = false,
-  opts?: { circuitIndex?: number; parallelTotal?: number; zoom?: number },
+  opts?: { circuitIndex?: number; parallelTotal?: number; zoom?: number; sizeScale?: number },
 ): L.PolylineOptions {
   const parallel = (opts?.parallelTotal ?? 1) > 1;
   const ckt2 = parallel && (opts?.circuitIndex ?? 0) > 0;
-  const scale = lineWeightScaleForZoom(opts?.zoom ?? 12);
+  const scale = lineWeightScaleForZoom(opts?.zoom ?? 12) * (opts?.sizeScale ?? 1);
   const base = selected ? (isTap ? 4 : 5.5) : isTap ? 2.5 : ckt2 ? 3.2 : 3.8;
 
   return {

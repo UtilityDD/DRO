@@ -20,13 +20,39 @@ export type SsLabelPlacement = {
 
 type Box = { x: number; y: number; w: number; h: number };
 
-function estimateSize(name: string): { w: number; h: number } {
-  // Rough px size matching .print-ss-label span (~8.5px Segoe UI)
-  const w = Math.min(160, Math.max(36, name.length * 5.1 + 8));
-  return { w, h: 13 };
+function estimateSize(name: string, scale = 1): { w: number; h: number } {
+  const w = Math.min(
+    180 * scale,
+    Math.max(40 * scale, name.length * 5.6 * scale + 10 * scale),
+  );
+  return { w, h: 14 * scale };
 }
 
-function overlaps(a: Box, b: Box, pad = 2): boolean {
+/** Exported for print drag — must match layout collision box sizing. */
+export function estimateLabelSize(name: string, scale = 1): { w: number; h: number } {
+  return estimateSize(name, scale);
+}
+
+/** Screen-space Y offset below SS symbol — matches live map `.pm-ss-label`. */
+const MAP_LABEL_OFFSET_Y = 12;
+
+/** Screen-space visual center for a label marker (matches print CSS transforms). */
+export function labelVisualCenterLatLng(
+  map: L.Map,
+  labelLat: number,
+  labelLng: number,
+  name: string,
+  callout: boolean,
+  layoutScale: number,
+): L.LatLng {
+  if (callout) return L.latLng(labelLat, labelLng);
+  const pt = map.latLngToContainerPoint([labelLat, labelLng]);
+  const { h } = estimateSize(name, layoutScale);
+  const y = MAP_LABEL_OFFSET_Y * Math.max(0.85, layoutScale);
+  return map.containerPointToLatLng(L.point(pt.x, pt.y + y + h / 2));
+}
+
+function overlaps(a: Box, b: Box, pad = 4): boolean {
   return !(
     a.x + a.w + pad <= b.x ||
     b.x + b.w + pad <= a.x ||
@@ -51,11 +77,29 @@ function offsetRing(radius: number): [number, number][] {
   return out;
 }
 
+/** Default print labels at the SS — same placement idea as the live map (no auto callouts). */
+export function mapStyleSsLabelPlacements(items: SsLabelInput[]): SsLabelPlacement[] {
+  return items.map((it) => ({
+    id: it.id,
+    name: it.name,
+    anchorLat: it.lat,
+    anchorLng: it.lng,
+    labelLat: it.lat,
+    labelLng: it.lng,
+    callout: false,
+  }));
+}
+
 /**
  * Place SS name labels in screen space so they don't overlap.
  * Overlapping names are nudged outward with a callout leader.
+ * @deprecated Prefer mapStyleSsLabelPlacements for print; use Arrange labels to fix overlaps.
  */
-export function layoutSsLabels(map: L.Map, items: SsLabelInput[]): SsLabelPlacement[] {
+export function layoutSsLabels(
+  map: L.Map,
+  items: SsLabelInput[],
+  visualScale = 1,
+): SsLabelPlacement[] {
   const size = map.getSize();
   if (size.x < 40 || size.y < 40 || !items.length) {
     return items.map((it) => ({
@@ -82,6 +126,7 @@ export function layoutSsLabels(map: L.Map, items: SsLabelInput[]): SsLabelPlacem
   });
 
   const placed: { box: Box; placement: SsLabelPlacement }[] = [];
+  const s = Math.max(0.72, visualScale);
   const defaultOffsets: [number, number][] = [
     [12, -7],
     [12, 8],
@@ -91,21 +136,21 @@ export function layoutSsLabels(map: L.Map, items: SsLabelInput[]): SsLabelPlacem
     [0, 16],
     [24, 0],
     [-24, 0],
-    ...offsetRing(28),
-    ...offsetRing(40),
-    ...offsetRing(54),
-    ...offsetRing(70),
-    ...offsetRing(88),
-  ];
+    ...offsetRing(28 * s),
+    ...offsetRing(40 * s),
+    ...offsetRing(54 * s),
+    ...offsetRing(70 * s),
+    ...offsetRing(88 * s),
+  ].map(([dx, dy]) => [dx * s, dy * s] as [number, number]);
 
   for (const it of sorted) {
     const pt = map.latLngToContainerPoint([it.lat, it.lng]);
-    const { w, h } = estimateSize(it.name);
+    const { w, h } = estimateSize(it.name, s);
     let chosen: { dx: number; dy: number; callout: boolean } | null = null;
 
     for (const [dx, dy] of defaultOffsets) {
       // First offset is "home" (no callout if free)
-      const callout = Math.hypot(dx, dy) > 18;
+      const callout = Math.hypot(dx, dy) > 18 * s;
       const cx = callout ? pt.x + dx : pt.x + dx;
       const cy = callout ? pt.y + dy : pt.y + dy;
       const box = callout
@@ -119,14 +164,14 @@ export function layoutSsLabels(map: L.Map, items: SsLabelInput[]): SsLabelPlacem
 
       const hit = placed.some((p) => overlaps(box, p.box));
       if (!hit) {
-        chosen = { dx, dy, callout: Math.hypot(dx, dy) > 16 };
+        chosen = { dx, dy, callout: Math.hypot(dx, dy) > 16 * s };
         break;
       }
     }
 
     if (!chosen) {
       // Last resort: push further out on a diagonal
-      chosen = { dx: 96, dy: -24 * (placed.length % 5), callout: true };
+      chosen = { dx: 96 * s, dy: -24 * s * (placed.length % 5), callout: true };
     }
 
     const labelPt = L.point(pt.x + chosen.dx, pt.y + chosen.dy);

@@ -59,7 +59,7 @@ export function feederLabelPlacement(
 }
 
 /** Pixel gap from line — tighter when zoomed in, a bit more room when zoomed out. */
-export function feederLabelOffsetPx(zoom: number, parallelTotal: number) {
+export function feederLabelOffsetPx(zoom: number, parallelTotal: number, sizeScale = 1) {
   const base = Math.max(7, Math.min(16, 22 - zoom));
-  return base + (parallelTotal > 1 ? 3 : 0);
+  return (base + (parallelTotal > 1 ? 3 : 0)) * sizeScale;
 }

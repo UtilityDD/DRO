@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { useNetworkStore } from '@/store/networkStore';
 import {
   PRINT_BASEMAPS,
+  PRINT_LABEL_SIZE_OPTIONS,
   PRINT_PREVIEW_DPI_OPTIONS,
   PRINT_SHEET_MAX_MM,
   PRINT_SHEET_MIN_MM,
@@ -152,9 +153,30 @@ export function PrintForm() {
         <input
           value={settings.subtitle}
           onChange={(e) => setPrintSettings({ subtitle: e.target.value })}
-          placeholder="Optional — leave blank for substation count · MVA"
+          placeholder="Optional line under the title"
         />
       </Field>
+
+      <p className="section-label">Map labels</p>
+      <div className="field-row">
+        <Field label="Label size">
+          <select
+            value={settings.labelSize ?? 'normal'}
+            onChange={(e) =>
+              setPrintSettings({
+                labelSize: e.target.value as typeof settings.labelSize,
+              })
+            }
+          >
+            {PRINT_LABEL_SIZE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <p className="muted">Affects SS names and feeder length labels on the map.</p>
 
       <p className="section-label">Sheet size</p>
       <p className="muted">

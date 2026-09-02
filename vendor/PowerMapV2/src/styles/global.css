@@ -2222,6 +2222,45 @@ code {
   background: var(--bg, #0f172a);
 }
 
+.print-overlay.label-arrange-mode .print-stage {
+  padding: 0;
+  overflow: hidden;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.print-sheet.arrange-fullpage {
+  flex: 1;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.print-arrange-banner {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: #1e40af;
+  background: #eff6ff;
+  border-bottom: 1px solid #bfdbfe;
+}
+
+.print-overlay.label-arrange-mode .print-sheet-body {
+  flex: 1 1 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+.print-overlay.label-arrange-mode .print-map-pane {
+  min-height: 0;
+  height: 100%;
+}
+
 .print-sheet {
   max-width: calc(100vw - 48px);
   background: #fff;
@@ -2241,8 +2280,8 @@ code {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 6px 10px 5px;
+  gap: 6px;
+  padding: 8px 12px 6px;
   border-bottom: 1px solid #cbd5e1;
   flex: 0 0 auto;
   text-align: center;
@@ -2254,11 +2293,12 @@ code {
 
 .print-sheet-title h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  line-height: 1.15;
+  line-height: 1.12;
   text-align: center;
+  color: #0f172a;
 }
 
 .print-sheet-title p {
@@ -2355,6 +2395,20 @@ code {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  --print-visual-scale: 1;
+}
+
+.print-map-canvas .print-ss-label span {
+  transform: translate(-50%, calc(12px * var(--print-visual-scale, 1)));
+}
+
+.print-map-canvas .print-ss-label span,
+.print-map-canvas .print-feeder-label span {
+  font-size: calc(8.5px * var(--print-visual-scale, 1));
+}
+
+.print-map-canvas .print-feeder-label span {
+  font-size: calc(7.5px * var(--print-visual-scale, 1));
 }
 
 .print-map-canvas.leaflet-container {
@@ -2539,7 +2593,7 @@ code {
 
 .print-ss-label span {
   display: inline-block;
-  transform: translate(10px, -50%);
+  transform: translate(-50%, calc(12px * var(--print-visual-scale, 1)));
   padding: 0 1px;
   border: none;
   border-radius: 0;
@@ -2566,6 +2620,73 @@ code {
   transform: translate(-50%, -50%);
   background: transparent;
   border: none;
+}
+
+.print-map-canvas.labels-arrange .print-ss-label.is-draggable {
+  cursor: grab;
+}
+
+.print-map-canvas.labels-arrange .print-ss-label.is-draggable span {
+  outline: 1px dashed rgba(37, 99, 235, 0.55);
+  outline-offset: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.72);
+  transition:
+    background 0.12s ease,
+    outline-color 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.print-map-canvas.label-drag-active .print-ss-label.is-dragging span {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  background: rgba(239, 246, 255, 0.96);
+  color: #1e3a8a;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.28);
+  cursor: grabbing;
+}
+
+.print-map-canvas.label-drag-active .print-ss-label.is-draggable:not(.is-dragging) span {
+  opacity: 0.42;
+}
+
+.print-map-canvas.label-drag-active .print-ss-label.is-draggable:not(.is-dragging) {
+  pointer-events: none;
+}
+
+.print-map-canvas.labels-arrange.space-pan,
+.print-map-canvas.labels-arrange.space-pan .leaflet-container {
+  cursor: grab !important;
+}
+
+.print-map-canvas.labels-arrange.space-pan .leaflet-container.leaflet-grabbing {
+  cursor: grabbing !important;
+}
+
+.print-toolbar-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.print-toolbar-zoom .print-zoom-btn {
+  min-width: 2.25rem;
+  padding: 4px 8px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.print-map-canvas.labels-arrange .leaflet-marker-draggable {
+  cursor: grabbing;
+}
+
+.print-toolbar .btn-row .primary-btn.ghost.on {
+  background: rgba(37, 99, 235, 0.15);
+  border-color: #2563eb;
+  color: #1d4ed8;
 }
 
 .print-district-label span {
@@ -2636,12 +2757,12 @@ code {
    Keep only non-size print polish here so CSS variables cannot stretch the sheet. */
 @media print {
   .print-sheet-header {
-    padding: 3mm 4mm 2mm !important;
+    padding: 4mm 5mm 3mm !important;
   }
 
   .print-sheet-title h1,
   .print-sheet-header h1 {
-    font-size: 16pt !important;
+    font-size: 22pt !important;
   }
 
   .print-sheet-title p {

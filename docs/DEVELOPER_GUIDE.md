@@ -302,6 +302,35 @@ Run these in the **Power Map** SQL editor (`unsmtschmcvftfqwabaq`), in order whe
 
 After network SQL, hard-refresh Power Map (or force toolbar reload) so the stamp / dump updates. Verify new pins on satellite — some centroids are approximate.
 
+### Print preview / PDF (Power Map)
+
+Desk toolbar → **Print** opens the sheet builder (`vendor/PowerMapV2/src/features/print/`).
+
+| Feature | Notes |
+|---------|--------|
+| Sheet size | Auto custom mm from district shape; ISO shortcuts still available |
+| Label size | Small / Normal / Large — SS names + feeder length labels |
+| Visual scale | `printVisualScale.ts` — symbols, strokes, and label px scale with sheet size (sublinear strokes so large boards stay crisp) |
+| Map fit | `contentBounds` — tight hull around printed network (fixes multi-district whitespace) |
+| Tap laterals | Included in print bundle via `buildPrintAssets` + `PrintSheet` |
+| Arrange labels | Full-screen map; pan/zoom toolbar; drag one label without moving others |
+| Default label position | At the SS symbol (same idea as live map); use **Arrange labels** for overlaps |
+
+Key files:
+
+- `vendor/PowerMapV2/src/features/print/PrintSheet.tsx` — preview, arrange mode, PDF export
+- `vendor/PowerMapV2/src/features/print/labelLayout.ts` — placement + visual-center math
+- `vendor/PowerMapV2/src/features/print/printLabelOverrides.ts` — user drag merge
+- `vendor/PowerMapV2/src/lib/printLayout.ts` — settings, `buildPrintAssets`, `contentBounds`
+- `vendor/PowerMapV2/src/lib/printVisualScale.ts` — sheet-based scaling helpers
+
+After editing `vendor/PowerMapV2/src/styles/global.css` for print styles, run:
+
+```bash
+node scripts/scope-powermap-css.mjs
+npm run build
+```
+
 ## 9. Adding a desk or API
 
 **New page**
@@ -343,16 +372,22 @@ npm run build                 # must pass
 npm run deploy:verify         # must not say BLOCKED
 ```
 
-Safe ship path:
+Safe ship path (Power Map CSS changes):
+
+```bash
+node scripts/scope-powermap-css.mjs   # after vendor/PowerMapV2 CSS edits
+npm run build                         # must pass
+npm run deploy:verify                 # must not say BLOCKED (CLI deploy only)
+```
 
 ```bash
 git push origin main          # github.com/UtilityDD/DRO
-git push slm main             # github.com/smartlinemanapp/dro-insight
+git push slm main             # github.com/smartlinemanapp/dro-insight → Vercel auto-deploy
 ```
 
 The `slm` **git** push (from the **utility.dipankar@gmail.com** GitHub identity) is what Vercel on **smartlinemanapp@gmail.com** uses for **dro-insight.vercel.app**. GitHub ≠ Vercel ≠ Power Map Supabase. Do not CLI-deploy DRO while logged into a Vercel account that is not **smartlinemanapp@gmail.com**.
 
-There is usually **no** local `.vercel/project.json`. Do not run `vercel deploy` unless `deploy:verify --strict` is OK and the linked project is `dro-insight`.
+There is usually **no** local `.vercel/project.json`. Prefer **git push `slm`** for production; only run `npm run deploy:prod` when verify passes and you need a CLI deploy.
 
 Forbidden Vercel projects: `slm`, `slm_web`, `dro-ops`, and the list in `deploy/target.json`.
 
