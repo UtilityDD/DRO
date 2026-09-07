@@ -81,25 +81,43 @@ function emptyNetwork(): NetworkState {
 async function computeFallbackStamp(): Promise<string | null> {
   if (!pmReady()) return null;
   try {
-    const [ss, ln, touch] = await Promise.all([
-      pmClient()!.from(pmTables().vSubstations).select('id', { count: 'exact', head: true }),
-      pmClient()!.from(pmTables().vLines).select('id', { count: 'exact', head: true }),
-      pmClient()!
-        .from(pmTables().assets)
-        .select('updated_at')
-        .eq('is_deleted', false)
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
+    const client = pmClient()!;
+    const tables = pmTables();
+    const safeCount = async (tableName: string) => {
+      try {
+        const res = await client.from(tableName).select('id', { count: 'exact', head: true });
+        return res.count ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+    const safeMaxUpdated = async () => {
+      try {
+        const res = await client
+          .from(tables.assets)
+          .select('updated_at')
+          .eq('is_deleted', false)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        return res.data && typeof (res.data as { updated_at?: string }).updated_at === 'string'
+          ? (res.data as { updated_at: string }).updated_at
+          : '';
+      } catch {
+        return '';
+      }
+    };
+
+    const [ssCount, lnCount, tapCount, latCount, maxUpdated] = await Promise.all([
+      safeCount(tables.vSubstations),
+      safeCount(tables.vLines),
+      safeCount(tables.vTapNodes),
+      safeCount(tables.vTapLaterals),
+      safeMaxUpdated(),
     ]);
-    const ssCount = ss.count ?? 0;
-    const lnCount = ln.count ?? 0;
-    const maxUpdated =
-      touch.data && typeof (touch.data as { updated_at?: string }).updated_at === 'string'
-        ? (touch.data as { updated_at: string }).updated_at
-        : '';
-    if (!ssCount && !lnCount && !maxUpdated) return null;
-    return `c:${ssCount}|${lnCount}|${maxUpdated}`;
+
+    if (!ssCount && !lnCount && !maxUpdated && !tapCount && !latCount) return null;
+    return `c:${ssCount}|${lnCount}|${tapCount}|${latCount}|${maxUpdated}`;
   } catch (err) {
     console.warn('[PowerMap] fallback stamp failed', err);
     return null;

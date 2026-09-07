@@ -137,6 +137,39 @@
   color: var(--muted);
 }
 
+.pm-root .pm-basemap-toggle,
+.pm-root .pm-rotate-btn,
+.pm-root .pm-compass,
+.pm-root .pm-basemap-menu {
+  background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.pm-root .pm-basemap-menu button {
+  color: var(--ink);
+}
+
+.pm-root .pm-basemap-menu button:hover,
+.pm-root .pm-basemap-toggle:hover,
+.pm-root .pm-rotate-btn:hover {
+  background: var(--surface-muted);
+}
+
+.pm-root .pm-basemap-menu button.on {
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+}
+
+.pm-root .pm-rotate-btn {
+  color: var(--muted);
+}
+
+.pm-root .pm-compass-rose text {
+  fill: var(--ink);
+}
+
 .pm-root .scope-badge {
   background: var(--surface-solid);
   color: var(--ink);

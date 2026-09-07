@@ -177,7 +177,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get('/api/powermap/config', requireAuth, async (req, res) => {
+app.get('/api/powermap/config', async (req, res) => {
   const pub = sb.publicPowerMapConfig();
   let live = { ok: false, reason: 'not probed' };
   try {

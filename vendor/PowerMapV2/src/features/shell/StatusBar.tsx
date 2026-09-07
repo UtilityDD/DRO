@@ -48,9 +48,6 @@ export function StatusBar() {
           <strong>{a.tapCount}</strong> taps
         </span>
         <span>
-          <strong>{a.installedMva.toFixed(1)}</strong> MVA
-        </span>
-        <span>
           <strong>{a.totalLineKm.toFixed(1)}</strong> km
         </span>
         <span>

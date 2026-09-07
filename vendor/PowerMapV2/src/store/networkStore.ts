@@ -73,6 +73,7 @@ import {
   createSubstation,
   createTapLateral,
   createTapOnLine,
+  fetchNetworkStamp,
   linesConnectedTo,
   loadNetwork,
   emptyNetwork,
@@ -132,7 +133,6 @@ interface UiState {
   selection: Selection | null;
   panel:
     | 'properties'
-    | 'filters'
     | 'layers'
     | 'reports'
     | 'settings'
@@ -238,6 +238,7 @@ interface NetworkStore extends UiState {
   networkCacheHit: boolean;
 
   bootstrap: () => Promise<void>;
+  checkAndRefreshIfStale: () => Promise<void>;
   reloadFromSupabase: () => Promise<void>;
   pushToSupabase: () => Promise<void>;
   checkSupabase: () => Promise<void>;
@@ -602,6 +603,33 @@ export const useNetworkStore = create<NetworkStore>((set, get) => ({
         ? `Network refreshed · ${data.substations.length} substations`
         : 'Could not refresh — showing your current copy',
     );
+  },
+
+  checkAndRefreshIfStale: async () => {
+    // Bootstrap owns the first paint. Running here before that sees an empty
+    // store and used to force-pull the whole grid on every visit.
+    if (!get().loaded) return;
+
+    const liveVersion = await fetchNetworkStamp();
+    if (!liveVersion) return;
+
+    const currentVersion = get().networkVersion;
+    if (currentVersion === liveVersion) {
+      if (get().backend !== 'supabase') set({ backend: 'supabase' });
+      return;
+    }
+
+    const data = await loadNetwork();
+    set({
+      backend: data.backend,
+      substations: data.substations,
+      lines: data.lines,
+      tapNodes: data.tapNodes,
+      tapLaterals: data.tapLaterals,
+      orgUnits: data.orgUnits,
+      networkVersion: data.networkVersion || null,
+      networkCacheHit: Boolean(data.networkCacheHit),
+    });
   },
 
   pushToSupabase: async () => {

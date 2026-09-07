@@ -32,8 +32,10 @@ if (fs.existsSync(CONFIG_PATH)) {
     if (cfg.schema) SCHEMA = String(cfg.schema).trim();
     if (cfg.supabaseAnonKey) SUPABASE_ANON_KEY = String(cfg.supabaseAnonKey).trim();
     if (cfg.anonKey) SUPABASE_ANON_KEY = String(cfg.anonKey).trim();
-    if (cfg.powermapUrl) POWERMAP_URL = String(cfg.powermapUrl).trim();
-    if (cfg.powermapAnonKey) POWERMAP_ANON_KEY = String(cfg.powermapAnonKey).trim();
+    if (cfg.powermapUrl && !cfg.powermapUrl.includes('YOUR_')) POWERMAP_URL = String(cfg.powermapUrl).trim();
+    if (cfg.powermapAnonKey && !cfg.powermapAnonKey.includes('YOUR_') && !cfg.powermapAnonKey.includes('PASTE_')) {
+      POWERMAP_ANON_KEY = String(cfg.powermapAnonKey).trim();
+    }
     if (cfg.powermapSchema) POWERMAP_SCHEMA = String(cfg.powermapSchema).trim();
     console.log('[Supabase] Loaded credentials from server/data/supabase_config.json');
   } catch (e) {
@@ -449,7 +451,7 @@ async function storageSignedDownload(bucket, objectPath, expiresIn = 300) {
 
 function publicPowerMapConfig() {
   const url = POWERMAP_URL || (isConfigured() ? SUPABASE_URL : null);
-  const anonKey = POWERMAP_ANON_KEY || SUPABASE_ANON_KEY || null;
+  const anonKey = POWERMAP_ANON_KEY || SUPABASE_ANON_KEY || SUPABASE_KEY || null;
   return {
     url: url || null,
     anonKey,

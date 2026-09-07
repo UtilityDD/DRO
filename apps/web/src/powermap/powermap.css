@@ -824,6 +824,216 @@
   min-width: 140px;
 }
 
+.pm-root .pm-map-chrome{
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.pm-root .pm-map-chrome > *{
+  pointer-events: auto;
+}
+
+.pm-root .pm-basemap-picker, .pm-root .pm-compass-cluster{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pm-root .pm-basemap-picker{
+  position: relative;
+  flex-direction: column;
+  align-items: flex-start;
+  z-index: 1;
+}
+
+.pm-root .pm-basemap-picker.is-open{
+  z-index: 4;
+}
+
+.pm-root .pm-compass-cluster{
+  position: relative;
+  z-index: 1;
+}
+
+.pm-root .pm-basemap-toggle, .pm-root .pm-rotate-btn{
+  appearance: none;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  backdrop-filter: blur(12px);
+}
+
+.pm-root .pm-basemap-toggle{
+  height: 34px;
+  padding: 0 10px 0 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.pm-root .pm-basemap-toggle:hover, .pm-root .pm-rotate-btn:hover{
+  background: var(--surface);
+}
+
+.pm-root .pm-basemap-menu{
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  bottom: auto;
+  z-index: 5;
+  min-width: 132px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pm-root .pm-basemap-menu button{
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pm-root .pm-basemap-menu button:hover{
+  background: var(--bg-soft, #f1f5f9);
+}
+
+.pm-root .pm-basemap-menu button.on{
+  background: var(--accent);
+  color: #fff;
+}
+
+.pm-root .pm-basemap-swatch{
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  flex: 0 0 auto;
+}
+
+.pm-root .pm-basemap-swatch--google{
+  background: linear-gradient(135deg, #dce8c8, #b9d48a);
+}
+
+.pm-root .pm-basemap-swatch--google-hybrid{
+  background: linear-gradient(135deg, #1e3a2f, #8fbf5a);
+}
+
+.pm-root .pm-basemap-swatch--osm{
+  background: linear-gradient(135deg, #f4efe4, #c8ddd0);
+}
+
+.pm-root .pm-basemap-swatch--esri{
+  background: linear-gradient(135deg, #f3f4f6, #d1d5db);
+}
+
+.pm-root .pm-basemap-swatch--none{
+  background: repeating-linear-gradient(
+    45deg,
+    #e5e7eb,
+    #e5e7eb 4px,
+    #fff 4px,
+    #fff 8px
+  );
+}
+
+.pm-root .pm-rotate-btn{
+  width: 30px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.pm-root .pm-rotate-btn:disabled, .pm-root .pm-compass:disabled{
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pm-root .pm-compass{
+  appearance: none;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow);
+  cursor: grab;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  backdrop-filter: blur(12px);
+}
+
+.pm-root .pm-compass:active{
+  cursor: grabbing;
+}
+
+.pm-root .pm-compass-rose{
+  width: 38px;
+  height: 38px;
+  display: block;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.pm-root .pm-compass-rose svg{
+  width: 38px;
+  height: 38px;
+  display: block;
+}
+
+.pm-root .pm-compass-rose circle{
+  fill: transparent;
+  stroke: color-mix(in srgb, var(--ink) 14%, transparent);
+  stroke-width: 1;
+}
+
+.pm-root .pm-compass-n{
+  fill: #dc2626;
+}
+
+.pm-root .pm-compass-s{
+  fill: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.pm-root .pm-compass-rose text{
+  fill: var(--ink);
+  font-size: 7.5px;
+  font-weight: 800;
+  text-anchor: middle;
+  letter-spacing: 0.04em;
+}
+
 .pm-root .scope-badge{
   position: absolute;
   top: 14px;

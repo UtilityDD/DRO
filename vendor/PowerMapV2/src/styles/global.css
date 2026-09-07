@@ -831,6 +831,220 @@ textarea {
   min-width: 140px;
 }
 
+.pm-map-chrome {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.pm-map-chrome > * {
+  pointer-events: auto;
+}
+
+.pm-basemap-picker,
+.pm-compass-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pm-basemap-picker {
+  position: relative;
+  flex-direction: column;
+  align-items: flex-start;
+  z-index: 1;
+}
+
+.pm-basemap-picker.is-open {
+  z-index: 4;
+}
+
+.pm-compass-cluster {
+  position: relative;
+  z-index: 1;
+}
+
+.pm-basemap-toggle,
+.pm-rotate-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  backdrop-filter: blur(12px);
+}
+
+.pm-basemap-toggle {
+  height: 34px;
+  padding: 0 10px 0 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.pm-basemap-toggle:hover,
+.pm-rotate-btn:hover {
+  background: var(--surface);
+}
+
+.pm-basemap-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  bottom: auto;
+  z-index: 5;
+  min-width: 132px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pm-basemap-menu button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pm-basemap-menu button:hover {
+  background: var(--bg-soft, #f1f5f9);
+}
+
+.pm-basemap-menu button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pm-basemap-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  flex: 0 0 auto;
+}
+
+.pm-basemap-swatch--google {
+  background: linear-gradient(135deg, #dce8c8, #b9d48a);
+}
+
+.pm-basemap-swatch--google-hybrid {
+  background: linear-gradient(135deg, #1e3a2f, #8fbf5a);
+}
+
+.pm-basemap-swatch--osm {
+  background: linear-gradient(135deg, #f4efe4, #c8ddd0);
+}
+
+.pm-basemap-swatch--esri {
+  background: linear-gradient(135deg, #f3f4f6, #d1d5db);
+}
+
+.pm-basemap-swatch--none {
+  background: repeating-linear-gradient(
+    45deg,
+    #e5e7eb,
+    #e5e7eb 4px,
+    #fff 4px,
+    #fff 8px
+  );
+}
+
+.pm-rotate-btn {
+  width: 30px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.pm-rotate-btn:disabled,
+.pm-compass:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pm-compass {
+  appearance: none;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow);
+  cursor: grab;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  backdrop-filter: blur(12px);
+}
+
+.pm-compass:active {
+  cursor: grabbing;
+}
+
+.pm-compass-rose {
+  width: 38px;
+  height: 38px;
+  display: block;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.pm-compass-rose svg {
+  width: 38px;
+  height: 38px;
+  display: block;
+}
+
+.pm-compass-rose circle {
+  fill: transparent;
+  stroke: color-mix(in srgb, var(--ink) 14%, transparent);
+  stroke-width: 1;
+}
+
+.pm-compass-n {
+  fill: #dc2626;
+}
+
+.pm-compass-s {
+  fill: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.pm-compass-rose text {
+  fill: var(--ink);
+  font-size: 7.5px;
+  font-weight: 800;
+  text-anchor: middle;
+  letter-spacing: 0.04em;
+}
+
 .scope-badge {
   position: absolute;
   top: 14px;

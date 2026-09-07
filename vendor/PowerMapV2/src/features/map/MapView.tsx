@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
+import '@tomickigrzegorz/leaflet-rotate';
 import 'leaflet/dist/leaflet.css';
 import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
+import { MapChrome } from './MapChrome';
 import {
   buildFocus33Context,
   isSubstationDimmed,
@@ -148,6 +150,12 @@ export function MapView() {
       zoomDelta: 0.5,
       bounceAtZoomLimits: false,
       preferCanvas: false,
+      rotate: true,
+      bearing: 0,
+      dragRotate: true,
+      touchRotate: true,
+      shiftKeyRotate: true,
+      rotateControl: false,
     });
     fitDefaultZone(map, null);
 
@@ -795,6 +803,7 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     fittedRef.current = 'home';
+    map.setBearing?.(0);
     fitDefaultZone(map, boundaryRef.current?.bounds ?? null);
   }, [mapHomeNonce]);
 
@@ -1584,6 +1593,7 @@ export function MapView() {
   return (
     <>
       <div ref={containerRef} className="map-root" />
+      <MapChrome map={mapReadyTick ? mapRef.current : null} />
       {tool === 'add-ss' && (
         <div className="coord-chip" aria-live="polite">
           <div className="coord-chip-label">

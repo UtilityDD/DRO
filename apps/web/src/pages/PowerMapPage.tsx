@@ -23,8 +23,6 @@ function searchHotkeyLabel() {
 export function PowerMapPage() {
   const loaded = useNetworkStore((s) => s.loaded);
   const backend = useNetworkStore((s) => s.backend);
-  const substations = useNetworkStore((s) => s.substations);
-  const lines = useNetworkStore((s) => s.lines);
   const networkVersion = useNetworkStore((s) => s.networkVersion);
   const networkCacheHit = useNetworkStore((s) => s.networkCacheHit);
   const reloadFromSupabase = useNetworkStore((s) => s.reloadFromSupabase);
@@ -56,7 +54,10 @@ export function PowerMapPage() {
     checkForAppUpdate();
     void activateWaitingWorkerAndReload();
     const onVis = () => {
-      if (document.visibilityState === 'visible') checkForAppUpdate();
+      if (document.visibilityState === 'visible') {
+        checkForAppUpdate();
+        void useNetworkStore.getState().checkAndRefreshIfStale();
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
@@ -132,16 +133,6 @@ export function PowerMapPage() {
     void reloadFromSupabase().finally(() => setRefreshing(false));
   };
 
-  const versionLabel = networkVersion
-    ? networkVersion.startsWith('r:')
-      ? networkVersion.split('|')[0]
-      : networkVersion.startsWith('c:')
-        ? 'c…'
-        : networkVersion.length > 24
-          ? `${networkVersion.slice(0, 22)}…`
-          : networkVersion
-    : 'no-stamp';
-
   const showLoadOverlay = !clientReady || !loaded;
 
   return (
@@ -165,7 +156,7 @@ export function PowerMapPage() {
             className="pm-offline-badge"
             title="The map could not reach the database and is showing a cached copy saved earlier on this device. Edits made now stay in this browser only."
           >
-            Offline copy · {substations.length} SS · {lines.length} lines — not live
+            Offline copy
           </span>
         ) : loaded ? (
           <button
@@ -179,8 +170,7 @@ export function PowerMapPage() {
                 : `Fresh pull from Supabase (${networkVersion || 'stamp missing'}). App ${droBuildLabel()}. Click to refresh again.`
             }
           >
-            {`${networkCacheHit ? 'Cached' : 'Live'} · ${versionLabel} · app ${droBuildLabel()} · ${substations.length} SS · ${lines.length} lines`}
-            {refreshing ? ' · refreshing…' : ''}
+            {refreshing ? 'Refreshing…' : networkCacheHit ? 'Cached' : 'Live'}
           </button>
         ) : (
           <span className="pm-desk-version muted" aria-hidden>

@@ -7,7 +7,6 @@ import {
   Trash2,
   Ruler,
   Layers,
-  Filter,
   FileBarChart2,
   Settings,
   MapPinned,
@@ -18,7 +17,7 @@ import {
 import type { ToolMode } from '@/domain/types';
 import { useNetworkStore } from '@/store/networkStore';
 
-type PanelId = 'layers' | 'filters' | 'reports' | 'settings' | 'siting' | 'voltage-check' | 'print';
+type PanelId = 'layers' | 'reports' | 'settings' | 'siting' | 'voltage-check' | 'print';
 
 const tools: {
   id: ToolMode | PanelId | 'reset-map';
@@ -36,7 +35,6 @@ const tools: {
   { id: 'voltage-check', label: 'Check voltage', icon: Activity },
   { id: 'print', label: 'Print Map', icon: Printer },
   { id: 'layers', label: 'Layers', icon: Layers },
-  { id: 'filters', label: 'Filters', icon: Filter },
   { id: 'reports', label: 'Reports', icon: FileBarChart2 },
   { id: 'reset-map', label: 'Reset map', icon: RotateCcw },
   { id: 'settings', label: 'Settings', icon: Settings },
@@ -44,7 +42,6 @@ const tools: {
 
 const PANEL_IDS: PanelId[] = [
   'layers',
-  'filters',
   'reports',
   'settings',
   'siting',

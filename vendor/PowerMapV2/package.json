@@ -18,6 +18,7 @@
     "date-fns": "^4.4.0",
     "idb": "^8.0.3",
     "leaflet": "^1.9.4",
+    "@tomickigrzegorz/leaflet-rotate": "^0.2.4",
     "lucide-react": "^1.26.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

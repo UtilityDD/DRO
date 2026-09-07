@@ -12,6 +12,7 @@
   "dependencies": {
     "@geoman-io/leaflet-geoman-free": "^2.20.0",
     "@supabase/supabase-js": "^2.112.3",
+    "@tomickigrzegorz/leaflet-rotate": "^0.2.4",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",

@@ -85,7 +85,7 @@ export default defineConfig({
     ],
   },
   optimizeDeps: {
-    include: ['leaflet', '@geoman-io/leaflet-geoman-free'],
+    include: ['leaflet', '@geoman-io/leaflet-geoman-free', '@tomickigrzegorz/leaflet-rotate'],
   },
   build: {
     // Keep the big, independent libraries in their own long-lived chunks so a

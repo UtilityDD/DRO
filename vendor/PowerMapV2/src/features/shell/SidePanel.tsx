@@ -12,7 +12,6 @@ import { SITING_DISTRICTS } from '@/lib/sitingSuggestions';
 import type { VoltageCheckCell } from '@/lib/voltageCheck';
 import { isDraftStale } from '@/lib/personalDrafts';
 import { useNetworkStore } from '@/store/networkStore';
-import { ViewToggles } from '@/features/map/ViewToggles';
 import { ReportsForm } from '@/features/shell/ReportsPanel';
 import { PrintForm } from '@/features/print/PrintForm';
 
@@ -56,9 +55,7 @@ export function SidePanel() {
       ? 'Properties'
       : panel === 'place-ss'
         ? 'Place Substation'
-        : panel === 'filters'
-          ? 'Filters'
-          : panel === 'layers'
+        : panel === 'layers'
             ? 'Layers'
             : panel === 'reports'
               ? 'Reports'
@@ -89,7 +86,6 @@ export function SidePanel() {
       <div className="side-panel-body">
         {panel === 'place-ss' && <PlaceSubstationForm />}
         {panel === 'properties' && (selection ? <PropertiesForm /> : <EmptyProps />)}
-        {panel === 'filters' && <FiltersForm />}
         {panel === 'layers' && <LayersForm />}
         {panel === 'reports' && <ReportsForm />}
         {panel === 'siting' && <SitingForm />}
@@ -1367,99 +1363,6 @@ function PropertiesForm() {
   );
 }
 
-function FiltersForm() {
-  const filters = useNetworkStore((s) => s.filters);
-  const setFilters = useNetworkStore((s) => s.setFilters);
-  const orgUnits = useNetworkStore((s) => s.orgUnits);
-
-  const toggleVoltage = (code: VoltageCode) => {
-    const voltages = filters.voltages.includes(code)
-      ? filters.voltages.filter((v) => v !== code)
-      : [...filters.voltages, code];
-    setFilters({ voltages });
-  };
-
-  return (
-    <div className="form-stack">
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={filters.showProposed}
-          onChange={(e) => setFilters({ showProposed: e.target.checked })}
-        />
-        Show proposed
-      </label>
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={filters.statuses.includes('existing')}
-          onChange={(e) =>
-            setFilters({
-              statuses: e.target.checked
-                ? Array.from(new Set([...filters.statuses, 'existing' as const]))
-                : filters.statuses.filter((s) => s !== 'existing'),
-            })
-          }
-        />
-        Existing
-      </label>
-      <div className="chip-group">
-        {VOLTAGE_CATALOG.map((v) => (
-          <button
-            key={v.code}
-            type="button"
-            className={`chip${filters.voltages.includes(v.code) ? ' on' : ''}`}
-            onClick={() => toggleVoltage(v.code)}
-          >
-            {v.code} kV
-          </button>
-        ))}
-      </div>
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={filters.overloadedOnly}
-          onChange={(e) => setFilters({ overloadedOnly: e.target.checked })}
-        />
-        Overloaded (≥80%)
-      </label>
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={filters.oldOnly}
-          onChange={(e) => setFilters({ oldOnly: e.target.checked })}
-        />
-        Old assets (&lt;2000)
-      </label>
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={filters.needUpgradeOnly}
-          onChange={(e) => setFilters({ needUpgradeOnly: e.target.checked })}
-        />
-        Need upgradation
-      </label>
-      <Field label="Division">
-        <select
-          value={filters.orgUnitIds[0] ?? ''}
-          onChange={(e) =>
-            setFilters({ orgUnitIds: e.target.value ? [e.target.value] : [] })
-          }
-        >
-          <option value="">All divisions</option>
-          {orgUnits
-            .filter((o) => o.type === 'division')
-            .map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name}
-              </option>
-            ))}
-        </select>
-      </Field>
-    </div>
-  );
-}
-
 function LayersForm() {
   const mapLayers = useNetworkStore((s) => s.mapLayers);
   const availableDistricts = useNetworkStore((s) => s.availableDistricts);
@@ -1508,9 +1411,6 @@ function LayersForm() {
         Clears siting / voltage-check focus, restores Overview scene, resets district label
         positions, and fits the zone.
       </p>
-      <p className="section-label">View</p>
-      <ViewToggles variant="panel" />
-
       <p className="muted">
         With the <strong>Select</strong> tool, click a district on the map to undim it (others dim).
         Hold <kbd>Shift</kbd> and click to undim several.

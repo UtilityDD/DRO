@@ -1594,6 +1594,15 @@ button {
   border-radius: 12px !important;
   overflow: hidden;
   box-shadow: var(--dro-shadow) !important;
+  margin-right: 10px !important;
+  margin-bottom: 10px !important;
+}
+
+.mode-powermap .pm-root .pm-map-chrome {
+  left: 0.7rem;
+  top: 0.7rem;
+  right: auto;
+  bottom: auto;
 }
 
 .mode-powermap .pm-root .leaflet-control-zoom a {
